@@ -1,0 +1,56 @@
+IF OBJECT_ID ('tempdb..#blocks') is not null
+	drop table #blocks
+
+DECLARE @bsid int
+
+SET @bsid=(SELECT blocking_session_id from sys.dm_exec_requests r 
+WHERE command='DB STARTUP' 
+AND database_id=DB_ID('M3FDBGRD') 
+AND blocking_session_id <> 0
+)
+
+If @bsid is not null
+
+BEGIN
+
+SELECT top 1 r.session_id, r.start_time, r.status, p.loginame, p.hostname, p.waittime, REPLACE(REPLACE(REPLACE(CONVERT( varchar(MAX),t.text),CHAR(13),''),CHAR(10),''), CHAR(09),'')AS sql_text  
+INTO #blocks 
+FROM sys.dm_exec_requests r 
+INNER JOIN sys.sysprocesses p on r.session_id=p.spid 
+	CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t
+		WHERE
+			r.session_id = @bsid;			
+
+
+DECLARE @st datetime
+SET @st=(SELECT start_time from #blocks)
+END
+
+IF datediff (MINUTE, @st, getdate()) >=5
+BEGIN
+DECLARE @blockingspid nvarchar(100)
+DECLARE @login nvarchar(100)
+DECLARE @hostname nvarchar(100)
+DECLARE @query nvarchar(max)
+DECLARE @body nvarchar(max)
+
+SET @blockingspid =(SELECT session_id from #blocks)
+SET @login=(SELECT loginame from #blocks)
+SET @hostname=(SELECT hostname from #blocks)
+SET @query=(select sql_text from #blocks)
+SET @body='Blocking SPID : '+ @blockingspid
+SET @body=@body + CHAR(10)
+SET @body=@body + 'Query excuted by: '+ @login
+SET @body=@body + CHAR(10)
+SET @body=@body + 'Query Started (ServerTime/CEST): '+ cast(@st as nvarchar(1024))
+SET @body=@body+ CHAR(10)
+SET @body=@body+'Host Name: ' + @hostname
+SET @body=@body + CHAR(10)
+SET @body=@body+ 'Query: ' + @query
+
+
+exec msdb.dbo.sp_send_dbmail
+@subject='Blocking detected on ST M3 Nutreco Prod AoAG INFORBCDBAG01-B(secondary) preventing AG sync',
+@recipients='DLG-ST-M3-Hosting-DBA@infor.com;DL-TEAM-CLOUD-OPS-MONITORING-DBA@infor.com',
+@body=@body
+END

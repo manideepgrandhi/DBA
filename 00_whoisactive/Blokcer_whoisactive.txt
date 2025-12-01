@@ -1,0 +1,75 @@
+use CODBALogs
+go
+
+If OBJECT_ID('tempdb..#T') IS NOT NULL
+       DROP TABLE #T
+
+--- Checking the blocking tree, provide the collection time
+SET NOCOUNT ON
+--
+SELECT [dd hh:mm:ss.mss]
+       , session_id
+     , blocking_session_id
+     , cast(sql_text as nvarchar(max)) as BATCH
+       , database_name, status, program_name, host_name, login_name, login_time, wait_info, collection_time
+  INTO #T
+  from [CODBALogs].[dbo].[monitor_WhoIsActive] T
+where collection_time = '2020-09-15 23:43:14.477'
+-- IN(
+--'2019-07-29 12:03:02.793')
+--'2019-07-22 08:48:02.883')
+--'2019-07-17 04:44:58.273',
+--'2019-07-17 04:39:58.600')
+--'2019-07-17 04:35:00.757',
+--'2019-07-17 04:29:58.660')
+
+--='2019-07-11 05:23:02.823'--'2019-07-17 04:39:58.600' --IN ('2019-07-30 07:28:01.980', '2019-07-23 05:13:02.160', '2019-07-22 13:23:02.190') -- Collection time of interest
+--
+go
+--
+WITH BLOCKERS ( [dd hh:mm:ss.mss], session_id
+              , blocking_session_id
+              , LEVEL
+              , BATCH
+                      , database_name, status, program_name, hostname, loginame, login_time, wait_info, collection_time)
+AS
+(
+SELECT [dd hh:mm:ss.mss], session_id
+     , blocking_session_id
+      , CAST (REPLICATE ('0', 4-LEN (CAST (session_id AS VARCHAR))) + CAST (session_id AS VARCHAR) AS VARCHAR (1000)) AS LEVEL
+      , BATCH
+         , database_name, status, program_name, host_name, login_name, login_time, wait_info, collection_time
+  FROM #T R
+WHERE ( ( blocking_session_id = 0 )
+      or ( blocking_session_id is null )
+      OR ( blocking_session_id = session_id ) )
+   AND EXISTS ( SELECT *
+                  FROM #T R2
+                 WHERE ( R2.blocking_session_id = R.session_id )
+                   AND ( R2.blocking_session_id <> R2.session_id ) )
+UNION ALL
+    SELECT R.[dd hh:mm:ss.mss], R.session_id
+         , R.blocking_session_id
+         , CAST (BLOCKERS.LEVEL + RIGHT (CAST ((1000 + R.session_id) AS VARCHAR (100)), 4) AS VARCHAR (1000)) AS LEVEL
+         , R.BATCH
+             , R.database_name, R.status, R.program_name, R.host_name, R.login_name, R.login_time, R.wait_info, R.collection_time
+      FROM #T AS R
+INNER JOIN BLOCKERS ON R.blocking_session_id = BLOCKERS.session_id
+     WHERE ( R.blocking_session_id > 0 )
+       AND ( R.blocking_session_id <> R.session_id )
+)
+--
+  SELECT [dd hh:mm:ss.mss],collection_time,login_time,session_id, N'    '
+       + REPLICATE (N'|         ', LEN (LEVEL)/4 - 1)
+       + CASE
+              WHEN (LEN(LEVEL)/4 - 1) = 0 THEN 'HEAD -  '
+              ELSE '|------  '
+         END
+       + CAST (session_id AS NVARCHAR (10))
+       + N' '
+       + BATCH AS BLOCKING_TREE
+          , database_name, status, program_name, hostname, loginame, login_time, wait_info, collection_time
+    FROM BLOCKERS
+ORDER BY LEVEL ASC
+--
+drop table #T
