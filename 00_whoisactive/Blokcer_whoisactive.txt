@@ -1,4 +1,4 @@
-use CODBALogs
+use 
 go
 
 If OBJECT_ID('tempdb..#T') IS NOT NULL
@@ -13,7 +13,7 @@ SELECT [dd hh:mm:ss.mss]
      , cast(sql_text as nvarchar(max)) as BATCH
        , database_name, status, program_name, host_name, login_name, login_time, wait_info, collection_time
   INTO #T
-  from [CODBALogs].[dbo].[monitor_WhoIsActive] T
+  from [dba].[dbo].[monitor_WhoIsActive] T
 where collection_time = '2020-09-15 23:43:14.477'
 -- IN(
 --'2019-07-29 12:03:02.793')
@@ -73,3 +73,4 @@ INNER JOIN BLOCKERS ON R.blocking_session_id = BLOCKERS.session_id
 ORDER BY LEVEL ASC
 --
 drop table #T
+
