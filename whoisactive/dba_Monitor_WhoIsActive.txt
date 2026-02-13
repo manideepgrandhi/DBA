@@ -1,0 +1,145 @@
+USE [msdb]
+GO
+
+/****** Object:  Job [dba_Monitor_WhoIsActive]    Script Date: 8/30/2021 1:55:43 PM ******/
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object:  JobCategory [DBAJobs]    Script Date: 8/30/2021 1:55:43 PM ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'DBAJobs' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'DBAJobs'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N'dba_Monitor_WhoIsActive', 
+		@enabled=1, 
+		@notify_level_eventlog=0, 
+		@notify_level_email=2, 
+		@notify_level_netsend=0, 
+		@notify_level_page=0, 
+		@delete_level=0, 
+		@description=N'Runs usp_WhoIsActive every 5 minutes to get a snapshot of what''s going on in the instance. Data is stored in [CODBALogs].[dbo].[monitor_WhoIsActive] and is deleted after 30 days.', 
+		@category_name=N'DBAJobs', 
+		@owner_login_name=N'Fred', 
+		@notify_email_operator_name=N'DBA Group', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [PRIMARY Check]    Script Date: 8/30/2021 1:55:43 PM ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'PRIMARY Check', 
+		@step_id=1, 
+		@cmdexec_success_code=0, 
+		@on_success_action=3, 
+		@on_success_step_id=0, 
+		@on_fail_action=1, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'DECLARE @primary AS NVARCHAR(128);
+DECLARE @machine AS NVARCHAR(128)=
+     CASE WHEN @@SERVERNAME LIKE ''%\%''
+              THEN LEFT(@@SERVERNAME,CHARINDEX(''\'',@@SERVERNAME,1)-1)
+              ELSE @@SERVERNAME END
+ 
+-- if AlwaysOn, then check if we are primary node
+IF SERVERPROPERTY(''IsHadrEnabled'')= 1
+BEGIN
+    -- get primary node
+          SELECT @primary = hags.primary_replica
+            FROM master.sys.dm_hadr_availability_group_states hags WITH(NOLOCK)
+            JOIN master.sys.availability_groups ag WITH(NOLOCK)
+              ON hags.group_id=ag.group_id
+ 
+END
+ 
+IF (@primary = @machine) OR (@primary IS null) -- either AAG and primary node, or not AAG
+            BEGIN
+                        SELECT 1 -- continue to next step
+            END
+ELSE
+            BEGIN
+                        RAISERROR (35251, 10, 1)-- do not continue to next step; does not fail step but provides informational message
+                        SELECT 1 FROM raise_error_dummy_table
+            END', 
+		@database_name=N'master', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [Run Monitor]    Script Date: 8/30/2021 1:55:43 PM ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'Run Monitor', 
+		@step_id=2, 
+		@cmdexec_success_code=0, 
+		@on_success_action=3, 
+		@on_success_step_id=0, 
+		@on_fail_action=3, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'
+DECLARE @ColumnList varchar(8000);
+
+SET @ColumnList='''';
+SELECT @ColumnList = @ColumnList + (''['' + COLUMN_NAME + ''],'' )
+FROM CODBALogs.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N''monitor_WhoIsActive''
+ORDER BY ORDINAL_POSITION;
+SELECT @ColumnList = SUBSTRING(@ColumnList, 1,LEN(@ColumnList) - 1);
+
+EXEC CODBALogs.dbo.sp_WhoIsActive
+@get_full_inner_text = 0,
+@get_plans = 2,
+@get_outer_command = 1,
+@get_task_info = 2,
+@get_locks = 1,
+@get_additional_info = 1,
+@delta_interval = 10,
+@output_column_list = @ColumnList,
+@destination_table = ''CODBALogs.dbo.monitor_WhoIsActive'' ;
+', 
+		@database_name=N'CODBALogs', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [Delete old data]    Script Date: 8/30/2021 1:55:43 PM ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'Delete old data', 
+		@step_id=3, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'DELETE FROM dbo.monitor_WhoIsActive
+WHERE DATEDIFF(DAY, collection_time, GETDATE()) > 30;', 
+		@database_name=N'CODBALogs', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'CollectorSchedule_Every_5min', 
+		@enabled=1, 
+		@freq_type=4, 
+		@freq_interval=1, 
+		@freq_subday_type=4, 
+		@freq_subday_interval=5, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=0, 
+		@active_start_date=20100402, 
+		@active_end_date=99991231, 
+		@active_start_time=300, 
+		@active_end_time=235959, 
+		@schedule_uid=N'9da120fc-3e9b-416a-9123-cb4ae56db532'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO
+
+
