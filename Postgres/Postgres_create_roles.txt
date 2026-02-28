@@ -1,0 +1,262 @@
+-- ============================================
+-- PostgreSQL: Reader, Writer & Admin Roles
+-- With Role Inheritance: reader > writer > admin
+-- ============================================
+
+DO $$
+DECLARE
+   schema_name TEXT;
+   db_name     TEXT := current_database();
+   reader_role TEXT := db_name || '_reader';
+   writer_role TEXT := db_name || '_writer';
+   admin_role  TEXT := db_name || '_admin';
+BEGIN
+
+   -- ==========================================
+   -- STEP 1: Create Roles
+   -- ==========================================
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = reader_role) THEN
+      EXECUTE format('CREATE ROLE %I', reader_role);
+      RAISE NOTICE 'Created role: %', reader_role;
+   ELSE
+      RAISE NOTICE 'Role already exists, skipping: %', reader_role;
+   END IF;
+
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = writer_role) THEN
+      EXECUTE format('CREATE ROLE %I', writer_role);
+      RAISE NOTICE 'Created role: %', writer_role;
+   ELSE
+      RAISE NOTICE 'Role already exists, skipping: %', writer_role;
+   END IF;
+
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = admin_role) THEN
+      EXECUTE format('CREATE ROLE %I', admin_role);
+      RAISE NOTICE 'Created role: %', admin_role;
+   ELSE
+      RAISE NOTICE 'Role already exists, skipping: %', admin_role;
+   END IF;
+
+   -- ==========================================
+   -- STEP 2: Embed Role Inheritance
+   -- reader → writer → admin
+   -- ==========================================
+   EXECUTE format('GRANT %I TO %I', reader_role, writer_role);
+   RAISE NOTICE 'Granted % to % (writer inherits reader)', reader_role, writer_role;
+
+   EXECUTE format('GRANT %I TO %I', writer_role, admin_role);
+   RAISE NOTICE 'Granted % to % (admin inherits writer+reader)', writer_role, admin_role;
+
+   -- ==========================================
+   -- STEP 3: Grant CONNECT on this Database
+   -- ==========================================
+   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, reader_role);
+   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, writer_role);
+   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, admin_role);
+
+   -- ── Security Gap 1: PUBLIC can connect to any DB by default ──
+   EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', db_name);
+   RAISE NOTICE 'CONNECT granted and PUBLIC revoked on database: %', db_name;
+
+   -- ==========================================
+   -- STEP 4: Security Gap Fixes (DB Level)
+   -- ==========================================
+
+   -- ── Security Gap 2: PUBLIC has CREATE on public schema by default ──
+   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked CREATE on public schema from PUBLIC';
+
+   -- ── Security Gap 3: PUBLIC has USAGE on public schema by default ──
+   REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked USAGE on public schema from PUBLIC';
+
+   -- ── Security Gap 4: PUBLIC has all privileges on public schema ──
+   REVOKE ALL ON SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked ALL on public schema from PUBLIC';
+
+   -- ══ Grant USAGE on public schema to reader only (writer+admin inherit) ══
+   EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', reader_role);
+   RAISE NOTICE 'USAGE on public schema granted to reader (inherited by writer and admin)';
+
+   -- ==========================================
+   -- STEP 5: Loop All Schemas & Grant Privileges
+   -- ==========================================
+   FOR schema_name IN
+      SELECT nspname
+      FROM pg_namespace
+      WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND nspname NOT LIKE 'pg_%'
+      ORDER BY nspname
+   LOOP
+
+      -- ── USAGE: only grant to reader, writer+admin inherit ──
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', schema_name, reader_role);
+
+      -- ── admin needs CREATE on schema separately ──
+      EXECUTE format('GRANT CREATE ON SCHEMA %I TO %I', schema_name, admin_role);
+
+      -- ----------------------------------------
+      -- reader → SELECT only
+      -- ----------------------------------------
+      EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I',     schema_name, reader_role);
+      EXECUTE format('GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I',  schema_name, reader_role);
+      EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', schema_name, reader_role);
+
+      -- ----------------------------------------
+      -- writer → Additional DML on top of reader
+      -- ----------------------------------------
+      EXECUTE format('GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA %I TO %I', schema_name, writer_role);
+      EXECUTE format('GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I',                 schema_name, writer_role);
+
+      -- ----------------------------------------
+      -- admin → Additional DDL on top of writer
+      -- ----------------------------------------
+      EXECUTE format('GRANT REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA %I TO %I', schema_name, admin_role);
+      EXECUTE format('GRANT ALL ON ALL SEQUENCES IN SCHEMA %I TO %I',              schema_name, admin_role);
+      EXECUTE format('GRANT ALL ON ALL FUNCTIONS IN SCHEMA %I TO %I',              schema_name, admin_role);
+
+      -- ----------------------------------------
+      -- Default Privileges (future objects)
+      -- ----------------------------------------
+
+      -- reader → SELECT only
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON TABLES TO %I',     schema_name, reader_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON SEQUENCES TO %I',  schema_name, reader_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', schema_name, reader_role);
+
+      -- writer → INSERT, SELECT, UPDATE, DELETE, TRUNCATE
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT INSERT, SELECT, UPDATE, DELETE, TRUNCATE ON TABLES TO %I',  schema_name, writer_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, UPDATE ON SEQUENCES TO %I',                          schema_name, writer_role);
+
+      -- admin → INSERT, SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT INSERT, SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO %I', schema_name, admin_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON SEQUENCES TO %I', schema_name, admin_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON FUNCTIONS TO %I', schema_name, admin_role);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON TYPES TO %I',     schema_name, admin_role);
+
+      RAISE NOTICE 'Privileges granted on schema: %', schema_name;
+   END LOOP;
+
+   -- ==========================================
+   -- STEP 6: Revoke Dangerous Public Defaults
+   -- ==========================================
+
+   -- ── Security Gap 12: PUBLIC execute on all functions ──
+   REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked EXECUTE on public functions from PUBLIC';
+
+   -- ── Security Gap 13: Ensure no role has superuser accidentally ──
+   EXECUTE format('ALTER ROLE %I NOSUPERUSER', reader_role);
+   EXECUTE format('ALTER ROLE %I NOSUPERUSER', writer_role);
+   EXECUTE format('ALTER ROLE %I NOSUPERUSER', admin_role);
+   RAISE NOTICE 'Confirmed NOSUPERUSER on all roles';
+
+   -- ── Security Gap 14: Ensure no role can create roles ──
+   EXECUTE format('ALTER ROLE %I NOCREATEROLE', reader_role);
+   EXECUTE format('ALTER ROLE %I NOCREATEROLE', writer_role);
+   EXECUTE format('ALTER ROLE %I NOCREATEROLE', admin_role);
+   RAISE NOTICE 'Confirmed NOCREATEROLE on all roles';
+
+   -- ── Security Gap 15: Ensure no role can create databases ──
+   EXECUTE format('ALTER ROLE %I NOCREATEDB', reader_role);
+   EXECUTE format('ALTER ROLE %I NOCREATEDB', writer_role);
+   EXECUTE format('ALTER ROLE %I NOCREATEDB', admin_role);
+   RAISE NOTICE 'Confirmed NOCREATEDB on all roles';
+
+   RAISE NOTICE '============================================';
+   RAISE NOTICE 'Setup complete for database: %', db_name;
+   RAISE NOTICE 'Role hierarchy:';
+   RAISE NOTICE '  % → SELECT only',                        reader_role;
+   RAISE NOTICE '  % → SELECT + INSERT/UPDATE/DELETE/TRUNCATE',      writer_role;
+   RAISE NOTICE '  % → All + REFERENCES/TRIGGER + DDL',    admin_role;
+   RAISE NOTICE 'Inheritance: reader > writer > admin';
+   RAISE NOTICE '============================================';
+
+END
+$$;
+
+
+-- ============================================
+-- Verify: Roles Created
+-- ============================================
+SELECT
+   rolname            AS role_name,
+   rolcanlogin        AS can_login,
+   rolsuper           AS is_superuser,
+   rolcreaterole      AS can_create_roles,
+   rolcreatedb        AS can_create_db,
+   rolconnlimit       AS connection_limit,
+   rolvaliduntil      AS valid_until
+FROM pg_roles
+WHERE rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+);
+
+
+-- ============================================
+-- Verify: Role Inheritance Chain
+-- ============================================
+SELECT
+   r.rolname                        AS role,
+   pr.rolname                       AS inherits_from
+FROM pg_roles r
+JOIN pg_auth_members m  ON m.member  = r.oid
+JOIN pg_roles pr        ON pr.oid    = m.roleid
+WHERE r.rolname IN (
+   current_database() || '_writer',
+   current_database() || '_admin'
+)
+ORDER BY r.rolname;
+
+
+-- ============================================
+-- Verify: Default Privileges Per Role
+-- ============================================
+SELECT
+   pg_get_userbyid(d.defaclrole)    AS role,
+   n.nspname                        AS schema,
+   d.defaclobjtype                  AS object_type,
+   array_to_string(d.defaclacl, ',') AS privileges
+FROM pg_default_acl d
+JOIN pg_namespace n ON n.oid = d.defaclnamespace
+WHERE pg_get_userbyid(d.defaclrole) IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+)
+ORDER BY role, schema, object_type;
+
+
+-- ============================================
+-- Verify: Schema Privileges
+-- ============================================
+SELECT
+   r.rolname                                                        AS role,
+   n.nspname                                                        AS schema,
+   has_schema_privilege(r.rolname, n.nspname, 'USAGE')             AS can_use_schema,
+   has_schema_privilege(r.rolname, n.nspname, 'CREATE')            AS can_create_in_schema
+FROM pg_roles r
+CROSS JOIN pg_namespace n
+WHERE r.rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+)
+AND n.nspname NOT LIKE 'pg_%'
+AND n.nspname NOT IN ('information_schema')
+ORDER BY r.rolname, n.nspname;
+
+
+-- ============================================
+-- Verify: Database Privileges
+-- ============================================
+SELECT
+   rolname,
+   has_database_privilege(rolname, current_database(), 'CONNECT') AS can_connect
+FROM pg_roles
+WHERE rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+);
