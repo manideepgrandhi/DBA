@@ -1,0 +1,48 @@
+SELECT
+   rolname            AS role_name,
+   rolcanlogin        AS can_login,
+   rolsuper           AS is_superuser,
+   rolcreaterole      AS can_create_roles,
+   rolcreatedb        AS can_create_db,
+   rolconnlimit       AS connection_limit,
+   rolvaliduntil      AS valid_until
+FROM pg_roles
+WHERE rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+);
+
+
+-- ============================================
+-- Verify: Schema Privileges
+-- ============================================
+SELECT
+   r.rolname                                                        AS role,
+   n.nspname                                                        AS schema,
+   has_schema_privilege(r.rolname, n.nspname, 'USAGE')             AS can_use_schema,
+   has_schema_privilege(r.rolname, n.nspname, 'CREATE')            AS can_create_in_schema
+FROM pg_roles r
+CROSS JOIN pg_namespace n
+WHERE r.rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+)
+AND n.nspname NOT LIKE 'pg_%'
+AND n.nspname NOT IN ('information_schema')
+ORDER BY r.rolname, n.nspname;
+
+
+-- ============================================
+-- Verify: Database Privileges
+-- ============================================
+SELECT
+   rolname,
+   has_database_privilege(rolname, current_database(), 'CONNECT') AS can_connect
+FROM pg_roles
+WHERE rolname IN (
+   current_database() || '_reader',
+   current_database() || '_writer',
+   current_database() || '_admin'
+);
