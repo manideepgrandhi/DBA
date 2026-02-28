@@ -1,0 +1,213 @@
+-- ============================================
+-- Wrapper Procedure: Selective Role Setup
+-- Usage examples at bottom of script
+-- ============================================
+
+CREATE OR REPLACE PROCEDURE setup_db_roles(
+   p_create_reader  BOOLEAN DEFAULT FALSE,
+   p_create_writer  BOOLEAN DEFAULT FALSE,
+   p_create_admin   BOOLEAN DEFAULT FALSE
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+   schema_name TEXT;
+   db_name     TEXT := current_database();
+   reader_role TEXT := db_name || '_reader';
+   writer_role TEXT := db_name || '_writer';
+   admin_role  TEXT := db_name || '_admin';
+
+   v_reader_exists BOOLEAN;
+   v_writer_exists BOOLEAN;
+BEGIN
+
+   -- ==========================================
+   -- Validate: at least one role must be chosen
+   -- ==========================================
+   IF NOT p_create_reader AND NOT p_create_writer AND NOT p_create_admin THEN
+      RAISE EXCEPTION 'At least one role must be selected (reader, writer, or admin)';
+   END IF;
+
+   -- ==========================================
+   -- Validate: dependency check
+   -- writer needs reader | admin needs writer
+   -- ==========================================
+   IF p_create_writer AND NOT p_create_reader THEN
+      v_reader_exists := EXISTS (SELECT FROM pg_roles WHERE rolname = reader_role);
+      IF NOT v_reader_exists THEN
+         RAISE EXCEPTION 'Cannot create writer without reader. Either pass p_create_reader=TRUE or create reader role first.';
+      END IF;
+      RAISE NOTICE 'Reader role already exists — writer will inherit from it';
+   END IF;
+
+   IF p_create_admin AND NOT p_create_writer THEN
+      v_writer_exists := EXISTS (SELECT FROM pg_roles WHERE rolname = writer_role);
+      IF NOT v_writer_exists THEN
+         RAISE EXCEPTION 'Cannot create admin without writer. Either pass p_create_writer=TRUE or create writer role first.';
+      END IF;
+      RAISE NOTICE 'Writer role already exists — admin will inherit from it';
+   END IF;
+
+   RAISE NOTICE '============================================';
+   RAISE NOTICE 'Setting up roles for database: %', db_name;
+   RAISE NOTICE 'Reader : %', p_create_reader;
+   RAISE NOTICE 'Writer : %', p_create_writer;
+   RAISE NOTICE 'Admin  : %', p_create_admin;
+   RAISE NOTICE '============================================';
+
+   -- ==========================================
+   -- STEP 1: Create Selected Roles
+   -- ==========================================
+   IF p_create_reader THEN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = reader_role) THEN
+         EXECUTE format('CREATE ROLE %I', reader_role);
+         RAISE NOTICE 'Created role: %', reader_role;
+      ELSE
+         RAISE NOTICE 'Role already exists, skipping: %', reader_role;
+      END IF;
+   END IF;
+
+   IF p_create_writer THEN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = writer_role) THEN
+         EXECUTE format('CREATE ROLE %I', writer_role);
+         RAISE NOTICE 'Created role: %', writer_role;
+      ELSE
+         RAISE NOTICE 'Role already exists, skipping: %', writer_role;
+      END IF;
+   END IF;
+
+   IF p_create_admin THEN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = admin_role) THEN
+         EXECUTE format('CREATE ROLE %I', admin_role);
+         RAISE NOTICE 'Created role: %', admin_role;
+      ELSE
+         RAISE NOTICE 'Role already exists, skipping: %', admin_role;
+      END IF;
+   END IF;
+
+   -- ==========================================
+   -- STEP 2: Role Inheritance Chain
+   -- reader → writer → admin
+   -- ==========================================
+   IF p_create_writer THEN
+      EXECUTE format('GRANT %I TO %I', reader_role, writer_role);
+      RAISE NOTICE 'Inheritance set: % → %', reader_role, writer_role;
+   END IF;
+
+   IF p_create_admin THEN
+      EXECUTE format('GRANT %I TO %I', writer_role, admin_role);
+      RAISE NOTICE 'Inheritance set: % → %', writer_role, admin_role;
+   END IF;
+
+   -- ==========================================
+   -- STEP 3: Grant CONNECT on Database
+   -- ==========================================
+   IF p_create_reader THEN
+      EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, reader_role);
+   END IF;
+   IF p_create_writer THEN
+      EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, writer_role);
+   END IF;
+   IF p_create_admin THEN
+      EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', db_name, admin_role);
+   END IF;
+
+   -- ── Security Gap 1: Revoke PUBLIC connect ──
+   EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', db_name);
+   RAISE NOTICE 'CONNECT granted and PUBLIC revoked on database: %', db_name;
+
+   -- ==========================================
+   -- STEP 4: Security Gap Fixes
+   -- ==========================================
+   REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+   REVOKE USAGE  ON SCHEMA public FROM PUBLIC;
+   REVOKE ALL    ON SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked PUBLIC privileges on public schema';
+
+   -- Grant USAGE on public schema only to reader
+   -- (writer and admin inherit if they exist)
+   IF p_create_reader THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', reader_role);
+      RAISE NOTICE 'USAGE on public schema granted to %', reader_role;
+   END IF;
+
+   -- ==========================================
+   -- STEP 5: Loop All Schemas & Grant Privileges
+   -- ==========================================
+   FOR schema_name IN
+      SELECT nspname
+      FROM pg_namespace
+      WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        AND nspname NOT LIKE 'pg_%'
+      ORDER BY nspname
+   LOOP
+
+      -- ── reader privileges ──────────────────
+      IF p_create_reader THEN
+         EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I',                    schema_name, reader_role);
+         EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I',     schema_name, reader_role);
+         EXECUTE format('GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I',  schema_name, reader_role);
+         EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', schema_name, reader_role);
+
+         -- Default privileges: reader
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON TABLES TO %I',     schema_name, reader_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON SEQUENCES TO %I',  schema_name, reader_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', schema_name, reader_role);
+      END IF;
+
+      -- ── writer privileges ──────────────────
+      IF p_create_writer THEN
+         EXECUTE format('GRANT INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA %I TO %I', schema_name, writer_role);
+         EXECUTE format('GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I',                 schema_name, writer_role);
+
+         -- Default privileges: writer
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT INSERT, SELECT, UPDATE, DELETE, TRUNCATE ON TABLES TO %I',  schema_name, writer_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, UPDATE ON SEQUENCES TO %I',                          schema_name, writer_role);
+      END IF;
+
+      -- ── admin privileges ───────────────────
+      IF p_create_admin THEN
+         EXECUTE format('GRANT CREATE ON SCHEMA %I TO %I',                         schema_name, admin_role);
+         EXECUTE format('GRANT REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA %I TO %I', schema_name, admin_role);
+         EXECUTE format('GRANT ALL ON ALL SEQUENCES IN SCHEMA %I TO %I',           schema_name, admin_role);
+         EXECUTE format('GRANT ALL ON ALL FUNCTIONS IN SCHEMA %I TO %I',           schema_name, admin_role);
+
+         -- Default privileges: admin
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT INSERT, SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO %I', schema_name, admin_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON SEQUENCES TO %I', schema_name, admin_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON FUNCTIONS TO %I', schema_name, admin_role);
+         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON TYPES TO %I',     schema_name, admin_role);
+      END IF;
+
+      RAISE NOTICE 'Privileges granted on schema: %', schema_name;
+   END LOOP;
+
+   -- ==========================================
+   -- STEP 6: Revoke Dangerous Public Defaults
+   -- ==========================================
+   REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+   RAISE NOTICE 'Revoked EXECUTE on public functions from PUBLIC';
+
+   IF p_create_reader THEN
+      EXECUTE format('ALTER ROLE %I NOSUPERUSER NOCREATEROLE NOCREATEDB', reader_role);
+   END IF;
+   IF p_create_writer THEN
+      EXECUTE format('ALTER ROLE %I NOSUPERUSER NOCREATEROLE NOCREATEDB', writer_role);
+   END IF;
+   IF p_create_admin THEN
+      EXECUTE format('ALTER ROLE %I NOSUPERUSER NOCREATEROLE NOCREATEDB', admin_role);
+   END IF;
+   RAISE NOTICE 'Security attributes confirmed on selected roles';
+
+   -- ==========================================
+   -- Final Summary
+   -- ==========================================
+   RAISE NOTICE '============================================';
+   RAISE NOTICE 'Setup complete for database: %', db_name;
+   IF p_create_reader THEN RAISE NOTICE '✅ Reader : % created', reader_role; END IF;
+   IF p_create_writer THEN RAISE NOTICE '✅ Writer : % created', writer_role; END IF;
+   IF p_create_admin  THEN RAISE NOTICE '✅ Admin  : % created', admin_role;  END IF;
+   RAISE NOTICE '============================================';
+
+END;
+$$;
