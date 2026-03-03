@@ -26,7 +26,7 @@
 
 \pset border 2
 \pset linestyle unicode
-\pset null ‘[NULL]’
+\pset null '[NULL]'
 
 – =============================================================================
 – SECTION 1 — CONNECTION & SESSION ISSUES
@@ -39,17 +39,17 @@
 SELECT
 setting::int                                                        AS max_connections,
 (SELECT count(*) FROM pg_stat_activity)                             AS total_sessions,
-(SELECT count(*) FROM pg_stat_activity WHERE state = ‘active’)      AS active,
-(SELECT count(*) FROM pg_stat_activity WHERE state = ‘idle’)        AS idle,
+(SELECT count(*) FROM pg_stat_activity WHERE state = 'active')      AS active,
+(SELECT count(*) FROM pg_stat_activity WHERE state = 'idle')        AS idle,
 (SELECT count(*) FROM pg_stat_activity
-WHERE state = ‘idle in transaction’)                               AS idle_in_txn,
+WHERE state = 'idle in transaction')                               AS idle_in_txn,
 (SELECT count(*) FROM pg_stat_activity
-WHERE state = ‘idle in transaction (aborted)’)                     AS idle_in_txn_aborted,
+WHERE state = 'idle in transaction (aborted)')                     AS idle_in_txn_aborted,
 setting::int - (SELECT count(*) FROM pg_stat_activity)              AS available_slots,
 round(100.0 * (SELECT count(*) FROM pg_stat_activity) /
 setting::int, 2)                                              AS utilisation_pct
 FROM pg_settings
-WHERE name = ‘max_connections’;
+WHERE name = 'max_connections';
 
 – 1.2  Sessions grouped by user, database, and state
 SELECT
@@ -75,7 +75,7 @@ round(EXTRACT(epoch FROM (now() - state_change)))   AS idle_in_txn_sec,
 round(EXTRACT(epoch FROM (now() - query_start)))    AS query_age_sec,
 left(query, 120)                                    AS last_query
 FROM pg_stat_activity
-WHERE state IN (‘idle in transaction’, ‘idle in transaction (aborted)’)
+WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')
 ORDER BY idle_in_txn_sec DESC;
 
 – 1.4  Oldest open transactions (any state)
@@ -97,10 +97,10 @@ SELECT
 application_name,
 client_addr,
 count(*)                                            AS connections,
-count(*) FILTER (WHERE state = ‘active’)            AS active,
-count(*) FILTER (WHERE state = ‘idle’)              AS idle,
+count(*) FILTER (WHERE state = 'active')            AS active,
+count(*) FILTER (WHERE state = 'idle')              AS idle,
 count(*) FILTER (
-WHERE state LIKE ‘idle in transaction%’)        AS idle_in_txn
+WHERE state LIKE 'idle in transaction%')        AS idle_in_txn
 FROM pg_stat_activity
 WHERE pid <> pg_backend_pid()
 GROUP BY application_name, client_addr
@@ -115,12 +115,12 @@ ORDER BY connections DESC;
 SELECT pid, usename, datname, state,
 round(EXTRACT(epoch FROM (now() - state_change))) AS idle_sec
 FROM pg_stat_activity
-WHERE state IN (‘idle in transaction’, ‘idle in transaction (aborted)’)
-AND now() - state_change > interval ‘10 minutes’;
+WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')
+AND now() - state_change > interval '10 minutes';
 – To terminate, uncomment below:
 – SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-– WHERE state IN (‘idle in transaction’, ‘idle in transaction (aborted)’)
-–   AND now() - state_change > interval ‘10 minutes’;
+– WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')
+–   AND now() - state_change > interval '10 minutes';
 
 – =============================================================================
 – SECTION 2 — LOCK CONTENTION & DEADLOCKS
@@ -240,7 +240,7 @@ round(EXTRACT(epoch FROM (now() - a.query_start)))  AS lock_held_sec,
 left(a.query, 100)                                  AS query
 FROM pg_locks l
 JOIN pg_stat_activity a ON l.pid = a.pid
-WHERE l.mode = ‘AccessExclusiveLock’
+WHERE l.mode = 'AccessExclusiveLock'
 AND l.relation IS NOT NULL
 ORDER BY lock_held_sec DESC;
 
@@ -263,7 +263,7 @@ wait_event,
 round(EXTRACT(epoch FROM (now() - query_start)))    AS runtime_sec,
 left(query, 150)                                    AS query_preview
 FROM pg_stat_activity
-WHERE state != ‘idle’
+WHERE state != 'idle'
 AND pid <> pg_backend_pid()
 ORDER BY runtime_sec DESC NULLS LAST;
 
@@ -278,8 +278,8 @@ wait_event,
 round(EXTRACT(epoch FROM (now() - query_start)))    AS runtime_sec,
 left(query, 150)                                    AS query_preview
 FROM pg_stat_activity
-WHERE state != ‘idle’
-AND now() - query_start > interval ‘5 minutes’
+WHERE state != 'idle'
+AND now() - query_start > interval '5 minutes'
 AND pid <> pg_backend_pid()
 ORDER BY runtime_sec DESC;
 
@@ -295,7 +295,7 @@ round(EXTRACT(epoch FROM (now() - query_start)))    AS runtime_sec,
 left(query, 120)                                    AS query_preview
 FROM pg_stat_activity
 WHERE wait_event IS NOT NULL
-AND state != ‘idle’
+AND state != 'idle'
 AND pid <> pg_backend_pid()
 ORDER BY wait_event_type, runtime_sec DESC;
 
@@ -306,7 +306,7 @@ wait_event,
 count(*)                                            AS session_count
 FROM pg_stat_activity
 WHERE wait_event IS NOT NULL
-AND state != ‘idle’
+AND state != 'idle'
 GROUP BY wait_event_type, wait_event
 ORDER BY session_count DESC;
 
@@ -556,7 +556,7 @@ pg_size_pretty(pg_total_relation_size(t.oid))       AS toast_size
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_class t ON t.oid = c.reltoastrelid
-WHERE c.relkind = ‘r’
+WHERE c.relkind = 'r'
 AND c.reltoastrelid <> 0
 ORDER BY pg_total_relation_size(t.oid) DESC
 LIMIT 20;
@@ -608,27 +608,27 @@ usename,
 now() - query_start                                 AS running_for,
 left(query, 150)                                    AS autovacuum_query
 FROM pg_stat_activity
-WHERE query LIKE ‘autovacuum:%’
+WHERE query LIKE 'autovacuum:%'
 ORDER BY query_start;
 
 – 6.4  Autovacuum configuration — current effective settings
 SELECT name, setting, unit
 FROM pg_settings
 WHERE name IN (
-‘autovacuum’,
-‘autovacuum_max_workers’,
-‘autovacuum_naptime’,
-‘autovacuum_vacuum_threshold’,
-‘autovacuum_vacuum_scale_factor’,
-‘autovacuum_analyze_threshold’,
-‘autovacuum_analyze_scale_factor’,
-‘autovacuum_vacuum_cost_delay’,
-‘autovacuum_vacuum_cost_limit’,
-‘autovacuum_freeze_max_age’,
-‘vacuum_cost_delay’,
-‘vacuum_cost_limit’,
-‘vacuum_freeze_min_age’,
-‘vacuum_freeze_table_age’
+'autovacuum',
+'autovacuum_max_workers',
+'autovacuum_naptime',
+'autovacuum_vacuum_threshold',
+'autovacuum_vacuum_scale_factor',
+'autovacuum_analyze_threshold',
+'autovacuum_analyze_scale_factor',
+'autovacuum_vacuum_cost_delay',
+'autovacuum_vacuum_cost_limit',
+'autovacuum_freeze_max_age',
+'vacuum_cost_delay',
+'vacuum_cost_limit',
+'vacuum_freeze_min_age',
+'vacuum_freeze_table_age'
 )
 ORDER BY name;
 
@@ -640,7 +640,7 @@ c.reloptions
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.reloptions IS NOT NULL
-AND c.relkind = ‘r’
+AND c.relkind = 'r'
 ORDER BY n.nspname, c.relname;
 
 – 6.6  Estimated autovacuum trigger threshold per table
@@ -650,13 +650,13 @@ schemaname,
 relname                                             AS table_name,
 n_live_tup,
 n_dead_tup,
-round(current_setting(‘autovacuum_vacuum_threshold’)::numeric
-+ current_setting(‘autovacuum_vacuum_scale_factor’)::numeric
+round(current_setting('autovacuum_vacuum_threshold')::numeric
++ current_setting('autovacuum_vacuum_scale_factor')::numeric
 * n_live_tup)                                 AS vacuum_trigger_at,
 round(n_dead_tup * 100.0
 / nullif(
-current_setting(‘autovacuum_vacuum_threshold’)::numeric
-+ current_setting(‘autovacuum_vacuum_scale_factor’)::numeric
+current_setting('autovacuum_vacuum_threshold')::numeric
++ current_setting('autovacuum_vacuum_scale_factor')::numeric
 * n_live_tup, 0), 2)                      AS pct_of_threshold,
 last_autovacuum
 FROM pg_stat_user_tables
@@ -678,11 +678,11 @@ age(datfrozenxid)                                   AS txid_age,
 2147483647 - age(datfrozenxid)                      AS txids_remaining,
 round(100.0 * age(datfrozenxid) / 2147483647, 2)   AS wraparound_pct,
 CASE
-WHEN age(datfrozenxid) > 1800000000 THEN ‘!! EMERGENCY — Vacuum Immediately’
-WHEN age(datfrozenxid) > 1500000000 THEN ‘CRITICAL’
-WHEN age(datfrozenxid) > 1000000000 THEN ‘WARNING’
-WHEN age(datfrozenxid) > 500000000  THEN ‘MODERATE — Monitor’
-ELSE ‘OK’
+WHEN age(datfrozenxid) > 1800000000 THEN '!! EMERGENCY — Vacuum Immediately'
+WHEN age(datfrozenxid) > 1500000000 THEN 'CRITICAL'
+WHEN age(datfrozenxid) > 1000000000 THEN 'WARNING'
+WHEN age(datfrozenxid) > 500000000  THEN 'MODERATE — Monitor'
+ELSE 'OK'
 END                                                 AS risk_level
 FROM pg_database
 ORDER BY age(datfrozenxid) DESC;
@@ -692,18 +692,18 @@ SELECT
 n.nspname                                           AS schema,
 c.relname                                           AS table_name,
 age(c.relfrozenxid)                                 AS txid_age,
-current_setting(‘autovacuum_freeze_max_age’)        AS freeze_max_age,
-current_setting(‘autovacuum_freeze_max_age’)::int
+current_setting('autovacuum_freeze_max_age')        AS freeze_max_age,
+current_setting('autovacuum_freeze_max_age')::int
 - age(c.relfrozenxid)                           AS txids_until_forced_vacuum,
 CASE
-WHEN age(c.relfrozenxid) > 1500000000 THEN ‘CRITICAL’
-WHEN age(c.relfrozenxid) > 1000000000 THEN ‘WARNING’
-ELSE ‘OK’
+WHEN age(c.relfrozenxid) > 1500000000 THEN 'CRITICAL'
+WHEN age(c.relfrozenxid) > 1000000000 THEN 'WARNING'
+ELSE 'OK'
 END                                                 AS risk_level
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN (‘r’, ‘t’)
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE c.relkind IN ('r', 't')
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY age(c.relfrozenxid) DESC
 LIMIT 30;
 
@@ -789,7 +789,7 @@ pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn))
 AS retained_wal_size
 FROM pg_replication_slots
 ORDER BY pg_wal_lsn_diff(pg_current_wal_lsn(),
-coalesce(restart_lsn, ‘0/0’)) DESC;
+coalesce(restart_lsn, '0/0')) DESC;
 
 – 8.4  WAL directory size
 SELECT
@@ -833,7 +833,7 @@ THEN round(100.0 * blks_hit /
 (blks_hit + blks_read), 4)
 ELSE NULL END                                  AS cache_hit_pct
 FROM pg_stat_database
-WHERE datname NOT IN (‘template0’, ‘template1’)
+WHERE datname NOT IN ('template0', 'template1')
 ORDER BY cache_hit_pct ASC NULLS LAST;
 
 – 9.2  Table-level buffer cache hit ratio (identify cold tables)
@@ -868,14 +868,14 @@ ORDER BY temp_bytes DESC;
 SELECT name, setting, unit
 FROM pg_settings
 WHERE name IN (
-‘shared_buffers’,
-‘work_mem’,
-‘maintenance_work_mem’,
-‘effective_cache_size’,
-‘temp_buffers’,
-‘wal_buffers’,
-‘max_connections’,
-‘max_parallel_workers_per_gather’
+'shared_buffers',
+'work_mem',
+'maintenance_work_mem',
+'effective_cache_size',
+'temp_buffers',
+'wal_buffers',
+'max_connections',
+'max_parallel_workers_per_gather'
 )
 ORDER BY name;
 
@@ -907,7 +907,7 @@ SELECT
 datname                                             AS database,
 pg_size_pretty(pg_database_size(datname))           AS size
 FROM pg_database
-WHERE datname NOT IN (‘template0’, ‘template1’)
+WHERE datname NOT IN ('template0', 'template1')
 ORDER BY pg_database_size(datname) DESC;
 
 – 10.2 Tablespace usage
@@ -937,7 +937,7 @@ c.relkind                                           AS type,
 pg_size_pretty(pg_total_relation_size(c.oid))       AS total_size
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN (‘r’, ‘i’, ‘m’, ‘t’)
+WHERE c.relkind IN ('r', 'i', 'm', 't')
 ORDER BY pg_total_relation_size(c.oid) DESC
 LIMIT 40;
 
@@ -986,8 +986,8 @@ ELSE 0 END                                     AS req_checkpoint_pct,
 CASE
 WHEN checkpoints_req * 100.0
 / nullif(checkpoints_timed + checkpoints_req, 0) > 25
-THEN ‘WARNING — increase max_wal_size’
-ELSE ‘OK’
+THEN 'WARNING — increase max_wal_size'
+ELSE 'OK'
 END                                                 AS assessment
 FROM pg_stat_bgwriter;
 
@@ -995,18 +995,18 @@ FROM pg_stat_bgwriter;
 SELECT name, setting, unit
 FROM pg_settings
 WHERE name IN (
-‘wal_level’,
-‘wal_compression’,
-‘max_wal_size’,
-‘min_wal_size’,
-‘wal_keep_size’,
-‘checkpoint_timeout’,
-‘checkpoint_completion_target’,
-‘archive_mode’,
-‘archive_command’,
-‘synchronous_commit’,
-‘full_page_writes’,
-‘wal_log_hints’
+'wal_level',
+'wal_compression',
+'max_wal_size',
+'min_wal_size',
+'wal_keep_size',
+'checkpoint_timeout',
+'checkpoint_completion_target',
+'archive_mode',
+'archive_command',
+'synchronous_commit',
+'full_page_writes',
+'wal_log_hints'
 )
 ORDER BY name;
 
@@ -1032,7 +1032,7 @@ pg_get_constraintdef(con.oid)                       AS definition
 FROM pg_constraint con
 JOIN pg_class c ON c.oid = con.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY n.nspname, c.relname, con.contype;
 
 – 12.2  Invalid indexes (left from failed CREATE INDEX CONCURRENTLY)
@@ -1047,7 +1047,7 @@ JOIN pg_class c ON c.oid = i.indexrelid
 JOIN pg_class t ON t.oid = i.indrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE NOT i.indisvalid
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’);
+AND n.nspname NOT IN ('pg_catalog', 'information_schema');
 – To fix: DROP INDEX CONCURRENTLY <schema>.<index_name>;
 – Then recreate with CREATE INDEX CONCURRENTLY.
 
@@ -1063,7 +1063,7 @@ FROM pg_constraint con
 JOIN pg_class c ON c.oid = con.conrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE NOT con.convalidated
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’);
+AND n.nspname NOT IN ('pg_catalog', 'information_schema');
 – To fix: ALTER TABLE <table> VALIDATE CONSTRAINT <constraint_name>;
 
 – 12.4  Tables without a primary key (data integrity risk)
@@ -1073,12 +1073,12 @@ c.relname                                           AS table_name,
 pg_size_pretty(pg_total_relation_size(c.oid))       AS total_size
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind = ‘r’
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’, ‘pg_toast’)
+WHERE c.relkind = 'r'
+AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
 AND NOT EXISTS (
 SELECT 1 FROM pg_constraint con
 WHERE con.conrelid = c.oid
-AND con.contype = ‘p’
+AND con.contype = 'p'
 )
 ORDER BY pg_total_relation_size(c.oid) DESC;
 
@@ -1094,8 +1094,8 @@ JOIN pg_class f ON f.oid = c.confrelid
 JOIN pg_namespace n ON n.oid = t.relnamespace
 CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS x(attnum, n)
 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = x.attnum
-WHERE c.contype = ‘f’
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE c.contype = 'f'
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 AND NOT EXISTS (
 SELECT 1 FROM pg_index i
 WHERE i.indrelid = t.oid
@@ -1124,8 +1124,8 @@ seq.seqcycle                                        AS is_cycled
 FROM pg_class s
 JOIN pg_namespace n ON n.oid = s.relnamespace
 JOIN pg_sequence seq ON seq.seqrelid = s.oid
-WHERE s.relkind = ‘S’
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE s.relkind = 'S'
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY n.nspname, s.relname;
 
 – 13.2  Sequences close to exhaustion (> 75% consumed, non-cycled)
@@ -1138,18 +1138,18 @@ round(100.0 * pg_sequence_last_value(s.oid)
 / nullif(seq.seqmax, 0), 2)                   AS pct_consumed,
 CASE
 WHEN pg_sequence_last_value(s.oid) * 1.0
-/ nullif(seq.seqmax, 0) > 0.9  THEN ‘CRITICAL — Near Exhaustion’
+/ nullif(seq.seqmax, 0) > 0.9  THEN 'CRITICAL — Near Exhaustion'
 WHEN pg_sequence_last_value(s.oid) * 1.0
-/ nullif(seq.seqmax, 0) > 0.75 THEN ‘WARNING’
-ELSE ‘OK’
+/ nullif(seq.seqmax, 0) > 0.75 THEN 'WARNING'
+ELSE 'OK'
 END                                                 AS status
 FROM pg_class s
 JOIN pg_namespace n ON n.oid = s.relnamespace
 JOIN pg_sequence seq ON seq.seqrelid = s.oid
-WHERE s.relkind = ‘S’
+WHERE s.relkind = 'S'
 AND NOT seq.seqcycle
 AND pg_sequence_last_value(s.oid) IS NOT NULL
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY pct_consumed DESC;
 
 – 13.3  Sequences vs. column max values (detect sync issues after bulk load or restore)
@@ -1163,11 +1163,11 @@ FROM pg_attribute a
 JOIN pg_class t ON t.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = t.relnamespace
 JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-WHERE t.relkind = ‘r’
+WHERE t.relkind = 'r'
 AND a.attnum > 0
 AND NOT a.attisdropped
-AND d.adsrc LIKE ‘nextval%’
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+AND d.adsrc LIKE 'nextval%'
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY n.nspname, t.relname;
 
 – =============================================================================
@@ -1188,13 +1188,13 @@ s.last_autovacuum
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-WHERE c.relkind = ‘r’
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’, ‘pg_toast’)
+WHERE c.relkind = 'r'
+AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
 ORDER BY c.reltuples DESC
 LIMIT 30;
 
 – 14.2  Views that depend on a specific table (useful before ALTER TABLE)
-–       Replace ‘your_table_name’ with the actual table name.
+–       Replace 'your_table_name' with the actual table name.
 SELECT
 dependent_ns.nspname                                AS dependent_schema,
 dependent_view.relname                              AS dependent_view
@@ -1204,7 +1204,7 @@ JOIN pg_class AS dependent_view ON pg_rewrite.ev_class = dependent_view.oid
 JOIN pg_class AS source_table ON pg_depend.refobjid = source_table.oid
 JOIN pg_namespace AS dependent_ns ON dependent_ns.oid = dependent_view.relnamespace
 JOIN pg_namespace AS source_ns ON source_ns.oid = source_table.relnamespace
-WHERE source_table.relname = ‘your_table_name’
+WHERE source_table.relname = 'your_table_name'
 AND dependent_view.relname <> source_table.relname;
 
 – 14.3  Functions and procedures in user schemas
@@ -1218,7 +1218,7 @@ p.prosecdef                                         AS security_definer
 FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 JOIN pg_language l ON l.oid = p.prolang
-WHERE n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY n.nspname, p.proname;
 
 – 14.4  Orphaned large objects (potential storage waste)
@@ -1233,19 +1233,19 @@ SELECT
 n.nspname                                           AS schema,
 c.relname                                           AS table_name,
 c.relkind                                           AS type,
-has_table_privilege(‘public’, c.oid, ‘SELECT’)      AS public_select,
-has_table_privilege(‘public’, c.oid, ‘INSERT’)      AS public_insert,
-has_table_privilege(‘public’, c.oid, ‘UPDATE’)      AS public_update,
-has_table_privilege(‘public’, c.oid, ‘DELETE’)      AS public_delete
+has_table_privilege('public', c.oid, 'SELECT')      AS public_select,
+has_table_privilege('public', c.oid, 'INSERT')      AS public_insert,
+has_table_privilege('public', c.oid, 'UPDATE')      AS public_update,
+has_table_privilege('public', c.oid, 'DELETE')      AS public_delete
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN (‘r’, ‘v’)
-AND n.nspname NOT IN (‘pg_catalog’, ‘information_schema’)
+WHERE c.relkind IN ('r', 'v')
+AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 AND (
-has_table_privilege(‘public’, c.oid, ‘SELECT’)
-OR has_table_privilege(‘public’, c.oid, ‘INSERT’)
-OR has_table_privilege(‘public’, c.oid, ‘UPDATE’)
-OR has_table_privilege(‘public’, c.oid, ‘DELETE’)
+has_table_privilege('public', c.oid, 'SELECT')
+OR has_table_privilege('public', c.oid, 'INSERT')
+OR has_table_privilege('public', c.oid, 'UPDATE')
+OR has_table_privilege('public', c.oid, 'DELETE')
 )
 ORDER BY n.nspname, c.relname;
 
@@ -1261,8 +1261,8 @@ array_agg(m.rolname ORDER BY m.rolname)             AS member_of
 FROM pg_roles r
 LEFT JOIN pg_auth_members am ON am.member = r.oid
 LEFT JOIN pg_roles m ON m.oid = am.roleid
-WHERE r.rolname NOT LIKE ‘pg_%’
-AND r.rolname NOT LIKE ‘rds%’
+WHERE r.rolname NOT LIKE 'pg_%'
+AND r.rolname NOT LIKE 'rds%'
 GROUP BY r.rolname, r.rolsuper, r.rolcreaterole,
 r.rolcreatedb, r.rolreplication, r.rolconnlimit
 ORDER BY r.rolname;
@@ -1294,7 +1294,7 @@ sourcefile,
 sourceline
 FROM pg_settings
 WHERE setting <> boot_val
-AND source NOT IN (‘default’, ‘override’)
+AND source NOT IN ('default', 'override')
 ORDER BY name;
 
 – 15.3  Parameters pending restart (changed but not yet effective)
@@ -1315,20 +1315,20 @@ source,
 sourcefile,
 sourceline
 FROM pg_settings
-WHERE source NOT IN (‘default’, ‘client’)
+WHERE source NOT IN ('default', 'client')
 ORDER BY source, name;
 
 – 15.5  SSL and security configuration
 SELECT name, setting
 FROM pg_settings
 WHERE name IN (
-‘ssl’,
-‘ssl_min_protocol_version’,
-‘ssl_ca_file’,
-‘ssl_cert_file’,
-‘ssl_crl_file’,
-‘password_encryption’,
-‘row_security’
+'ssl',
+'ssl_min_protocol_version',
+'ssl_ca_file',
+'ssl_cert_file',
+'ssl_crl_file',
+'password_encryption',
+'row_security'
 )
 ORDER BY name;
 
@@ -1336,21 +1336,21 @@ ORDER BY name;
 SELECT name, setting
 FROM pg_settings
 WHERE name IN (
-‘log_destination’,
-‘logging_collector’,
-‘log_directory’,
-‘log_filename’,
-‘log_min_messages’,
-‘log_min_error_statement’,
-‘log_min_duration_statement’,
-‘log_checkpoints’,
-‘log_connections’,
-‘log_disconnections’,
-‘log_lock_waits’,
-‘log_temp_files’,
-‘log_autovacuum_min_duration’,
-‘log_error_verbosity’,
-‘log_statement’
+'log_destination',
+'logging_collector',
+'log_directory',
+'log_filename',
+'log_min_messages',
+'log_min_error_statement',
+'log_min_duration_statement',
+'log_checkpoints',
+'log_connections',
+'log_disconnections',
+'log_lock_waits',
+'log_temp_files',
+'log_autovacuum_min_duration',
+'log_error_verbosity',
+'log_statement'
 )
 ORDER BY name;
 
