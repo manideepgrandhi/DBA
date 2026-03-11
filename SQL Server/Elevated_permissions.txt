@@ -1,0 +1,71 @@
+----- Server Level Permissions ---------
+/*
+Every DBA knows about this. however, just pointing out some notes.
+Value 1 - denotes as they have access against that particular role
+Value 0 - denotes as they do not have access against that particular role
+*/
+SELECT sp.name AS LoginName
+    , sp.type_desc AS LoginType
+    , sp.default_database_name AS DefaultDBName
+    , slog.sysadmin AS SysAdmin
+    , slog.securityadmin AS SecurityAdminjha     
+    , slog.serveradmin AS ServerAdmin
+    , slog.setupadmin AS SetupAdmin
+    , slog.processadmin AS ProcessAdmin
+    , slog.diskadmin AS DiskAdmin
+    , slog.dbcreator AS DBCreator
+    , slog.bulkadmin AS BulkAdmin
+FROM sys.server_principals sp
+INNER JOIN master..syslogins slog ON sp.sid = slog.sid
+WHERE sp.type <> 'R'
+    AND sp.name NOT LIKE '##%'
+
+ 
+
+------- Reporting Every Login/User permissions at Databases Level for ALL DBs ----------
+SET NOCOUNT ON
+USE [master]
+GO
+IF OBJECT_ID('tempdb..#tmpVerifyAccess') IS NOT NULL
+    DROP TABLE #tmpVerifyAccess
+CREATE TABLE #tmpVerifyAccess (
+    [User] VARCHAR(150) NOT NULL
+    , [Server] VARCHAR(100) NOT NULL
+    , [Database] VARCHAR(200) NOT NULL
+    , [Object] VARCHAR(300) NOT NULL
+    , [Object Type] VARCHAR(20) NOT NULL
+    , [Permission] VARCHAR(100) NOT NULL
+    )
+EXEC sp_MSforeachdb 
+    '
+INSERT INTO #tmpVerifyAccess
+SELECT u.name, @@SERVERNAME, ''?'', ''['' + s.name + ''].['' + o.name + '']'', o.type_desc, p.permission_name
+FROM master.sys.server_principals l
+    INNER JOIN [?].sys.database_principals u ON l.sid = u.sid
+    INNER JOIN [?].sys.database_permissions p ON u.principal_id = p.grantee_principal_id
+    INNER JOIN [?].sys.objects o ON o.object_id = p.major_id
+    INNER JOIN [?].sys.schemas s ON o.schema_id = s.schema_id
+UNION
+SELECT DISTINCT u.name COLLATE DATABASE_DEFAULT, @@SERVERNAME, ''?'', s.name, ''SCHEMA'', p.permission_name COLLATE DATABASE_DEFAULT
+FROM master.sys.server_principals l
+    INNER JOIN [?].sys.database_principals u ON l.sid = u.sid
+    INNER JOIN [?].sys.database_permissions p ON u.principal_id = p.grantee_principal_id
+    INNER JOIN [?].sys.schemas s ON p.major_id = s.schema_id
+WHERE p.class_desc = ''SCHEMA''
+    
+UNION
+SELECT u.name, @@SERVERNAME, ''?'', ''?'', ''DATABASE'', r.name
+FROM master.sys.server_principals l
+    INNER JOIN [?].sys.database_principals u ON l.sid = u.sid
+    INNER JOIN [?].sys.database_role_members m ON m.member_principal_id = u.principal_id
+    INNER JOIN [?].sys.database_principals r ON r.principal_id = m.role_principal_id
+'
+SELECT *
+FROM #tmpVerifyAccess
+WHERE [User] NOT LIKE '##%'
+--AND [User] = 'bobby' -- To get the permission of particular user ID, uncomment this line then replace <username> 
+ORDER BY [User]
+    , [Server]
+    , [Database]
+GO
+SET NOCOUNT OFF

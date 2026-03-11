@@ -1,0 +1,10 @@
+USE [tempdb]
+GO
+DBCC SHRINKFILE (N'tempdev' , 10240)
+GO
+
+
+DBCC FREEPROCCACHE -- clean cache
+DBCC DROPCLEANBUFFERS -- clean buffers
+DBCC FREESYSTEMCACHE ('ALL') -- clean system cache
+DBCC FREESESSIONCACHE

@@ -1,0 +1,158 @@
+use CODBAProcedures
+go
+
+exec Ozar.sp_BlitzCache 
+ @DatabaseName='M3FDBGRD',
+ @OnlyQueryHashes = '0xB42F47641614D105'
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzIndex 
+@DatabaseName='M3FDBGRD',
+@SchemaName='MVXJDTA',
+@TableName='MHDISH'
+
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzWho
+
+
+use CODBAProcedures
+go
+exec sp_WhoIsActive
+
+
+EXEC CODBALogs.dbo.usp_WhoIsActive
+@get_plans = 1,
+@get_additional_info = 1
+Go
+
+EXECUTE sp_SQLskills_SQL2008_finddupes @ObjName='MVXJDTA.MITPLO';
+GO
+
+
+exec sp_SQLskills_helpindex 'MVXJDTA.STAGLI'
+
+EXECUTE sp_SQLskills_SQL2008_finddupes @ObjName='MVXJDTA.STAGLI';
+
+GO
+
+EXECUTE sp_SQLskills_SQL2008_finddupes;
+GO
+exec sp_SQLskills_helpindex 'MVXJDTA.MITPLO'
+
+
+Verified the index usage stats and i see below two indexes are less utilized and robert mentioned to drop these indexes in the chat.
+
+MITPLO30,MITPLO70
+
+MITPLO00 & MITPLO01 are overlapping indexes and some of the other indexes are duplicate in nature(exept the order)
+
+
+exec sp_BlitzCache @Top=50,@SortOrder='avg CPU'
+exec sp_BlitzCache @MinutesBack=60
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzIndex 
+@DatabaseName='UNITE_Catalog',
+@SchemaName='dbo',
+@TableName='Stock transactions detailed'
+
+exec sp_BlitzCache @MinutesBack=100,@SortOrder="Reads",@OutputDatabaseName='CODBALogs',@OutputSchemaName='dbo',@OutputTableName='top10_11172020'
+select * from CODBALogs.dbo.top10_11172020
+
+exec sp_BlitzCache @Top=20,@SortOrder='avg CPU',@OutputDatabaseName='CODBALogs',@OutputSchemaName='dbo',@OutputTableName='top20_11102020'
+
+EXEC CODBAProcedures.Ozar.sp_BlitzCache @OnlyQueryHashes = '0x8D46B4A7096D092D'
+EXEC CODBAProcedures.Ozar.sp_BlitzCache @Help=1
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzIndex 
+@DatabaseName='M3FDBGRD',
+@SchemaName='MVXJDTA',
+@TableName='MCBOMS'
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzIndex 
+@DatabaseName='M3FDBGRD',
+@SchemaName='MVXJDTA',
+@TableName='MOATTR'
+
+--6,220 uses; Impact: 82.3%; Avg query cost: 178.6114
+--6,228 uses; Impact: 82.2%; Avg query cost: 178.4184
+
+
+while( 1=1)
+BEGIN
+exec master.dbo.sp_BlitzCache 
+ @DatabaseName='M3FDBGRD',
+ @OnlyQueryHashes = '0x7D9C96707B4ED074',
+ @OutputDatabaseName='CODBALogs',@OutputSchemaName='dbo',@OutputTableName='perf_11242020'
+
+--,@SkipAnalysis=1
+
+ WAITFOR DELAY '00:00:05';
+ END
+
+
+exec CODBAProcedures.Ozar.sp_BlitzCache
+ @DatabaseName='IPSPRODUCTION,
+ @OnlyQueryHashes = '0x327BC5A18E370637',
+--0x0A66D0CF0BBB5BC0
+
+
+exec master.dbo.sp_BlitzCache 
+ @DatabaseName='M3FDBGRD',
+ @OnlyQueryHashes = '0x8D46B4A7096D092D
+
+--EXEC CODBAProcedures.Ozar.sp_BlitzCache @DatabaseName='M3FDBGRD',@OnlyQueryHashes = '0x8D46B4A7096D092D',@SkipAnalysis=1
+
+
+
+ select top 100 datediff(ms,LastExecutionTime,LastCompletionTime) timems,LastExecutionTime,LastCompletionTime,ExecutionCount,* from CODBALogs.dbo.perf_11242020 order by CheckDate Desc
+
+exec CODBAProcedures.Ozar.sp_BlitzCache 
+ @DatabaseName='LSLMDB',
+ @OnlyQueryHashes='0x15FDA2E8C2040905'
+
+
+0xA624A697CF91DCA6
+
+exec CODBAProcedures.Ozar.sp_BlitzCache 
+ @DatabaseName='LSLMDB',
+ @OnlyQueryHashes='0xA624A697CF91DCA6'
+
+
+use CODBAProcedures
+go
+exec Ozar.sp_BlitzLock 
+
+ select top 20 datediff(ms,LastExecutionTime,LastCompletionTime) timems,LastExecutionTime,LastCompletionTime,ExecutionCount,PlanCreationTime,* from CODBALogs.dbo.perf_11242020 
+ --where PlanCreationTime='2020-12-01 06:57:24.700'
+ order by CheckDate Desc
+ 
+ --select distinct(PlanCreationTime) from  CODBALogs.dbo.perf_11242020 order by PlanCreationTime desc
+
+
+ select top 100 datediff(ms,LastExecutionTime,LastCompletionTime) timems,LastExecutionTime,LastCompletionTime,ExecutionCount,PlanCreationTime,ID,CheckDate,Warnings,AverageCPU,TotalCPU,CPUWeight,AverageDuration,TotalDuration,AverageReads,TotalReads,ExecutionsPerMinute
+ from CODBALogs.dbo.perf_11242020 
+ --where PlanCreationTime='2020-12-01 06:57:24.700'
+ order by CheckDate Desc
+
+
+
+ select  top 1000 datediff(MS,LastExecutionTime,LastCompletionTime) timems,LastExecutionTime,LastCompletionTime,ExecutionCount,PlanCreationTime,ID,QueryPlanCost,CheckDate,Warnings,AverageCPU,TotalCPU,CPUWeight,AverageDuration,TotalDuration,AverageReads,TotalReads,ExecutionsPerMinute,QueryText,QueryPlan,[Remove Plan Handle From Cache]
+ from CODBALogs.dbo.perf_11242020 
+ where LastExecutionTime >'2020-12-04 00:30:53.570'
+  --order by timems Desc
+    order by CheckDate Desc
+
+
+ select  top 1000 datediff(MS,LastExecutionTime,LastCompletionTime) timems,LastExecutionTime,LastCompletionTime,ExecutionCount,PlanCreationTime,ID,QueryPlanCost,CheckDate,Warnings,AverageCPU,TotalCPU,CPUWeight,AverageDuration,TotalDuration,AverageReads,TotalReads,ExecutionsPerMinute,QueryText,QueryPlan
+ from CODBALogs.dbo.perf_11242020 
+ where PlanCreationTime ='2020-12-04 07:10:02.097'
+  order by timems Desc

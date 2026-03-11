@@ -1,0 +1,80 @@
+DECLARE @count int;
+--Get CPU count
+SELECT @count = cpu_count FROM master.sys.dm_os_sys_info
+--If there are 8 or less CPUs
+IF (@count<=8)
+BEGIN
+    --Output information on the CPUs
+    SELECT
+        cpu_id
+        , is_online 
+        , status AS is_online_desc
+        , CASE
+            WHEN cpu_id = 0 AND is_online = 1 THEN '***Processor '+CAST(cpu_id AS nvarchar(3))+' should not be online.***'
+            WHEN cpu_id <> 0 AND is_online = 0 THEN '***Processor '+CAST(cpu_id AS nvarchar(3))+' should be online.***'
+            ELSE NULL
+        END AS Warning
+    FROM master.sys.dm_os_schedulers
+    WHERE cpu_id=scheduler_id
+    ORDER BY cpu_id, scheduler_id
+    
+    --If:
+    -- 1) CPU 0 is on, or 
+    -- 2) any other processor is off,
+    -- fix the affinity
+    IF (NOT EXISTS (SELECT * FROM master.sys.dm_os_schedulers WHERE cpu_id = scheduler_id AND cpu_id = 0 AND is_online = 0) OR
+            EXISTS (SELECT * FROM master.sys.dm_os_schedulers WHERE cpu_id = scheduler_id AND cpu_id <> 0 AND is_online = 0))
+        SELECT
+              @@SERVERNAME AS server_name
+            , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id) AS cpu_count
+            , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id AND is_online=1) cpu_online
+            , @count-1 AS recommended_online
+            , 'ALTER SERVER CONFIGURATION SET PROCESS AFFINITY CPU = 1 TO '+CAST(@count-1 AS nvarchar(3)) AS command
+    ELSE
+        SELECT
+            @@SERVERNAME AS server_name
+                , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id) AS cpu_count
+                , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id AND is_online=1) cpu_online
+                , @count-1 AS recommended_online
+                , '--No Changes Needed' AS command
+END
+--If there are more than 8 CPUs
+ELSE
+BEGIN
+    --Output information on the CPUs
+    SELECT
+        cpu_id
+        , is_online 
+        , status AS is_online_desc
+        , CASE
+            WHEN cpu_id = 0 AND is_online = 1 THEN '***Processor '+CAST(cpu_id AS nvarchar(3))+' should not be online.***'
+            WHEN cpu_id = 1 AND is_online = 1 THEN '***Processor '+CAST(cpu_id AS nvarchar(3))+' should not be online.***'
+            WHEN cpu_id <> 0 AND cpu_id <> 1 AND is_online = 0 THEN '***Processor '+CAST(cpu_id AS nvarchar(3))+' should be online.***'
+            ELSE NULL
+        END AS Warning
+    FROM master.sys.dm_os_schedulers
+    WHERE cpu_id=scheduler_id
+    ORDER BY cpu_id, scheduler_id
+    
+    --If:
+    -- 1) CPU 0 is on
+    -- 2) CPU 1 is on, or 
+    -- 3) any other processor is off,
+    -- fix the affinity
+    IF (NOT EXISTS (SELECT * FROM master.sys.dm_os_schedulers WHERE cpu_id = scheduler_id AND cpu_id = 0 AND is_online = 0) OR
+        NOT EXISTS (SELECT * FROM master.sys.dm_os_schedulers WHERE cpu_id = scheduler_id AND cpu_id = 1 AND is_online = 0) OR
+            EXISTS (SELECT * FROM master.sys.dm_os_schedulers WHERE cpu_id = scheduler_id AND cpu_id <> 0 AND cpu_id <> 1 AND is_online = 0))
+        SELECT
+              @@SERVERNAME AS server_name
+            , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id) AS cpu_count
+            , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id AND is_online=1) cpu_online
+            , @count-2 AS recommended_online
+            , 'ALTER SERVER CONFIGURATION SET PROCESS AFFINITY CPU = 2 TO '+CAST(@count-1 AS nvarchar(3)) AS command
+    ELSE
+        SELECT
+            @@SERVERNAME AS server_name
+                , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id) AS cpu_count
+                , (SELECT COUNT(DISTINCT cpu_id) FROM master.sys.dm_os_schedulers WHERE cpu_id=scheduler_id AND is_online=1) cpu_online
+                , @count-2 AS recommended_online
+                , '--No Changes Needed' AS command
+END

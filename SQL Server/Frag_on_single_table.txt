@@ -1,0 +1,44 @@
+DECLARE @db_id INT;
+DECLARE @object_id INT;
+SET @db_id = db_id(N'M3FDBGRD');
+SET @object_id = OBJECT_ID(N'MVXJDTA.MITPLO');
+BEGIN
+   SELECT *
+   FROM sys.dm_db_index_physical_stats(@db_id,@object_id, NULL, NULL , 'LIMITED') AS IPS;
+END
+GO
+
+
+
+SELECT S.name as 'Schema',
+T.name as 'Table',
+I.name as 'Index',
+DDIPS.avg_fragmentation_in_percent,
+DDIPS.page_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), NULL, NULL, NULL, NULL) AS DDIPS
+INNER JOIN sys.tables T on T.object_id = DDIPS.object_id
+INNER JOIN sys.schemas S on T.schema_id = S.schema_id
+INNER JOIN sys.indexes I ON I.object_id = DDIPS.object_id
+AND DDIPS.index_id = I.index_id
+WHERE DDIPS.database_id = DB_ID()
+and I.name is not null
+AND DDIPS.avg_fragmentation_in_percent > 0
+ORDER BY DDIPS.avg_fragmentation_in_percent desc
+
+
+
+declare @IsHadrEnabled as sql_variant  
+set @IsHadrEnabled = (select SERVERPROPERTY('IsHadrEnabled'))  
+select @IsHadrEnabled as IsHadrEnabled,  
+case @IsHadrEnabled  
+when 0 then 'The Always On availability groups is disabled'  
+when 1 then 'The Always On availability groups is enabled'  
+else 'Invalid Input'  
+end as 'Hadr' 
+
+DECLARE	@return_value int
+
+EXEC	@return_value = [dbo].[LINEITEMSETUPDETAIL_OUTPUT]
+		@vbillrunkey = 19434
+
+SELECT	'Return Value' = @return_value

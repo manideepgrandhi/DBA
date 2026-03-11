@@ -1,0 +1,19 @@
+SELECT [SQL Server Start Time] = CONVERT(VARCHAR(23), a.sql_start, 121),
+       [SQL Agent Start Time] = CONVERT(VARCHAR(23), a.agent_start, 121),
+       [SQL Uptime] = CONVERT(VARCHAR(15),
+                      RIGHT(10000000+Datediff(dd, 0, Getdate()-a.sql_start), 4)
+                      + ' '
+                      + CONVERT(VARCHAR(20), Getdate()-a.sql_start, 108)),
+       [Agent Uptime] = CONVERT(VARCHAR(15),
+RIGHT(10000000+Datediff(dd, 0, Getdate()-a.agent_start), 4)
++ ' '
++ CONVERT(VARCHAR(20), Getdate()-a.agent_start, 108))
+FROM   (SELECT SQL_Start = Min(aa.login_time),
+               Agent_Start = NULLIF(Min(CASE
+                                          WHEN aa.program_name LIKE 'SQLAgent %'
+                                        THEN
+                                          aa.login_time
+                                          ELSE '99990101'
+                                        END), CONVERT(DATETIME, '99990101'))
+        FROM   master.dbo.sysprocesses aa
+        WHERE  aa.login_time > '20000101') a 

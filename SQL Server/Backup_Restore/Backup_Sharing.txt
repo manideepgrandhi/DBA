@@ -1,0 +1,29 @@
+Import-Module AWSPowerShell
+    Write-S3Object -BucketName infor-prd-ncr-uploads-us-east-1 -Key full_M3FDBGRD_20191128.7z.001 -File G:\BACKUP\IXS_14091275\full_M3FDBGRD_20191128.7z.001 -ProfileName prd-ncr
+	
+	
+	
+	Event Log Notes: Hi
+
+Please download the backup files using the below link with in 7 days
+
+https://infor-prd-ncr-uploads-us-east-1.s3.amazonaws.com/20200711235958-20200719235958.7z?AWSAccessKeyId=AKIA5YCNPPYIBEL56GE3&Expires=1595421766&Signature=URnYhF8qSE8jUFJUmq31trej4uc%3D
+
+We have shared the password to unzip the downloaded file to 'lericsson@tbmc.net' via separate email
+
+Let us know in case of any concerns.
+
+Regards
+Hariprasad
+
+vpc-07e869be59a55fbb9
+
+P100056605C
+
+
+
+
+Write-S3Object -BucketName infor-prd-ncr-uploads-us-east-1 -Key IXS_14730432_Database_Backups.7z -File G:\IXS_14730432\IXS_14730432_Database_Backups.7z -ProfileName prd-ncr
+
+
+Copy-S3Object -BucketName infor-prd-ncr-appdata-us-east-1 -Key presigneduploadurls/IXS_14730432_Database_Backups.7z.downloadurl.txt -LocalFile G:\IXS_14730432\IXS_14730432_Database_Backups.7z.downloadurl.txt -ProfileName prd-ncr

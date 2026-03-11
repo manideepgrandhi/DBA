@@ -1,0 +1,8 @@
+$web = New-Object Net.WebClient     $web.DownloadString("http://169.254.169.254/latest/meta-data/instance-id") $web.DownloadString("http://169.254.169.254/latest/meta-data/placement/availability-zone") $web.DownloadString("http://169.254.169.254/latest/user-data")
+
+
+$InstanceIdentity = (New-Object System.Net.WebClient).DownloadString('http://169.254.169.254/latest/dynamic/instance-identity/document')
+$InstanceIdentity
+
+AP37CQ9238
+

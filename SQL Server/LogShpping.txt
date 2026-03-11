@@ -1,0 +1,41 @@
+--EXEC sp_change_log_shipping_secondary_database
+  @secondary_database = 'inforlndb',
+  @restore_mode = 0,
+  @disconnect_users = 1
+
+sp_delete_log_shipping_secondary_database N'BV_BDS_1037'
+
+
+SELECT CASE agent_type WHEN 1 THEN 'Backup' WHEN 2 THEN 'Copy' WHEN 3 THEN 'Restore' END as agent_type, * 
+from msdb..log_shipping_monitor_error_detail
+
+SELECT b.type, b.first_lsn, b.last_lsn, b.checkpoint_lsn, b.database_backup_lsn, a.*
+FROM msdb..restorehistory a
+INNER JOIN msdb..backupset b ON a.backup_set_id = b.backup_set_id
+WHERE a.destination_database_name = 'inforlndb'
+ORDER BY restore_date DESC
+
+SELECT 
+   secondary_server,
+   secondary_database,
+   primary_server,
+   primary_database,
+   last_copied_file,
+   last_copied_date,
+   last_restored_file,
+   last_restored_date
+FROM msdb.dbo.log_shipping_monitor_secondary
+
+
+SELECT 
+   secondary_database,
+   restore_mode,
+   disconnect_users,
+   last_restored_file
+FROM msdb.dbo.log_shipping_secondary_databases
+
+
+RESTORE LOG [inforlndb] FROM DISK = N'e:\logship_from_inforlndb\inforlndb_20201021103500.trn' WITH FILE = 1, STANDBY = N'D:\MSSQL\Data\inforlndb_20201021105926.tu
+
+
+RESTORE LOG [inforlndb] FROM DISK = N'e:\logship_from_inforlndb\inforlndb_20201021105000.trn' WITH FILE = 1, STANDBY = N'D:\MSSQL\Data\inforlndb_20201021110433.tu

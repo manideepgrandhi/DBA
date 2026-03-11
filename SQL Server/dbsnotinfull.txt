@@ -1,0 +1,52 @@
+set nocount on;
+
+select name from master.sys.databases 
+where name not in ('master','model','tempdb','msdb','ReportServerTempDB')
+ and recovery_model_desc!='FULL' and state=0
+
+go
+
+
+declare
+@isql varchar(2000),
+@dbname varchar(256)
+
+declare c1 cursor for select '['+name+']' from master.sys.databases 
+where name not in ('master','model','tempdb','msdb','ReportServerTempDB')
+ and recovery_model_desc!='FULL' and state=0
+open c1
+fetch next from c1 into @dbname
+While @@fetch_status <> -1
+    begin
+              
+    select @isql = 'ALTER DATABASE @dbname SET RECOVERY FULL'
+    select @isql = replace(@isql,'@dbname',@dbname)
+    print @isql
+   -- exec(@isql)
+
+    fetch next from c1 into @dbname
+    end
+close c1
+deallocate c1
+GO
+
+
+/*Get last full backup oath of master database*/
+declare @fullpath varchar(2048)
+Select @fullpath=(select top 1 bmf.physical_device_name
+From msdb..backupset bs with(nolock)
+join msdb..backupmediafamily bmf with(nolock)
+on bs.media_set_id = bmf.media_set_id
+--Where recovery_model = 'FULL'
+AND type = 'D' ---FULL backups
+AND database_name = 'master'
+Order by backup_finish_date desc)
+print @fullpath
+declare @finalpath varchar(2048)=(select REVERSE(substring(REVERSE(@fullpath),charindex('\',REVERSE(@fullpath)),LEN(@fullpath))))
+print @finalpath
+declare @dateformat varchar(1024)
+select @dateformat=(SELECT CONVERT(VARCHAR,getdate(),112) + LEFT(REPLACE(CONVERT(VARCHAR,getdate(),114),':',''),6))
+select
+'USE [master];ALTER DATABASE ['+name+'] SET RECOVERY FULL WITH NO_WAIT;' as ChangeRecoveryCmd,
+'BACKUP DATABASE '+name+' TO DISK='''+@finalpath+'full_'+name+'_'+@dateformat+'_0.bak'+''' WITH FORMAT, COMPRESSION,STATS=10;' as BackupCommand from sys.databases where recovery_model_desc<>'full'
+and name not in ('master','model','msdb','tempdb','ReportServerTempdb','ReportServerTempDB')

@@ -1,0 +1,28 @@
+DECLARE @start DATETIME, @end DATETIME
+
+SET @start='2020-07-17 22:00:11.570'
+
+SET @end='2020-07-18 04:00:11.570'
+
+EXEC xp_readerrorlog 0, 1,NULL,NULL,@start,@end,'Desc'
+
+--0,1 represents latest SQL error log
+
+--0,2 represents latest SQL agent log
+
+GO
+
+
+DECLARE @start DATETIME, @end DATETIME
+
+SET @start=DATEADD(minute,-15,GETDATE());
+
+SET @end=GETDATE();
+
+EXEC xp_readerrorlog 0, 1,NULL,NULL,@start,@end,'Desc'
+
+--0,1 represents latest SQL error log
+
+--0,2 represents latest SQL agent log
+
+GO

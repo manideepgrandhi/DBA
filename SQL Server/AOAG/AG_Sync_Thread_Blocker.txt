@@ -1,0 +1,23 @@
+IF OBJECT_ID ('tempdb..#blocks') is not null
+    drop table #blocks
+DECLARE @bsid int
+SET @bsid=(SELECT blocking_session_id from sys.dm_exec_requests r
+WHERE command='DB STARTUP'
+--AND database_id=DB_ID('M3FDBGRD')
+AND blocking_session_id <> 0
+)
+If @bsid is null
+BEGIN
+Print 'No Blocking Observed'
+END
+else
+BEGIN
+SELECT top 1 r.session_id, r.start_time, r.status, p.loginame, p.hostname, p.waittime, REPLACE(REPLACE(REPLACE(CONVERT( varchar(MAX),t.text),CHAR(13),''),CHAR(10),''), CHAR(09),'')AS sql_text 
+INTO #blocks
+FROM sys.dm_exec_requests r
+INNER JOIN sys.sysprocesses p on r.session_id=p.spid
+    CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t
+        WHERE
+            r.session_id = @bsid;      
+    select * from #blocks         
+END

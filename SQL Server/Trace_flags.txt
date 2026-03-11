@@ -1,0 +1,36 @@
+DBCC TRACEON(3604)
+DBCC PAGE('M3FDBGRD',4,240348,0) 
+DBCC TRACEOFF (3604);
+GO
+
+use M3FDBGRD
+go
+select * from sys.objects where OBJECT_ID='188748671'
+
+
+
+
+--check trace status
+
+dbcc tracestatus
+
+--Turnon dump trigger
+
+dbcc traceon (2551,-1)
+DBCC DUMPTRIGGER ('set', 845)
+
+
+--Check whether dump trigger is activated or not
+
+dbcc traceon(3604, -1) 
+go 
+dbcc dumptrigger('display') 
+go 
+dbcc traceoff(3604, -1) 
+go
+
+--Turnoff dump trigger
+
+
+DBCC DUMPTRIGGER ('clear', 845)
+dbcc traceoff (2551,-1)

@@ -1,0 +1,37 @@
+DECLARE @dbname NVARCHAR(512)
+DECLARE @TSQL NVARCHAR(512)
+
+DECLARE db_cursor CURSOR LOCAL FAST_FORWARD
+FOR
+SELECT db.database_name FROM 
+	master.sys.availability_databases_cluster db
+INNER JOIN 
+	master.sys.availability_groups ag
+ON db.group_id = ag.group_id
+WHERE ag.name LIKE '' -- name of AG there
+
+
+OPEN db_cursor
+FETCH NEXT FROM db_cursor INTO @dbname
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	-- first suspend the synchronization
+	PRINT '-- Suspending data movement for database ' + @dbname;
+	SET @TSQL = 'ALTER DATABASE [' + @dbname + '] SET HADR SUSPEND'
+	
+	-- uncomment folowing line for direct execution
+	-- EXECUTE sp_executesql @TSQL
+	PRINT @TSQL
+
+	-- then resume back
+	PRINT '-- Resuming data movement for database ' + @dbname;
+	SET @TSQL = 'ALTER DATABASE [' + @dbname + '] SET HADR RESUME'
+
+	-- uncomment folowing line for direct execution
+	-- EXECUTE sp_executesql @TSQL
+	PRINT @TSQL
+
+	FETCH NEXT FROM db_cursor INTO @dbname
+END
+CLOSE db_cursor
+DEALLOCATE db_cursor

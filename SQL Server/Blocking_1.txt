@@ -1,0 +1,11 @@
+select a.spid as HeaderBlockerSpid,DB_NAME(a.dbid) as dbname ,a.loginame,a.hostname,a.login_time,T.text as SqlText
+from master..sysprocesses a
+CROSS APPLY sys.dm_exec_sql_text(a.SQL_HANDLE) T 
+where exists ( select b.*
+from master..sysprocesses b
+where b.blocked > 0 and
+b.blocked = a.spid ) and not
+exists ( select b.*
+from master..sysprocesses b
+where b.blocked > 0 and
+b.spid = a.spid ) 

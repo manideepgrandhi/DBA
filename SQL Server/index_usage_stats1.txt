@@ -1,0 +1,28 @@
+SELECT db.name, o.object_id, o.name AS table_name, ix.name AS index_name, ix.index_id, ix.type_desc
+,user_seeks + user_scans + user_lookups AS [total_reads]
+, user_updates AS writes
+, user_seeks, user_scans, user_lookups
+            , CAST(CASE WHEN user_updates > 0
+                    THEN ( user_seeks + user_scans + user_lookups )  / (1.0 * user_updates)
+                ELSE 0 END AS MONEY) AS [reads_per_write]
+            ,  N'Reads: ' +
+                REPLACE(CONVERT(NVARCHAR(30),CAST((user_seeks + user_scans + user_lookups) AS MONEY), 1), N'.00', N'')
+                + CASE WHEN user_seeks + user_scans + user_lookups > 0 THEN
+                    N' ('
+                        + RTRIM(
+                        CASE WHEN user_seeks > 0 THEN REPLACE(CONVERT(NVARCHAR(30),CAST((user_seeks) AS MONEY), 1), N'.00', N'') + N' seek ' ELSE N'' END
+                        + CASE WHEN user_scans > 0 THEN REPLACE(CONVERT(NVARCHAR(30),CAST((user_scans) AS MONEY), 1), N'.00', N'') + N' scan '  ELSE N'' END
+                        + CASE WHEN user_lookups > 0 THEN  REPLACE(CONVERT(NVARCHAR(30),CAST((user_lookups) AS MONEY), 1), N'.00', N'') + N' lookup' ELSE N'' END
+                        )
+                        + N') '
+                    ELSE N' ' END
+                + N'Writes:' +
+                REPLACE(CONVERT(NVARCHAR(30),CAST(user_updates AS MONEY), 1), N'.00', N'') AS [index_usage_summary]
+FROM sys.dm_db_index_usage_stats us
+INNER JOIN sys.databases db ON us.database_id = db.database_id
+INNER JOIN sys.objects o ON us.object_id = o.object_id
+INNER JOIN sys.indexes ix ON us.object_id = ix.object_id AND us.index_id = ix.index_id
+WHERE us.database_id = DB_ID()
+ORDER BY total_reads DESC OPTION (RECOMPILE);
+
+ 

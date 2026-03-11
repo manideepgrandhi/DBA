@@ -1,0 +1,40 @@
+/** Query to gather blocking data from the monitor_WhoIsActive table **/
+
+IF OBJECT_ID('tempdb..#bq') IS NOT NULL
+DROP TABLE #bq
+IF OBJECT_ID('tempdb..#bsid') IS NOT NULL
+DROP TABLE #bsid
+
+
+DECLARE @startdate datetime, @enddate datetime
+
+-- set the date and time to begin looking
+set @startdate='2021-07-07 23:00:00.000'
+
+-- set the date and time to query through
+set @enddate='2021-07-08 12:30:00.000'
+
+select 
+[dd hh:mm:ss.mss] AS duration, session_id  , login_name  , database_name, host_name, CONVERT(NVARCHAR(max),sql_text) AS sql_text , blocking_session_id , CONVERT(NVARCHAR(max),sql_command) AS sql_command, collection_time
+INTO #bq FROM CODBALogs.dbo.monitor_WhoIsActive WHERE collection_time >=@startdate and collection_time <=@enddate AND blocking_session_id is not null;
+
+select distinct blocking_session_id into #bsid from #bq
+
+
+insert into #bq 
+select [dd hh:mm:ss.mss] AS duration, session_id  , login_name , database_name, host_name , CONVERT(NVARCHAR(max),sql_text) AS sql_text , blocking_session_id , CONVERT(NVARCHAR(max),sql_command) AS sql_command, collection_time
+ FROM CODBALogs.dbo.monitor_WhoIsActive WHERE collection_time >=@startdate and collection_time <=@enddate AND session_id in (select blocking_session_id from #bsid)
+
+select 
+   duration 
+,  session_id
+, blocking_session_id
+, login_name 
+, host_name
+, database_name
+, REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(sql_text, CHAR(13), ''), CHAR(10), ''),char(9), ''), '<?query --', ''), '00?>', '') + '|' as sql_text
+, REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(sql_command, CHAR(13), ''), CHAR(10), ''),char(9), ''), '<?query --', ''), '00?>', '')  +'|' as sql_command
+, collection_time  
+ 
+ from #bq order by collection_time;
+

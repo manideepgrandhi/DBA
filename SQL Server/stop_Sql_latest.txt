@@ -1,0 +1,278 @@
+
+<#
+.DESCRIPTION
+    Stop all SQL instances
+
+.NOTES
+    Cmd Name   : Stop-AllSQLInstances
+    Author     : Daniel Puckett, Rafael Rodrigues
+    Requires   : PowerShell
+    Version    : 3.3
+#>
+
+[string]$BypassReplicationCheck = 'true' #SSM doc should only allow true/false (as string)
+if (-not( ($BypassReplicationCheck -eq 'true') -or ($BypassReplicationCheck -eq 'false') ) ) #check done this way for PS backward compatibility
+{
+    throw [System.Exception] "Invalid parameter option for BypassReplicationCheck"
+}
+
+try
+{
+    $isLoaded = & C:\Infra\InfraScripts\Modules\ImportSQLPS.ps1
+}
+catch
+{
+    throw [System.Exception] "Could not load SQLPS Module"
+}
+if ($isLoaded -eq $False)
+{
+    throw [System.Exception] "Could not load SQLPS Module"
+}
+
+try
+{
+    if(!(Test-Path -Path "C:\programdata\infor-automation"))
+    {
+        New-Item -Path "C:\programdata\infor-automation" -ItemType "Directory"
+    }
+    $OutFile = "C:\programdata\infor-automation\SQLPreviousState"
+    $PreviousStates = @()
+    $Status = $null
+
+    Write-Output "BypassReplicationCheck = $($BypassReplicationCheck)"
+
+    if(Test-Path -Path $OutFile)
+    {
+        $Status = (Get-Content $OutFile)
+        $PreviousStates = $Status | foreach{($_ -split ':')}
+        Write-Output "Performing duplicate run"
+    }
+    else
+    {
+        New-Item -Path $OutFile -ItemType "File" -Force
+    }
+
+    # Build collection of all SQL Server Instances
+    $Instances = (Get-WmiObject win32_Service -Computer $env:COMPUTERNAME | Where-Object {$_.DisplayName -match "SQL Server \("})
+
+    # Check for Running Backups
+    foreach($Instance in $Instances)
+    {
+        try
+        {
+            $QueryCheckBackups = "
+                SELECT r.command
+                      ,DB_NAME(r.database_id) as database_name
+                      ,r.session_id
+                      ,r.blocking_session_id
+                      ,r.lock_timeout
+                      ,r.start_time
+                      ,r.percent_complete
+                FROM sys.dm_exec_requests as r
+                WHERE r.command in ('BACKUP DATABASE', 'BACKUP LOG')      
+            "
+
+            $QuerySendEmail = "
+                DECLARE @tableHTML  NVARCHAR(MAX);  
+                DECLARE @recipients NVARCHAR(MAX);
+                
+                SELECT @recipients = email_address FROM msdb.dbo.sysoperators WITH(NOLOCK) where name = 'DBA Group'
+                
+                SELECT r.command AS 'Command'
+                    ,DB_NAME(r.database_id) AS 'DatabaseName'
+                    ,r.session_id AS 'SessionId'
+                    ,r.start_time AS 'StartTime'
+                    ,s.text AS [query]
+                INTO #Backups
+                FROM sys.dm_exec_requests as r
+                CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) s
+                WHERE r.command in ('BACKUP DATABASE', 'BACKUP LOG') 
+                    
+                SET @tableHTML =  
+                    N'<H1 style=""font-size:20px;color:blue"">Cancelled Backups</H1>' +  
+                    N'<p>The following backups were cancelled because of Monthly Maintenance.</p>' +  
+                    N'<table border=""1"" table border=""1"" cellpadding=""5"">' +  
+                    N'<tr><th>Command</th><th>DatabaseName</th><th>SessionId</th><th>Query</th><th>StartTime</th></tr>' +  
+                    CAST((SELECT td=Command
+                                ,''
+                                ,td=DatabaseName
+                                ,''
+                                ,td=SessionId
+                                ,''
+                                ,td=Query
+                                ,''
+                                ,td=StartTime
+                        FROM #Backups
+                        FOR XML PATH('tr'), TYPE) AS NVARCHAR(MAX) ) +
+                    N'</table>' ;
+                                
+                EXEC msdb.dbo.sp_send_dbmail
+                    @profile_name = 'SQLMail Profile',
+                    @recipients = @recipients,
+                    @subject = 'ST Monthly Maintenance Cancelled Backups',
+                    @importance = 'High',
+                    @body = @tableHTML,
+                    @body_format = 'HTML';
+                
+                DROP TABLE #Backups
+            "
+
+            # Get server name; Handles named instances and unnamed instances
+            $InstanceName = $Instance.Name.Split("$")[1]
+            $ServerInstance = $env:COMPUTERNAME
+            if($Instance.Name -ne "MSSQLSERVER")
+            {
+                $ServerInstance += "\" + $InstanceName
+            }
+
+            $Backups = Invoke-Sqlcmd -Query $QueryCheckBackups -ServerInstance $ServerInstance -Database "master" -QueryTimeout 300 -ErrorAction Stop
+
+            if ($Backups)
+            {
+                Write-Output "Detected Running Backups on $($ServerInstance). Sending Email Notification."
+
+                Invoke-Sqlcmd -Query $QuerySendEmail -ServerInstance $ServerInstance -Database "master" -QueryTimeout 300 -ErrorAction Stop
+            }
+            else
+            {
+                Write-Output "No Running Backups Detected on $($ServerInstance)"
+            }
+        }
+        catch
+        {
+            Write-Output "Failed to check for running backups on $($Instance). Error: $_"
+        }
+    }
+
+    #by default repl check will be done
+    #only automation with controlled stops/starts such as Monthly Maintenance, Windows Upgrade, SqlPatching should be using the flag to skip the replication check
+    if ($BypassReplicationCheck -eq 'false')
+    {
+        # To hold subscribers if replication exists
+        $SubscriberList = @()
+
+        foreach($Instance in $Instances)
+        {
+            if($Instance.State -eq "Running")
+            {
+                try
+                {
+                    # Set SQL server identifier for named/non-named instances
+                    $ServerInstance = $env:COMPUTERNAME
+                    if($Instance.Name -ne "MSSQLSERVER")
+                    {
+                        $ServerInstance += "\" + $Instance.Name.Split("$")[1]
+                    }
+
+                    # Is distributor/subscriber? If so, wait for publisher to shutdown properly. Kill script if not shutdown by end of wait.
+                    $Query = 'SELECT name FROM sys.databases WHERE is_distributor = 1'
+                    $Distributor = Invoke-Sqlcmd -Query $Query -ServerInstance $ServerInstance -QueryTimeout 300 -ErrorAction Stop
+                    if ($Distributor)
+                    {
+
+                        $Data = Invoke-Sqlcmd -query 'Exec sp_replmonitorhelppublication @publisher = NULL' -ServerInstance $ServerInstance -database $Distributor.name -QueryTimeout 300 -ErrorAction Stop
+                        $PublisherServers = $Data.publisher | sort -Unique
+                        $Query = 'select serverproperty(''MachineName'')'
+                        foreach($PublisherServer in $PublisherServers)
+                        {
+                            $Wait = 0
+                            do
+                            {
+                                if($Wait -ne 0)
+                                {
+                                    Start-Sleep -Seconds 10
+                                }
+                                $Wait += 1
+                                try
+                                {
+                                    $Online = Invoke-Sqlcmd -query $Query -ServerInstance $PublisherServer -QueryTimeout 300 -Erroraction SilentlyContinue
+                                }
+                                catch
+                                {
+                                    $Online = $null
+                                }
+                            } while($Online -and $Wait -le 20)
+
+                            # Wait reached max, publisher still online, throw out
+                            if($Online)
+                            {
+                                Throw [System.Exception] "This instance is a replica, and the primary is still online. The primary ($PublisherServer) must be shutdown prior to this operation completing successfully."
+                            }
+                        }
+                    }
+
+
+                    # Is publisher? If so, record subscriber list to prepare for proper startup sequence.
+                    $Query = "EXEC sp_helpsubscriberinfo"
+                    $SubscriberQueryOutput = Invoke-Sqlcmd -Query $Query -ServerInstance $ServerInstance -QueryTimeout 300 -ErrorAction Stop
+
+                    if($SubscriberQueryOutput)
+                    {
+                        foreach($Subscriber in $SubscriberQueryOutput.subscriber)
+                        {
+                            $SubscriberList += $Subscriber
+                        }
+                    }
+                }
+                catch
+                {
+                    Throw [System.Exception] "Error attempting to determine replication existence and status. SQL services have not been stopped. Please seek help from a DBA. $_"
+                }
+            }
+        }
+
+        $Subscribers = ($SubscriberList | Sort-Object -Unique) -Join ","
+    }
+    else
+    {
+        $Subscribers = $null
+    }
+    foreach($Instance in $Instances)
+    {
+        # Get server name and agent name; Handles named instances and unnamed instances
+        $InstanceName = $Instance.Name.Split("$")[1]
+        $ServerInstance = $env:COMPUTERNAME
+        $AgentName = "SQLSERVERAGENT"
+        if($Instance.Name -ne "MSSQLSERVER")
+        {
+            $ServerInstance += "\" + $InstanceName
+            $AgentName = "SQLAgent`$$InstanceName"
+        }
+
+        #stop SQL Server agent service first to prevent blocking of the SHUTDOWN command
+        Stop-Service -Name $AgentName -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+        Start-Sleep -Seconds 5
+
+        # If SQL server instance is running, shut it down via SQL
+        if($Instance.State -eq "Running")
+        {
+            Write-Output "Stopping Service $($Instance.Name) with Force Option."
+            Stop-Service -Name $Instance.Name -Force
+        }
+        else 
+        {
+            Write-Output "Service $($Instance.Name) in $($Instance.State) state. No Action Taken."
+        }
+
+        # Disable SQL server instance and associated agent
+        if($Instance.StartMode -ne "Disabled")
+        {
+            Set-Service -Name $Instance.Name -StartupType Disabled
+            Set-Service -Name $AgentName -StartupType Disabled
+        }
+
+        # Write shared Agent/Server state to file if not previously written from duplicate runs
+        $StateLine = $Instance.Name + ":" + $AgentName + ":" + $Instance.StartMode + ":" + $Instance.State
+        if(!$Status -or $Instance.Name -notin $PreviousStates) { $StateLine | Out-File -FilePath $OutFile -Append}
+    }
+
+    # Write replication info to file if this is a replication environment
+    if($Subscribers -and (!$Status -or $Subscribers -notin $PreviousStates)) {"Subscribers:$Subscribers" | Out-File -FilePath $OutFile -Append}
+}
+catch
+{
+    Write-Output "Stop of some or all SQL instances failed. Stop error: $_"
+    Exit 1
+}
+Write-Output "Successfully shutdown all instances and disabled startup. Previous state: "
+Write-Output (Get-Content $OutFile)

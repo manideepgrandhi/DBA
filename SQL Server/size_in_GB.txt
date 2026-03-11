@@ -1,0 +1,28 @@
+SELECT d.NAME
+    ,ROUND(SUM(CAST(mf.size AS bigint)) * 8 / 1024, 0) Size_MBs
+    ,(SUM(CAST(mf.size AS bigint)) * 8 / 1024) / 1024 AS Size_GBs
+FROM sys.master_files mf
+INNER JOIN sys.databases d ON d.database_id = mf.database_id
+WHERE d.database_id > 4 -- Skip system databases
+GROUP BY d.NAME
+ORDER BY d.NAME
+
+
+ java -jar C:\LawsonTotalCare\SQLScripts\Replication\fixpublication.jar LSGENDB_CreatePublication.sql FIXED-LSGENDB_CreatePublication.sql
+
+java -jar C:\LawsonTotalCare\SQLscripts\replication\MSCMPROD\FixPublication.jar  MSCMPROD-CreatePublication.sql fixed-MSCMPROD-CreatePublication.sql
+
+
+java -jar FixPublication.jar  LMGHRDB_CreatePublication.sql FIXED-LMGHRDB_CreatePublication.sql
+
+Secure Link :https://seclink-am.infor.com/rss-servlet/remotesupport/viewsessionv2.action?siteId=1931&host=&mappingEnabled=
+IXS:14906593
+
+PROD-INFORBCDB01
+REPLICATION-INFORBCREP01
+
+Backup location on INFORBCDB01: G:\Backups\LMGHRDB
+
+
+1)Restore FULL backup with no recovery on replication server.
+2)Take DIFFERENTIAL from PROD and restore with RECOVERY on replication server..

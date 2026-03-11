@@ -1,0 +1,11 @@
+SELECT  SCHEMA_NAME(so.schema_id) AS SchemaName
+               ,SUM(ps.reserved_page_count) * 8.0 / 1024 AS SizeInMB
+        FROM    sys.dm_db_partition_stats ps
+        JOIN    sys.indexes i
+          ON    i.object_id                                     =           ps.object_id
+         AND    i.index_id                                      =           ps.index_id
+		JOIN	sys.objects	so
+		  ON	i.object_id										=			so.object_id
+       WHERE    so.type											=			'U'
+    GROUP BY	so.schema_id
+    ORDER BY	OBJECT_SCHEMA_NAME(so.schema_id), SizeInMB DESC 

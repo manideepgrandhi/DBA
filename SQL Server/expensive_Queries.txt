@@ -1,0 +1,35 @@
+select sqlserver_start_time as last_instance_start from sys.dm_os_sys_info; select top 10
+
+substring (st.text,(qs.statement_start_offset/2)+1, ((case qs.statement_end_offset
+
+when -1 then datalength (st.text)
+
+else qs.statement_end_offset
+
+end - qs.statement_start_offset)/ 2)+ 1) statement_text
+
+, (qs.total_logical_reads+qs.total_logical_writes) total_logical_io
+
+, qs.total_physical_reads
+
+, (qs.total_physical_reads/qs.execution_count) as avg_phys_reads
+
+, qs.total_logical_reads
+
+, (qs.total_logical_reads/qs.execution_count) as avg_logical_reads
+
+, qs.total_logical_writes
+
+, (qs.total_logical_writes/qs.execution_count) avg_logical_writes
+
+, qs.execution_count
+
+, qs.total_elapsed_time
+
+, (qs.total_elapsed_time / qs.execution_count) as avg_elapsed_time
+
+from sys.dm_exec_query_stats qs
+
+cross apply sys.dm_exec_sql_text (qs.sql_handle) st order by total_logical_io desc;
+
+-- the end of the script

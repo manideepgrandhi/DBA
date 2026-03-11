@@ -1,0 +1,5 @@
+#https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+
+import-module awspowershell
+ aws configure set default.region ap-southeast-2
+ aws s3 cp s3://infor-filetransfer-ap-southeast-2/205962/Pthtest.rar G:\backup\Pthtest.rar

@@ -1,0 +1,290 @@
+Select collection_time, login_time, [dd hh:mm:ss.mss],session_id, database_name, login_name,CPU,reads, CONVERT(DECIMAL(18,2),replace(reads, ',', '')) * 8                                          as [KBs read] 
+       , cast(round((CONVERT(DECIMAL(18,2),replace(reads   , ',', '')) * 8)/1024, 2) as float)       as [MBs read] 
+       , cast(round(((CONVERT(DECIMAL(18,2),replace(reads  , ',', '')) * 8)/1024)/1024, 2) as float) as [GBs read] ,writes,physical_reads,sql_text,locks,additional_info, blocking_session_id,   context_switches, status, 
+
+replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, 
+replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command,
+
+ wait_info,tasks,
+query_plan, host_name, program_name
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock)
+Where collection_time between '2022-07-20 11:08:32.833' and '2022-07-20 11:08:32.833'
+
+--AND blocking_session_id is not null
+--and cast (sql_text as varchar(max)) not like '%NOLOCK%'
+--and cast (additional_info as varchar(max))  not like '%ReadUncomitted%'
+--and session_id  not in (64,68,63)
+--and session_id  not in (69)
+--and database_name='M3FDBGRD'
+--and host_name  in('CHSRV28')
+--and login_name  in('ECRAFT')
+--and login_time ='2022-07-20 11:08:32.833'
+Order by collection_time asc
+
+select collection_time,count(blocking_session_id) as blocking from CODBALogs.dbo.monitor_WhoIsActive(NOLOCK)
+WHERE blocking_session_id > 0
+GROUP BY collection_time
+ORDER BY collection_time DESC
+
+--select collection_time,count(*) as RunningQueries from CODBALogs.dbo.monitor_WhoIsActive(NOLOCK)
+--GROUP BY collection_time
+--ORDER BY 1 DESC
+
+
+
+
+Select collection_time, login_time, [dd hh:mm:ss.mss], database_name, sql_text,locks,additional_info,session_id, blocking_session_id, CPU, tasks, context_switches, status, replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command, wait_info,  
+query_plan, host_name, program_name
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-09-29 22:00:46.640' and getdate()
+AND blocking_session_id is not null
+--and cast (sql_text as varchar(max))  like '%ALTER INDEX%'
+--and session_id=1321 
+and database_name='M3FDBGRD'
+Order by collection_time--, a.login_time-- desc
+
+
+
+Select collection_time, login_time, [dd hh:mm:ss.mss],session_id, database_name, login_name,additional_info,N.C.value('transaction_isolation_level[1]', 'varchar(100)') IsolationLevel,
+CPU,reads,writes,physical_reads,locks,
+ blocking_session_id,   context_switches, status, 
+replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, 
+replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command,
+ wait_info,tasks,
+ --query_plan, 
+ host_name, program_name
+
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock)
+CROSS APPLY additional_info.nodes('//additional_info') N(C)
+Where collection_time between '2021-06-01 12:00:46.640' and '2021-06-23 19:00:46.640'
+--AND blocking_session_id is not null
+and cast (sql_text as varchar(max)) not like '%NOLOCK%'
+ and cast (additional_info as varchar(max))  not like '%ReadUncomitted%'
+Order by [dd hh:mm:ss.mss] desc
+
+
+select collection_time,  [dd hh:mm:ss.mss], database_name, session_id,status,wait_info,sql_text,query_plan,CPU from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-11-10 13:10:46.640' and '2020-11-10 14:00:13.950'
+and login_name='NULIMS'
+order by collection_time asc
+
+
+
+Select collection_time,  [dd hh:mm:ss.mss], database_name, session_id,status,login_name,sql_text,locks,additional_info, blocking_session_id, CPU, tasks, context_switches, status, replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command, wait_info,  
+query_plan, host_name, program_name
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-11-12 02:00:46.640' and '2020-11-03 03:30:13.950'
+--and login_name in('INFORBC\sqlagent_svc','INFORBC\sqlprod_svc')
+--AND session_id =579
+--and cast (sql_text as varchar(max))  like '%ALTER INDEX%'
+----and database_name='M3FDBGRD'
+Order by collection_time
+--, a.login_time-- desc
+
+
+
+Select collection_time,  [dd hh:mm:ss.mss], database_name, session_id,status,login_name,additional_info, blocking_session_id, CPU, tasks, context_switches, status, replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command, wait_info,  
+query_plan, host_name, program_name
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-11-30 00:00:00.000' and '2020-11-30 23:30:00.000'
+--and login_name in('INFORBC\sqlagent_svc','INFORBC\sqlprod_svc')
+--AND session_id =579
+AND cast (sql_text as varchar(max))  like '%SELECT TOP(1000) BLAGNB, BLPONR%'
+----and database_name='M3FDBGRD'
+Order by  collection_time desc
+
+--[dd hh:mm:ss.mss] asc
+--, a.login_time-- desc
+
+
+
+Select  database_name,host_name, program_name,count(login_name) as login_count
+
+--session_id,status,login_name,additional_info, blocking_session_id, CPU, tasks, context_switches, status, replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command, wait_info,  
+--query_plan,
+
+ 
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-11-01 00:00:00.000' and '2020-11-30 23:30:00.000'
+--and login_name in('INFORBC\sqlagent_svc','INFORBC\sqlprod_svc')
+--AND session_id =818
+--AND cast (sql_text as varchar(max))  like '%SELECT TOP(1000) BLAGNB, BLPONR%'
+----and database_name='M3FDBGRD'
+group by database_name,host_name, program_name
+Order by login_count desc
+
+
+
+/****** Script for SelectTopNRows command from SSMS  ******/
+SELECT TOP (1000) [id]
+      ,[session_id]
+      ,[start_time]
+      ,[status]
+      ,[loginname]
+      ,[hostname]
+      ,[waittime]
+      ,[sql_text]
+      ,[timekilled]
+  FROM [CODBALogs].[dbo].[AG_Blocking_Details]
+  order by timekilled desc
+
+
+select top (3000)* from monitor_WhoIsActive
+WHERE collection_time>='2020-10-06 00:00' 
+AND collection_time <='2020-10-13 23:00' and blocking_session_id is not null and login_name ='MDBUSR'
+ order by collection_time desc
+
+DECLARE @start DATETIME, @end DATETIME
+
+SET @start='2020-07-13 00:00:11.570'
+
+SET @end='2020-07-13 05:59:11.570'
+
+/****** Script for SelectTopNRows command from SSMS  ******/
+SELECT [dd hh:mm:ss.mss]
+      ,[session_id]
+      ,[sql_text]
+      ,[sql_command]
+      ,[login_name]
+      ,[wait_info]
+      ,[tasks]
+      ,[CPU]
+      ,[tempdb_allocations]
+      ,[tempdb_current]
+      ,[blocking_session_id]
+      ,[reads]
+      ,[writes]
+      ,[context_switches]
+      ,[physical_io]
+      ,[physical_reads]
+      ,[query_plan]
+      ,[locks]
+      ,[used_memory]
+      ,[status]
+      ,[open_tran_count]
+      ,[percent_complete]
+      ,[host_name]
+      ,[database_name]
+      ,[program_name]
+      ,[additional_info]
+      ,[start_time]
+      ,[login_time]
+      ,[request_id]
+      ,[collection_time]
+  FROM [CODBA].[dbo].[monitor_WhoIsActive]
+
+  where collection_time  between @start and @end
+  --and [database_name]='inforlndb'
+   and status<>'sleeping'
+
+
+
+
+
+
+Select collection_time, login_time, [dd hh:mm:ss.mss],session_id, database_name, login_name,additional_info,N.C.value('transaction_isolation_level[1]', 'varchar(100)') IsolationLevel,
+--CPU,reads,writes,physical_reads,locks,
+-- blocking_session_id,   context_switches, status, 
+replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, 
+replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command,
+ --wait_info,tasks,
+ --query_plan, 
+ host_name, program_name
+
+----XML parsing---
+
+
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock)
+CROSS APPLY additional_info.nodes('//additional_info') N(C)
+
+---XML Parsing-----------
+
+Where collection_time between '2021-06-20 00:00:46.640' and '2021-07-05 19:00:46.640'
+--AND blocking_session_id is not null
+and cast (sql_text as varchar(max)) not like '%NOLOCK%'
+ and cast (additional_info as varchar(max))  not like '%ReadUncomitted%'
+ and login_name  not in('INFORBCREP01\SQLServices','distributor_admin','INFORBC\inforadm','NT Service\MSSQLSERVER','NT AUTHORITY\SYSTEM','sa','NT SERVICE\SQLSERVERAGENT','INFORBCM3DBW1\dbadmin3','INFORBCM3DBW1\SQLServices')
+ and database_name='M3FDBGRD'
+Order by [dd hh:mm:ss.mss] desc
+
+
+
+--Arjo Nolock 
+
+
+
+Select collection_time, login_time, [dd hh:mm:ss.mss],session_id, database_name, login_name,additional_info,N.C.value('transaction_isolation_level[1]', 'varchar(100)') IsolationLevel,
+--CPU,reads,writes,physical_reads,locks,
+ --blocking_session_id,   context_switches, status, 
+replace(replace(cast(sql_text as varchar(max)), '<?query --',' '), '--?>','') as sql_text, 
+--replace(replace(cast(sql_command as varchar(max)), '<?query --',' '), '--?>','') as sql_command,
+ --wait_info,tasks,
+ --query_plan, 
+ host_name, program_name
+
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock)
+CROSS APPLY additional_info.nodes('//additional_info') N(C)
+Where collection_time between '2021-09-09 00:00:46.640' and '2021-09-23 23:59:13.950'
+--AND blocking_session_id is not null
+and cast (sql_text as varchar(max)) not like '%NOLOCK%'
+ and cast (additional_info as varchar(max))  not like '%ReadUncomitted%'
+ and login_name not in('NT SERVICE\SQLSERVERAGENT','NT AUTHORITY\SYSTEM','NT Service\MSSQLSERVER','INFORBCM3DBW1\SQLServices','INFORBCREP01\SQLServices','distributor_admin','sa')
+Order by collection_time desc
+
+
+
+
+SELECT [dd hh:mm:ss.mss]
+       , [session_id]
+       , substring(replace(CAST(sql_text AS  varchar(max)), CHAR(1), ''''),13,LEN(replace(CAST(sql_text AS  varchar(max)), CHAR(1), ''''))) AS [sql_text]
+       , substring(replace(CAST(sql_command AS  varchar(max)), CHAR(1), ''''),13,LEN(replace(CAST(sql_command AS  varchar(max)), CHAR(1), ''''))) AS [sql_command]
+       , [login_name] 
+       , [wait_info]
+       , [tasks]
+       , [CPU]
+       , [CPU_delta]
+       , [tempdb_allocations]
+       , [tempdb_current]
+       , [tempdb_allocations_delta]
+       , [tempdb_current_delta]
+       , [blocking_session_id]
+       , [reads]
+       , CONVERT(DECIMAL(18,2),replace(reads, ',', '')) * 8                                          as [KBs read] 
+       , cast(round((CONVERT(DECIMAL(18,2),replace(reads   , ',', '')) * 8)/1024, 2) as float)       as [MBs read] 
+       , cast(round(((CONVERT(DECIMAL(18,2),replace(reads  , ',', '')) * 8)/1024)/1024, 2) as float) as [GBs read] 
+       , cast(round(((CONVERT(DECIMAL(18,2),replace(MF.size, ',', '')) * 8)/1024), 2) as float)      as [DB Size MB] 
+       , cast(round(((CONVERT(DECIMAL(18,2),replace(MF.size, ',', '')) * 8)/1024)/1024, 2) as float) as [DB Size GB] 
+       , [reads_delta]
+       , [writes]
+       , [writes_delta]
+       , [context_switches]
+       , [context_switches_delta]
+       , [physical_io]
+       , [physical_reads]
+       , [physical_io_delta]
+       , [physical_reads_delta]
+       , [query_plan]
+       , CAST([locks] AS  varchar(max)) AS [locks]
+                   , [used_memory]
+       , [used_memory_delta]
+       , [status]
+       , [open_tran_count]
+       , [percent_complete]
+       , [host_name]
+       , [database_name]
+       , [program_name]
+       , CAST([additional_info] AS  varchar(max)) AS [additional_info]
+       , [start_time]
+       , [login_time]
+       , [request_id]
+       , [collection_time]
+    --   , @Adjusted_Collection_time as Adjusted_Collection_time
+    FROM CODBALogs.dbo.monitor_WhoIsActive as WIA with (nolock)
+       , master.sys.master_files           as MF  with (nolock) 
+  Where collection_time between '2022-03-31 00:00:46.640' and '2022-03-31  19:00:46.640'
+  and database_name='InforIONBVRuntime'
+     AND db_id(WIA.database_name) = MF.database_id 
+     AND MF.type = 0 -- Look at MDF Only 
+     AND MF.file_id = 1 
+                -- ORDER BY cast(round(((CONVERT(DECIMAL(18,2),replace(reads  , ',', '')) * 8)/1024)/1024, 2) as float) DESC
+                ORDER BY reads DESC

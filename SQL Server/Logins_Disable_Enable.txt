@@ -1,0 +1,22 @@
+DECLARE AllLogins CURSOR FOR
+select name from syslogins
+where (name not like '##%' AND name not like 'NT %' AND name not like '%admin%' and name not like '%sql%'
+AND name not like 'sa%' AND name not like '%Administrator%'  AND name not like '%infor%')
+
+ 
+OPEN AllLogins
+ 
+DECLARE @DBLoginVar NVARCHAR(128),@Statement NVARCHAR(max)
+ 
+FETCH NEXT FROM AllLogins INTO @DBLoginVar
+WHILE (@@FETCH_STATUS = 0)
+BEGIN
+SET @Statement = 'ALTER LOGIN [' + @DBLoginVar + '] DISABLE;'
+--SET @Statement = 'ALTER LOGIN [' + @DBLoginVar + '] ENABLE;'
+ 
+PRINT  @Statement
+FETCH NEXT FROM AllLogins INTO @DBLoginVar
+END
+ 
+CLOSE AllLogins
+DEALLOCATE AllLogins

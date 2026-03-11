@@ -1,0 +1,42 @@
+-- check_yoself.sql
+-- 
+-- Find out information about an ST instance to help with work in the AWS Console
+declare @instance_type table(instance_type varchar(128))
+declare @instance_id table(instance_id varchar(128))
+declare @az table(az varchar(128))
+declare @mac_address table(mac_address varchar(128))
+declare @account table(account varchar(128))
+declare @account_cmd varchar(128)
+declare @mac_addy varchar(64)
+
+
+insert into @instance_id 
+	exec master..xp_cmdshell 'powershell.exe Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/instance-id'
+
+insert into @instance_type 
+	exec master..xp_cmdshell 'powershell.exe Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/instance-type'
+
+insert into @az
+	exec master..xp_cmdshell 'powershell.exe Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/placement/availability-zone'
+
+insert into @mac_address
+	exec master..xp_cmdshell 'powershell.exe Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/network/interfaces/macs'
+
+set @mac_addy = (select top 1 mac_address from @mac_address where mac_address is not null)
+
+set @account_cmd = 'powershell.exe Invoke-RestMethod -uri http://169.254.169.254/latest/meta-data/network/interfaces/macs/' + @mac_addy + 'owner-id'
+
+insert into @account
+	exec master..xp_cmdshell @account_cmd
+
+print @mac_addy
+print @account_cmd
+
+
+select 'Instance ID:', instance_id from @instance_id where instance_id is not null
+union
+select 'Instance Type:', instance_type from @instance_type where instance_type is not null
+union
+select  'AZ:', az from @az where az is not null
+union
+select 'Account:', account from @account where account is not null

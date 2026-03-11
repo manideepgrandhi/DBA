@@ -1,0 +1,166 @@
+SELECT DISTINCT
+volume_mount_point [Disk Mount Point],
+file_system_type [File System Type],
+logical_volume_name as [Logical Drive Name],
+CONVERT(DECIMAL(18,2),total_bytes/1073741824.0) AS [Total Size in GB], ---1GB = 1073741824 bytes
+CONVERT(DECIMAL(18,2),available_bytes/1073741824.0) AS [Available Size in GB],
+CAST(CAST(available_bytes AS FLOAT)/ CAST(total_bytes AS FLOAT) AS DECIMAL(18,2)) * 100 AS [Space Free %]
+FROM sys.master_files
+CROSS APPLY sys.dm_os_volume_stats(database_id, file_id)
+
+select
+
+ [FileSizeMB] =
+
+ convert(numeric(10,2),round(a.size/128.,2)),
+
+ [UsedSpaceMB] =
+
+convert(numeric(10,2),round(fileproperty( a.name,'SpaceUsed')/128.,2)) ,
+
+ [UnusedSpaceMB] =
+
+convert(numeric(10,2),round((a.size-fileproperty( a.name,'SpaceUsed'))/128.,2)) ,
+
+[DBFileName] = a.name
+
+from
+
+ sysfiles a
+ order by DBFileName
+
+select
+[FileSizeMB] =
+ convert(numeric(10,2),round(a.size/128.,2)),
+ [UsedSpaceMB] =
+convert(numeric(10,2),round(fileproperty( a.name,'SpaceUsed')/128.,2)) ,
+ [UnusedSpaceMB] =
+convert(numeric(10,2),round((a.size-fileproperty( a.name,'SpaceUsed'))/128.,2)) ,
+[DBFileName] = a.name
+from
+ sysfiles a
+ order by DBFileName 
+
+
+
+
+create table #DBInfo (   
+DatabaseName VARCHAR(100),  
+FileSizeMB INT,  
+LogicalFileName sysname,  
+PhysicalFileName NVARCHAR(520),
+DiskDrive CHAR(2), 
+Status sysname,  
+RecoveryMode sysname,  
+FreeSpaceMB INT,  
+FreeSpacePct VARCHAR(7)  
+)  
+DECLARE @command VARCHAR(5000)  
+SELECT @command = 'Use [' + '?' + '] SELECT  
+' + '''' + '?' + '''' + ' AS DatabaseName,  
+CAST(sysfiles.size/128.0 AS int) AS FileSize,  
+sysfiles.name AS LogicalFileName, sysfiles.filename AS PhysicalFileName,  substring(sysfiles.filename,1,2) as DiskDrive,
+CONVERT(sysname,DatabasePropertyEx(''?'',''Status'')) AS Status,  
+CONVERT(sysname,DatabasePropertyEx(''?'',''Recovery'')) AS RecoveryMode,CAST(sysfiles.size/128.0 - CAST(FILEPROPERTY(sysfiles.name, ' + '''' +  
+       'SpaceUsed' + '''' + ' ) AS int)/128.0 AS int) AS FreeSpaceMB,  
+CAST(100 * (CAST (((sysfiles.size/128.0 -CAST(FILEPROPERTY(sysfiles.name,  
+' + '''' + 'SpaceUsed' + '''' + ' ) AS int)/128.0)/(sysfiles.size/128.0))  
+AS decimal(4,2))) AS varchar(8)) + ' + '''' + '%' + '''' + ' AS FreeSpacePct FROM dbo.sysfiles'  
+INSERT INTO #DBInfo  
+   (  
+   DatabaseName,  
+   FileSizeMB,  
+   LogicalFileName,  
+   PhysicalFileName,
+   DiskDrive,  
+   Status,    
+   RecoveryMode,  
+   FreeSpaceMB,  
+   FreeSpacePct)  
+EXEC sp_MSForEachDB @command  
+SELECT  
+     
+   DatabaseName,     
+   LogicalFileName,  
+   PhysicalFileName,
+   DiskDrive,   
+   Status,     
+   RecoveryMode,
+   FileSizeMB,  
+   FreeSpaceMB,  
+   FreeSpacePct  
+FROM #DBInfo  
+ORDER BY  
+   DiskDrive, FileSizeMB desc 
+drop table #DBInfo
+
+
+
+SELECT DB_NAME() AS DBNAME
+    ,NAME AS FILENAME
+    ,SIZE / 128.0 AS CURRENTSIZE_MB
+    ,SIZE / 128.0 - (
+        (SIZE / 128.0) - CAST(FILEPROPERTY(NAME, 
+                'SPACEUSED') AS INT) / 128.0
+        ) AS USEDSPACE_MB
+    ,SIZE / 128.0 - CAST(FILEPROPERTY(NAME, 'SPACEUSED') AS INT) / 
+    128.0 AS FREESPACEMB
+    ,PHYSICAL_NAME
+    ,DATABASEPROPERTYEX(DB_NAME(), 'RECOVERY') AS 
+    RECOVERY_MODEL
+    ,TYPE_DESC
+    ,CASE 
+        WHEN IS_PERCENT_GROWTH = 0
+            THEN LTRIM(STR(GROWTH * 8.0 / 1024, 10, 1)) + ' MB, '
+        ELSE 'BY ' + CAST(GROWTH AS VARCHAR) + ' PERCENT, '
+        END + CASE 
+        WHEN MAX_SIZE = - 1
+            THEN 'UNRESTRICTED GROWTH'
+        ELSE 'RESTRICTED GROWTH TO ' + LTRIM(STR(MAX_SIZE * 8.0 / 
+                    1024, 10, 1)) + ' MB'
+        END AS AUTO_GROW
+FROM sys.master_files
+WHERE DATABASE_ID = DB_ID()
+
+
+go
+
+
+
+SELECT name AS [logical_file_name] ,
+physical_name AS [Physical Name],
+size/128 AS [Total Size in MB],
+size/128.0 - CAST(FILEPROPERTY(name, 'SpaceUsed') AS int)/128.0 AS [Available Space In MB],
+(1.00 - (CAST(FILEPROPERTY(name, 'SpaceUsed') AS int)/128.0 / (size/128.0))) * 100.00 [pct_free_space]
+FROM sys.database_files;
+--SUM of space available used in a database
+SELECT db_name(), file_type = CASE
+WHEN type_desc = 'LOG' THEN 'LOG'
+WHEN type_desc = 'ROWS' THEN 'DATA'
+ELSE 'UNKNOWN'
+END,
+--CONVERT(DECIMAL(18,2), SUM(size/128.0)) [size_in_mb],
+CONVERT(DECIMAL(18,2),SUM(size/128.0/1024.0)) [size_in_gb],
+CONVERT(DECIMAL(18,2),SUM(size/128.0/1024) - SUM(size/128.0/1024 - CAST(FILEPROPERTY(name, 'SpaceUsed') AS int)/128.0/1024)) [used_space_in_gb],
+CONVERT(DECIMAL(18,2),SUM(size/128.0/1024 - CAST(FILEPROPERTY(name, 'SpaceUsed') AS int)/128.0/1024)) [available_space_in_gb]
+FROM sys.database_files
+GROUP BY type_desc
+SELECT
+DB_NAME()DatabaseName,
+f.[file_id],
+f.name AS [File Name] ,
+f.physical_name AS [Physical Name],
+CAST((f.size/128.0) AS DECIMAL(15,2)) AS [File - Total Size In MB],
+CAST(f.size/128.0 - CAST(FILEPROPERTY(f.name, 'SpaceUsed') AS int)/128.0 AS DECIMAL(15,2)) AS [File - Available Space In MB],
+fg.name AS [Filegroup Name],
+volume_mount_point [Disk Mount Point],
+CONVERT(DECIMAL(18,2),total_bytes/1073741824.0) AS [Disk Total Size in GB], ---1GB = 1073741824 bytes
+CONVERT(DECIMAL(18,2),available_bytes/1073741824.0) AS [Disk Available Size in GB],
+CAST(CAST(available_bytes AS FLOAT)/ CAST(total_bytes AS FLOAT) AS DECIMAL(18,2)) * 100 AS [Disk Free Space %],
+f.is_percent_growth,
+file_system_type [File System Type]
+FROM sys.database_files AS f WITH (NOLOCK)
+INNER JOIN sys.master_files m on f.file_id = m.file_id
+LEFT OUTER JOIN sys.data_spaces AS fg WITH (NOLOCK) ON f.data_space_id = fg.data_space_id
+CROSS APPLY sys.dm_os_volume_stats(database_id, m.file_id)
+WHERE m.database_id = DB_ID()

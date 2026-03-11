@@ -1,0 +1,38 @@
+SELECT DB_NAME(eS.database_id) AS the_database
+	, eS.is_user_process
+	, COUNT(eS.session_id) AS total_database_connections
+FROM sys.dm_exec_sessions eS 
+GROUP BY DB_NAME(eS.database_id)
+	, eS.is_user_process
+ORDER BY 1, 2;
+
+SELECT DB_NAME(dbid) AS DBName,
+COUNT(dbid) AS NumberOfConnections,
+loginame
+FROM    sys.sysprocesses
+GROUP BY dbid, loginame
+ORDER BY DB_NAME(dbid)
+
+
+Select  database_name,host_name, program_name,count(login_name) as login_count,login_name
+
+from CODBALogs.dbo.monitor_WhoIsActive a with (nolock) 
+Where collection_time between '2020-11-01 00:00:00.000' and '2020-12-02 23:30:00.000'
+--and login_name in('INFORBC\sqlagent_svc','INFORBC\sqlprod_svc')
+--AND session_id =818
+--AND cast (sql_text as varchar(max))  like '%SELECT TOP(1000) BLAGNB, BLPONR%'
+----and database_name='M3FDBGRD'
+group by program_name,database_name,host_name,login_name
+Order by login_count desc
+
+
+
+
+SELECT ec.client_net_address, es.[program_name], 
+es.[host_name], es.login_name, 
+COUNT(ec.session_id) AS [connection count] 
+FROM sys.dm_exec_sessions AS es  
+INNER JOIN sys.dm_exec_connections AS ec  
+ON es.session_id = ec.session_id   
+GROUP BY ec.client_net_address, es.[program_name], es.[host_name], es.login_name  
+ORDER BY ec.client_net_address, es.[program_name];

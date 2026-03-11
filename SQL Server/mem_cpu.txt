@@ -1,0 +1,46 @@
+SELECT cpu_count AS [Logical CPU Count], scheduler_count, 
+       (socket_count * cores_per_socket) AS [Physical Core Count], 
+       socket_count AS [Socket Count], cores_per_socket, numa_node_count,
+       physical_memory_kb/1024 AS [Physical Memory (MB)], 
+       max_workers_count AS [Max Workers Count], 
+	   affinity_type_desc AS [Affinity Type], 
+       sqlserver_start_time AS [SQL Server Start Time],
+	   DATEDIFF(hour, sqlserver_start_time, GETDATE()) AS [SQL Server Up Time (hrs)],
+	   virtual_machine_type_desc AS [Virtual Machine Type], 
+       softnuma_configuration_desc AS [Soft NUMA Configuration], 
+	   sql_memory_model_desc
+FROM sys.dm_os_sys_info WITH (NOLOCK) OPTION (RECOMPILE);
+
+SELECT physical_memory_in_use_kb/1024 AS [SQL Server Memory Usage (MB)],
+	   locked_page_allocations_kb/1024 AS [SQL Server Locked Pages Allocation (MB)],
+       large_page_allocations_kb/1024 AS [SQL Server Large Pages Allocation (MB)], 
+	   page_fault_count, memory_utilization_percentage, available_commit_limit_kb, 
+	   process_physical_memory_low, process_virtual_memory_low
+FROM sys.dm_os_process_memory WITH (NOLOCK) OPTION (RECOMPILE);
+
+SELECT total_physical_memory_kb/1024 AS [Physical Memory (MB)], 
+       available_physical_memory_kb/1024 AS [Available Memory (MB)], 
+       total_page_file_kb/1024 AS [Total Page File (MB)], 
+	   available_page_file_kb/1024 AS [Available Page File (MB)], 
+	   system_cache_kb/1024 AS [System Cache (MB)],
+       system_memory_state_desc AS [System Memory State]
+FROM sys.dm_os_sys_memory WITH (NOLOCK) OPTION (RECOMPILE);
+
+
+WITH AggregateBufferPoolUsage
+AS
+(SELECT DB_NAME(database_id) AS [Database Name],
+CAST(COUNT(*) * 8/1024.0 AS DECIMAL (10,2))  AS [CachedSize]
+FROM sys.dm_os_buffer_descriptors WITH (NOLOCK)
+WHERE database_id <> 32767 -- ResourceDB
+GROUP BY DB_NAME(database_id))
+SELECT ROW_NUMBER() OVER(ORDER BY CachedSize DESC) AS [Buffer Pool Rank], [Database Name], CachedSize AS [Cached Size (MB)],
+       CAST(CachedSize / SUM(CachedSize) OVER() * 100.0 AS DECIMAL(5,2)) AS [Buffer Pool Percent]
+FROM AggregateBufferPoolUsage
+ORDER BY [Buffer Pool Rank] OPTION (RECOMPILE);
+
+SELECT TOP(10) mc.[type] AS [Memory Clerk Type], 
+       CAST((SUM(mc.pages_kb)/1024.0) AS DECIMAL (15,2)) AS [Memory Usage (MB)] 
+FROM sys.dm_os_memory_clerks AS mc WITH (NOLOCK)
+GROUP BY mc.[type]  
+ORDER BY SUM(mc.pages_kb) DESC OPTION (RECOMPILE);
