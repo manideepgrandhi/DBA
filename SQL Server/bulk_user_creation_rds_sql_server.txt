@@ -1,0 +1,235 @@
+CREATE TYPE dbo.AccessRequestType AS TABLE
+(
+    DatabaseName SYSNAME,
+    LoginName    SYSNAME,
+    RoleName     SYSNAME
+);
+GO
+
+
+CREATE OR ALTER PROCEDURE dbo.usp_GrantFixedDbRole_Bulk_v2
+    @AccessList dbo.AccessRequestType READONLY
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE 
+        @DatabaseName SYSNAME,
+        @LoginName    SYSNAME,
+        @RoleName     SYSNAME,
+        @SQL          NVARCHAR(MAX),
+        @Password     NVARCHAR(128);
+
+    ------------------------------------------------------------
+    -- Audit Tables
+    ------------------------------------------------------------
+    DECLARE @PasswordAudit TABLE
+    (
+        LoginName SYSNAME,
+        GeneratedPassword NVARCHAR(128),
+        CreatedAt DATETIME DEFAULT GETDATE()
+    );
+
+    DECLARE @ExecutionAudit TABLE
+    (
+        DatabaseName SYSNAME,
+        LoginName    SYSNAME,
+        RoleName     SYSNAME,
+        Status       VARCHAR(50),
+        Message      NVARCHAR(4000),
+        ExecutedAt   DATETIME DEFAULT GETDATE()
+    );
+
+    ------------------------------------------------------------
+    -- Cursor (controlled iteration)
+    ------------------------------------------------------------
+    DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DatabaseName, LoginName, RoleName
+        FROM @AccessList;
+
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @DatabaseName, @LoginName, @RoleName;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY
+
+            PRINT 'Processing: ' + @DatabaseName + ' | ' + @LoginName + ' | ' + @RoleName;
+
+            ------------------------------------------------------------
+            -- 1. Validate Role
+            ------------------------------------------------------------
+            IF @RoleName NOT IN (
+                'db_owner','db_securityadmin','db_accessadmin',
+                'db_backupoperator','db_ddladmin',
+                'db_datareader','db_datawriter',
+                'db_denydatareader','db_denydatawriter'
+            )
+                THROW 50001, 'Invalid fixed database role.', 1;
+
+            ------------------------------------------------------------
+            -- 2. Validate DB
+            ------------------------------------------------------------
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.databases
+                WHERE name = @DatabaseName
+                  AND state_desc = 'ONLINE'
+                  AND database_id > 4
+            )
+                THROW 50002, 'Database not accessible.', 1;
+
+            ------------------------------------------------------------
+            -- 3. Create Login (if missing)
+            ------------------------------------------------------------
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.server_principals
+                WHERE name = @LoginName AND type = 'S'
+            )
+            BEGIN
+                SET @Password = REPLACE(CONVERT(NVARCHAR(36), NEWID()), '-', '') + 'Aa1!';
+
+                SET @SQL = '
+                CREATE LOGIN ' + QUOTENAME(@LoginName) + '
+                WITH PASSWORD = ''' + @Password + ''',
+                     CHECK_POLICY = ON,
+                     CHECK_EXPIRATION = OFF,
+                     DEFAULT_DATABASE = master;
+                ';
+
+                EXEC (@SQL);
+
+                INSERT INTO @PasswordAudit (LoginName, GeneratedPassword)
+                VALUES (@LoginName, @Password);
+
+                PRINT 'Login created: ' + @LoginName;
+            END
+            ELSE
+            BEGIN
+                PRINT 'Login exists: ' + @LoginName;
+            END
+
+            ------------------------------------------------------------
+            -- 4. User + Role Grant
+            ------------------------------------------------------------
+            SET @SQL = '
+            USE ' + QUOTENAME(@DatabaseName) + ';
+
+            BEGIN TRY
+
+                -- Create or fix user
+                IF NOT EXISTS (
+                    SELECT 1 FROM sys.database_principals WHERE name = ''' + @LoginName + '''
+                )
+                BEGIN
+                    CREATE USER ' + QUOTENAME(@LoginName) + ' 
+                    FOR LOGIN ' + QUOTENAME(@LoginName) + ';
+                END
+                ELSE
+                BEGIN
+                    ALTER USER ' + QUOTENAME(@LoginName) + '
+                    WITH LOGIN = ' + QUOTENAME(@LoginName) + ';
+                END
+
+                -- Grant role
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM sys.database_role_members rm
+                    JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id
+                    JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id
+                    WHERE r.name = ''' + @RoleName + '''
+                      AND m.name = ''' + @LoginName + '''
+                )
+                BEGIN
+                    ALTER ROLE ' + QUOTENAME(@RoleName) + '
+                    ADD MEMBER ' + QUOTENAME(@LoginName) + ';
+                END
+
+            END TRY
+            BEGIN CATCH
+                THROW;
+            END CATCH
+            ';
+
+            EXEC (@SQL);
+
+            ------------------------------------------------------------
+            -- 5. Post Validation
+            ------------------------------------------------------------
+            SET @SQL = '
+            USE ' + QUOTENAME(@DatabaseName) + ';
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM sys.database_role_members rm
+                JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id
+                JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id
+                WHERE r.name = ''' + @RoleName + '''
+                  AND m.name = ''' + @LoginName + '''
+            )
+                THROW 50003, ''Role assignment failed.'', 1;
+            ';
+
+            EXEC (@SQL);
+
+            ------------------------------------------------------------
+            -- 6. Success Audit
+            ------------------------------------------------------------
+            INSERT INTO @ExecutionAudit (DatabaseName, LoginName, RoleName, Status, Message)
+            VALUES (@DatabaseName, @LoginName, @RoleName, 'SUCCESS', 'Role granted successfully');
+
+        END TRY
+        BEGIN CATCH
+
+            INSERT INTO @ExecutionAudit (DatabaseName, LoginName, RoleName, Status, Message)
+            VALUES (
+                @DatabaseName,
+                @LoginName,
+                @RoleName,
+                'FAILED',
+                ERROR_MESSAGE()
+            );
+
+            PRINT 'Error: ' + ERROR_MESSAGE();
+
+        END CATCH;
+
+        FETCH NEXT FROM cur INTO @DatabaseName, @LoginName, @RoleName;
+    END
+
+    CLOSE cur;
+    DEALLOCATE cur;
+
+    ------------------------------------------------------------
+    -- OUTPUTS
+    ------------------------------------------------------------
+
+    -- 1. Passwords (only for newly created logins)
+    SELECT 
+        LoginName,
+        GeneratedPassword,
+        CreatedAt
+    FROM @PasswordAudit;
+
+    -- 2. Execution Summary
+    SELECT 
+        DatabaseName,
+        LoginName,
+        RoleName,
+        Status,
+        Message,
+        ExecutedAt
+    FROM @ExecutionAudit;
+
+END;
+GO
+
+
+
+DECLARE @AccessList dbo.AccessRequestType;
+
+INSERT INTO @AccessList VALUES
+('DB1', 'user1', 'db_datareader'),
+('DB1', 'user2', 'db_datawriter'),
+('DB2', 'user1', 'db_owner');
+
+EXEC dbo.usp_GrantFixedDbRole_Bulk_v2 @AccessList;
