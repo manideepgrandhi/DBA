@@ -1,0 +1,42 @@
+IF OBJECT_ID('tempdb..#ErrorLogs') IS NOT NULL
+    DROP TABLE #ErrorLogs;
+
+CREATE TABLE #ErrorLogs (
+    LogNumber INT,
+    LogDate DATETIME,
+    ProcessInfo VARCHAR(50),
+    Text NVARCHAR(MAX)
+);
+
+DECLARE @LogCount INT, @i INT = 0;
+
+-- Get total number of logs
+CREATE TABLE #LogList (
+    Archive INT,
+    Date DATETIME,
+    Size BIGINT
+);
+
+INSERT INTO #LogList
+EXEC xp_enumerrorlogs;
+
+SELECT @LogCount = COUNT(*) FROM #LogList;
+
+-- Loop through all logs
+WHILE @i < @LogCount
+BEGIN
+    INSERT INTO #ErrorLogs (LogDate, ProcessInfo, Text)
+    EXEC xp_readerrorlog @i, 1;
+
+    UPDATE #ErrorLogs
+    SET LogNumber = @i
+    WHERE LogNumber IS NULL;
+
+    SET @i = @i + 1;
+END;
+
+-- 🔍 Apply your filter here
+SELECT *
+FROM #ErrorLogs
+WHERE Text LIKE '%error%'   -- 🔁 change keyword
+ORDER BY LogDate DESC;
