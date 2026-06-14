@@ -2,3 +2,17 @@
 2)Configure Lambda
 3)Create IAM policies
 4)Invoke permission for cloudwatch alarm on Lambda
+
+
+generate password failures
+
+for /l %i in (1,1,10) do psql -h awscloud.cudsaokgw2sp.us-east-1.rds.amazonaws.com -U dbops -d chatgptai
+
+Put failure events to cloudwatch streams
+
+CURRENT_TIME=$(($(date +%s) * 1000))
+
+aws logs put-log-events \
+  --log-group-name "/aws/rds/instance/awscloud/postgresql" \
+  --log-stream-name "awscloud.0" \
+  --log-events "[{\"timestamp\":$CURRENT_TIME,\"message\":\"FATAL: password authentication failed for user \\\"dbops\\\"\"}]"
