@@ -1,0 +1,83 @@
+{
+  "checks": {
+    "deletion_protection": {
+      "expected": true,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "storage_encrypted": {
+      "expected": true,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "publicly_accessible": {
+      "expected": true,
+      "severity": "CRITICAL",
+      "source": "instance"
+    },
+    "backup_retention_period": {
+      "expected": 35,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "force_ssl": {
+      "expected": "0",
+      "severity": "HIGH",
+      "source": "parameter"
+    },
+    "log_connections": {
+      "expected": "1",
+      "severity": "LOW",
+      "source": "parameter"
+    },
+   "log_disconnections": {
+      "expected": "0",
+      "severity": "LOW",
+      "source": "parameter"
+    }
+  }
+}
+
+
+
+
+
+{
+  "checks": {
+    "deletion_protection": {
+      "expected": true,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "storage_encrypted": {
+      "expected": true,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "publicly_accessible": {
+      "expected": false,
+      "severity": "CRITICAL",
+      "source": "instance"
+    },
+    "backup_retention_period": {
+      "expected": 35,
+      "severity": "CRITICAL",
+      "source": "cluster"
+    },
+    "force_ssl": {
+      "expected": "1",
+      "severity": "HIGH",
+      "source": "parameter"
+    },
+    "log_connections": {
+      "expected": "1",
+      "severity": "LOW",
+      "source": "parameter"
+    },
+    "log_disconnections": {
+      "expected": "1",
+      "severity": "LOW",
+      "source": "parameter"
+    }
+  }
+}

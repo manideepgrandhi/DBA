@@ -1,0 +1,6 @@
+{
+  "awscloud": {
+    "publicly_accessible": true,
+    "deletion_protection": false
+  }
+}
