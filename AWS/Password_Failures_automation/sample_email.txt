@@ -1,0 +1,49 @@
+RDS Authentication Failure Alert
+
+AWS Account      : 717530626194
+Region           : us-east-1
+
+Cluster Name     : awscloud
+Alarm Name       : AuroraPostgres-PasswordAuthFailures-awscloud
+Metric Name      : PasswordAuthFailureCount-awscloud
+
+Evaluation Window : Last 5 Minutes
+
+Alarm Configuration
+----------------------------------------------------
+Threshold          : 3
+Period             : 60 seconds
+Evaluation Periods : 5
+Datapoints Alarm   : 3
+
+----------------------------------------------------
+Total Failures : 8
+
+Failure Summary
+----------------------------------------------------
+
+
+Username : dbops
+Client IP: Unknown
+Failures : 7
+
+
+Username : manideep_test
+Client IP: Unknown
+Failures : 1
+
+
+
+Sample Log Entries
+----------------------------------------------------
+
+2026-06-14 01:45:09 UTC:???(???):dbops@chatgptai:[2119]:FATAL:  password authentication failed for user "dbops"
+
+2026-06-14 01:45:05 UTC:???(???):manideep_test@chatgptai:[2094]:FATAL:  password authentication failed for user "manideep_test"
+
+2026-06-14 01:44:39 UTC:???(???):dbops@chatgptai:[2070]:FATAL:  password authentication failed for user "dbops"
+
+2026-06-14 01:44:25 UTC:???(???):dbops@chatgptai:[2058]:FATAL:  password authentication failed for user "dbops"
+
+2026-06-14 01:43:59 UTC:???(???):dbops@postgres:[2040]:FATAL:  password authentication failed for user "dbops"
+

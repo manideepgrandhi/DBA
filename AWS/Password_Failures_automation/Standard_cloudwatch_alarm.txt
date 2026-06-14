@@ -1,0 +1,165 @@
+#!/bin/bash
+
+set -euo pipefail
+
+########################################
+# CONFIGURATION
+########################################
+
+REGION="us-east-1"
+
+ACCOUNT_ID="717530626194"
+
+LAMBDA_ARN="arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:password_failures"
+
+METRIC_NAMESPACE="RDS/AuroraPostgres"
+
+THRESHOLD=3
+PERIOD=60
+EVALUATION_PERIODS=5
+DATAPOINTS_TO_ALARM=3
+
+########################################
+# CLUSTERS
+########################################
+
+CLUSTERS=(
+  "awscloud"
+  # "prod-app1"
+  # "prod-app2"
+)
+
+########################################
+# START
+########################################
+
+SUCCESS_COUNT=0
+SKIP_COUNT=0
+FAIL_COUNT=0
+
+echo "======================================="
+echo "Aurora PostgreSQL Password Alert Setup"
+echo "======================================="
+echo ""
+
+########################################
+# VALIDATE LAMBDA
+########################################
+
+echo "Validating Lambda..."
+
+aws lambda get-function \
+  --function-name password_failures \
+  --region "$REGION" >/dev/null
+
+echo "Lambda validated."
+echo ""
+
+########################################
+# PROCESS CLUSTERS
+########################################
+
+for CLUSTER_ID in "${CLUSTERS[@]}"
+do
+
+    echo "---------------------------------------"
+    echo "Processing Cluster : $CLUSTER_ID"
+    echo "---------------------------------------"
+
+    LOG_GROUP="/aws/rds/instance/${CLUSTER_ID}/postgresql"
+
+    METRIC_NAME="PasswordAuthFailureCount-${CLUSTER_ID}"
+
+    FILTER_NAME="PasswordAuthFailures-${CLUSTER_ID}"
+
+    ALARM_NAME="AuroraPostgres-PasswordAuthFailures-${CLUSTER_ID}"
+
+    ########################################
+    # CHECK LOG GROUP
+    ########################################
+
+    LOG_GROUP_EXISTS=$(
+      aws logs describe-log-groups \
+      --region "$REGION" \
+      --log-group-name-prefix "$LOG_GROUP" \
+      --query "logGroups[?logGroupName=='${LOG_GROUP}'].logGroupName" \
+      --output text
+    )
+
+    if [ -z "$LOG_GROUP_EXISTS" ]
+    then
+        echo "WARNING: Log group not found"
+        echo "$LOG_GROUP"
+
+        SKIP_COUNT=$((SKIP_COUNT+1))
+        continue
+    fi
+
+    echo "Log Group Found"
+
+    ########################################
+    # CREATE / UPDATE METRIC FILTER
+    ########################################
+
+    echo "Creating Metric Filter..."
+
+    aws logs put-metric-filter \
+      --region "$REGION" \
+      --log-group-name "$LOG_GROUP" \
+      --filter-name "$FILTER_NAME" \
+      --filter-pattern '"password authentication failed"' \
+      --metric-transformations \
+        metricName="${METRIC_NAME}",\
+metricNamespace="${METRIC_NAMESPACE}",\
+metricValue=1,\
+defaultValue=0,\
+unit=Count
+
+    echo "Metric Filter Created"
+
+    ########################################
+    # CREATE / UPDATE ALARM
+    ########################################
+
+    echo "Creating Alarm..."
+
+    aws cloudwatch put-metric-alarm \
+      --region "$REGION" \
+      --alarm-name "$ALARM_NAME" \
+      --alarm-description "Password authentication failures detected on ${CLUSTER_ID}" \
+      --namespace "$METRIC_NAMESPACE" \
+      --metric-name "$METRIC_NAME" \
+      --statistic Sum \
+      --period "$PERIOD" \
+      --evaluation-periods "$EVALUATION_PERIODS" \
+      --datapoints-to-alarm "$DATAPOINTS_TO_ALARM" \
+      --threshold "$THRESHOLD" \
+      --comparison-operator GreaterThanOrEqualToThreshold \
+      --treat-missing-data notBreaching \
+      --alarm-actions "$LAMBDA_ARN"
+
+    echo "Alarm Created"
+
+    echo ""
+    echo "Cluster      : $CLUSTER_ID"
+    echo "Log Group    : $LOG_GROUP"
+    echo "Metric       : $METRIC_NAME"
+    echo "Alarm        : $ALARM_NAME"
+    echo ""
+
+    SUCCESS_COUNT=$((SUCCESS_COUNT+1))
+
+done
+
+########################################
+# SUMMARY
+########################################
+
+echo ""
+echo "======================================="
+echo "SUMMARY"
+echo "======================================="
+echo "Successful : $SUCCESS_COUNT"
+echo "Skipped    : $SKIP_COUNT"
+echo "Failed     : $FAIL_COUNT"
+echo "======================================="

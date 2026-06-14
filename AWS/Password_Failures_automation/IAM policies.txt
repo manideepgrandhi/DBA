@@ -1,0 +1,128 @@
+1)Make sure to add environment variable for SNS topic
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+
+    {
+      "Sid": "LogsInsights",
+      "Effect": "Allow",
+      "Action": [
+        "logs:StartQuery",
+        "logs:GetQueryResults"
+      ],
+      "Resource": "*"
+    },
+
+    {
+      "Sid": "LambdaLogging",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "*"
+    },
+
+    {
+      "Sid": "SNSPublish",
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:717530626194:manasa_alerts"
+    }
+
+  ]
+}
+
+
+
+{
+  "Sid": "CloudWatchAlarmInvoke",
+  "Effect": "Allow",
+  "Principal": {
+    "Service": "lambda.alarms.cloudwatch.amazonaws.com"
+  },
+  "Action": "lambda:InvokeFunction",
+  "Resource": "arn:aws:lambda:us-east-1:717530626194:function:auth_failures",
+  "Condition": {
+    "StringEquals": {
+      "AWS:SourceAccount": "717530626194"
+    },
+    "ArnLike": {
+      "AWS:SourceArn": "arn:aws:cloudwatch:us-east-1:717530626194:alarm:AuroraPostgres-PasswordAuthFailures-*"
+    }
+  }
+}
+
+
+
+aws lambda add-permission \
+  --function-name Auth_failures \
+  --statement-id CloudWatchAlarmInvoke2 \
+  --action lambda:InvokeFunction \
+  --principal lambda.alarms.cloudwatch.amazonaws.com \
+  --source-account 717530626194 \
+  --source-arn "arn:aws:cloudwatch:us-east-1:717530626194:alarm:AuroraPostgres-PasswordAuthFailures-*"
+
+
+
+
+
+
+
+| Component              | Permission            | Purpose                                 |
+| ---------------------- | --------------------- | --------------------------------------- |
+| Lambda Trust Policy    | sts:AssumeRole        | Allow Lambda service to assume role     |
+| Lambda Execution Role  | logs:StartQuery       | Run Logs Insights query                 |
+| Lambda Execution Role  | logs:GetQueryResults  | Read query results                      |
+| Lambda Execution Role  | logs:CreateLogGroup   | Create Lambda log group                 |
+| Lambda Execution Role  | logs:CreateLogStream  | Create Lambda log stream                |
+| Lambda Execution Role  | logs:PutLogEvents     | Write Lambda logs                       |
+| Lambda Execution Role  | sns:Publish           | Send SNS email notification             |
+| Lambda Resource Policy | lambda:InvokeFunction | Allow CloudWatch Alarm to invoke Lambda |
+| CloudWatch Alarm       | No IAM role required  | Uses Lambda Resource Policy             |
+
+
+
+
+CloudWatch Alarm
+        │
+        │ lambda:InvokeFunction
+        ▼
+Lambda Function
+        │
+        │ sts:AssumeRole
+        ▼
+Lambda Execution Role
+        │
+        ├── logs:StartQuery
+        ├── logs:GetQueryResults
+        ├── logs:CreateLogGroup
+        ├── logs:CreateLogStream
+        ├── logs:PutLogEvents
+        │
+        └── sns:Publish
+                 │
+                 ▼
+              SNS Topic
+                 │
+                 ▼
+              Email
