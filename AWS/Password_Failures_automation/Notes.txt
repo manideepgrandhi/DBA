@@ -1,0 +1,4 @@
+1)Deploy cloudwatch alarm for the cluster
+2)Configure Lambda
+3)Create IAM policies
+4)Invoke permission for cloudwatch alarm on Lambda
