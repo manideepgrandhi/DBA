@@ -1,0 +1,6 @@
+instance,check,expected,current,severity
+awscloud,deletion_protection,True,False,CRITICAL
+awscloud,backup_retention_period,35,0,CRITICAL
+awscloud,force_ssl,0,1,HIGH
+awscloud,log_connections,1,all,LOW
+awscloud,log_disconnections,0,1,LOW
