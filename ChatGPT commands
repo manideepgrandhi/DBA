@@ -1,0 +1,400 @@
+Command	Use
+/explain	Explain a concept simply
+/eli5	Explain like I’m 5
+/example	Give real-life examples
+/analogy	Explain using an everyday analogy
+/mcq	Practice multiple-choice questions
+/quiz	Take an interactive quiz
+/flashcards	Create flashcards for revision
+/summarize	Summarize a chapter/topic
+/cheatsheet	Create a quick revision sheet
+/compare	Compare two concepts
+/why	Explain why something happens
+/how	Explain how something works
+/step-by-step	Break a problem into steps
+/mistakes	Identify common mistakes
+/practice	Generate practice questions
+/test	Conduct a mock test
+/revise	Quick revision of a topic
+/teach-back	Ask questions to check understanding
+
+Example:
+
+/explain photosynthesis for 3rd class with examples
+
+/mcq Indian states and capitals, 10 questions, 3rd grade
+
+/teach-back fractions for a 3rd-grade student
+
+⸻
+
+👩‍🏫 For Teachers
+
+Command	Use
+/lesson-plan	Create a lesson plan
+/explain	Prepare a student-friendly explanation
+/examples	Generate teaching examples
+/activity	Create classroom activities
+/worksheet	Create worksheets
+/mcq	Generate MCQs
+/quiz	Create quizzes
+/test	Create question papers
+/answer-key	Generate answer keys
+/rubric	Create grading rubrics
+/flashcards	Create revision cards
+/homework	Generate homework
+/project	Create project ideas
+/differentiate	Adapt material for different ability levels
+/simplify	Make difficult material easier
+/challenge	Create advanced questions
+/review	Review student answers
+/feedback	Give constructive feedback
+
+⸻
+
+🧠 Powerful learning prompts
+
+These aren’t official built-in slash commands—you can use them as your own shorthand:
+
+/socratic
+
+Teach me this topic by asking questions instead of giving me the answer.
+
+/teach-back
+
+Teach me the concept, then ask me to explain it back to you. Correct my mistakes.
+
+/progressive
+
+Start with a very simple explanation and gradually increase the difficulty.
+
+/exam
+
+Teach me this topic according to exam-style questions.
+
+/real-life
+
+Explain this concept using 5 real-life examples.
+
+/visual
+
+Explain this concept using a simple diagram or visual representation.
+
+/interview
+
+Ask me questions one at a time and evaluate my answers.
+
+⭐ A particularly useful format for children
+
+You can combine commands:
+
+/mcq Our Solar System — Grade 3 — 10 questions — one question at a time — don't reveal the answer until I respond.
+
+This works especially well for interactive learning because the child can simply answer A/B/C/D, and ChatGPT can continue with the next question
+
+
+
+
+
+Yes. For a professional DBA, you can create your own set of slash-style commands that turn ChatGPT into a DBA copilot. Since you work across SQL Server, PostgreSQL, MongoDB and AWS, I’d organize them like this:
+
+🔍 Troubleshooting & Incident Response
+
+Command	What it does
+/diagnose	Analyze a DB problem systematically
+/troubleshoot	Give step-by-step troubleshooting
+/rootcause	Find likely root causes
+/incident	Act as an incident-response DBA
+/healthcheck	Generate DB health checks
+/checklist	Create operational checklists
+/runbook	Create an executable DBA runbook
+/postmortem	Create an incident postmortem
+/symptoms	Map symptoms → causes → checks → fixes
+
+Example
+
+/diagnose PostgreSQL read replica says "cannot execute INSERT in a read-only transaction"
+
+I can structure it as:
+
+Symptom → Possible causes → Evidence to collect → SQL commands → Root cause → Fix → Prevention
+
+⸻
+
+🐘 PostgreSQL
+
+Command	Use
+/pg	PostgreSQL-specific explanation
+/pgsql	Generate PostgreSQL SQL
+/pg-performance	Performance investigation
+/pg-locks	Lock/blocking analysis
+/pg-replication	Streaming/logical replication
+/pg-wal	WAL investigation
+/pg-backup	pg_dump/pg_restore/backup strategy
+/pg-upgrade	Upgrade planning
+/pg-security	Roles, privileges, authentication
+/pg-extension	Extension architecture/troubleshooting
+/pg-tuning	Configuration/tuning analysis
+/pg-migration	Migration planning
+
+Example
+
+/pg-wal Explain why WAL is increasing and give me diagnostic SQL
+
+⸻
+
+🪟 SQL Server
+
+Command	Use
+/sqlserver	SQL Server DBA assistance
+/sql-performance	Query/performance analysis
+/sql-blocking	Blocking/deadlock investigation
+/sql-index	Index analysis
+/sql-vlf	VLF/log analysis
+/sql-alwayson	Always On troubleshooting
+/sql-backup	Backup/restore strategy
+/sql-agent	SQL Agent jobs
+/sql-security	Logins, users, permissions
+/sql-tempdb	TempDB analysis
+/sql-wait	Wait-stat analysis
+
+⸻
+
+🍃 MongoDB
+
+Command	Use
+/mongo	MongoDB DBA assistance
+/mongo-performance	Performance troubleshooting
+/mongo-index	Index analysis
+/mongo-replica	Replica-set troubleshooting
+/mongo-sharding	Sharding analysis
+/mongo-oplog	Oplog investigation
+/mongo-backup	Backup/restore
+/mongo-security	Authentication/authorization
+
+⸻
+
+☁️ AWS + Database
+
+Command	Use
+/aws-db	AWS database architecture
+/rds	RDS troubleshooting
+/aurora	Aurora analysis
+/s3-db	S3 + database workflows
+/iam-db	IAM/database access
+/ssm	Systems Manager workflows
+/cloudwatch-db	DB monitoring
+/aws-cost	Database cost analysis
+/architecture	Design an AWS DB architecture
+/dr	Disaster recovery design
+
+⸻
+
+⚡ Performance Engineering
+
+These are particularly useful for senior DBA work:
+
+/perf
+
+Analyze this performance problem like a senior DBA. Identify bottlenecks, evidence needed, diagnostic commands, likely root causes and remediation.
+
+/query-plan
+
+Analyze this execution plan and identify the most important performance problems.
+
+/bottleneck
+
+Determine whether the bottleneck is CPU, memory, I/O, locks, network, storage or query execution.
+
+/capacity
+
+Perform database capacity planning based on these metrics.
+
+/baseline
+
+Create a performance baseline and identify abnormal deviations.
+
+⸻
+
+🔐 Security
+
+Useful for production DBA work:
+
+* /security-review
+* /permissions
+* /least-privilege
+* /audit
+* /authentication
+* /encryption
+* /compliance
+* /security-risk
+
+Example:
+
+/security-review Review this PostgreSQL role design for excessive privileges
+
+⸻
+
+🔄 Migration & DR
+
+* /migration-plan
+* /migration-risk
+* /cutover
+* /rollback
+* /downtime
+* /replication
+* /failover
+* /rpo-rto
+* /dr-test
+* /restore-test
+
+Example:
+
+/migration-plan PostgreSQL 14 → 17 with minimal downtime
+
+⸻
+
+🧑‍💻 SQL & Automation
+
+* /sql — Generate SQL
+* /optimize-sql — Optimize SQL
+* /explain-sql — Explain SQL
+* /convert-sql — Convert between DB engines
+* /bash — DBA shell scripting
+* /powershell — Windows/SQL Server automation
+* /python-db — Python database automation
+* /terraform-db — Infrastructure as code
+* /ansible-db — DBA automation
+
+A very useful one for you:
+
+/convert-sql SQL Server query → PostgreSQL equivalent. Explain behavioral differences.
+
+⸻
+
+🧠 Senior DBA / Architecture
+
+These are great for moving beyond day-to-day administration:
+
+Command	Purpose
+/design	Design a database solution
+/architecture	Architecture review
+/tradeoffs	Compare technical options
+/best-practice	Recommend industry practices
+/scalability	Analyze scaling strategy
+/reliability	Reliability review
+/ha	High availability design
+/dr	Disaster recovery
+/cost	Cost/performance tradeoff
+/capacity	Capacity planning
+/review	Senior DBA design review
+
+⸻
+
+⭐ My recommended DBA command set
+
+If you don’t want 50 commands, I’d start with these 15:
+
+/diagnose
+/troubleshoot
+/rootcause
+/healthcheck
+/perf
+/query-plan
+/locks
+/replication
+/backup
+/restore
+/migration
+/dr
+/security-review
+/architecture
+/runbook
+
+Then add database-specific commands:
+
+/pg
+/sqlserver
+/mongo
+/aws-db
+
+And one particularly powerful meta-command:
+
+/senior-dba
+
+Use it like:
+
+/senior-dba PostgreSQL CPU suddenly increased from 30% to 90%. Analyze the issue.
+
+I would then approach it as a production DBA, rather than simply explaining PostgreSQL concepts: prioritize impact → evidence → diagnostics → root cause → immediate mitigation → permanent fix → prevention.
+
+
+
+
+
+Definitely. For email writing, you can use a small set of custom slash commands that are especially useful in a professional/DBA environment.
+
+✉️ Email-writing commands
+
+Command	Purpose
+/email	Write a professional email from your notes
+/rewrite-email	Improve an existing email
+/polish	Make an email clearer and more professional
+/short-email	Make it concise
+/formal-email	Make it more formal
+/friendly-email	Make it professional but friendly
+/manager-email	Write for a manager/leadership audience
+/technical-email	Write for technical teams
+/escalation	Write a professional escalation
+/followup-email	Follow up without sounding pushy
+/status-email	Provide project/incident status
+/incident-email	Communicate a production incident
+/maintenance-email	Announce DB maintenance
+/downtime-email	Communicate planned downtime
+/approval-email	Request approval
+/action-email	Clearly request an action
+/thankyou-email	Professional thank-you
+/apology-email	Professional apology
+/meeting-email	Schedule/communicate meetings
+
+⭐ DBA-specific examples
+
+You could simply type:
+
+/incident-email PostgreSQL production database is experiencing high WAL generation. We are investigating and will provide an update in 30 minutes.
+
+Or:
+
+/maintenance-email PostgreSQL production maintenance Saturday 11 PM–1 AM IST. Expected downtime 15 minutes.
+
+Or:
+
+/escalation Application team has not completed the connection-pool changes despite two previous requests. This is blocking the production migration.
+
+Or:
+
+/followup-email Ask the application team for confirmation that they tested the new database connection string.
+
+🎯 One command I’d recommend
+
+Use:
+
+/email
+
+and optionally add a tone:
+
+/email professional
+/email concise
+/email executive
+/email technical
+/email polite escalation
+/email firm but polite
+
+For example:
+
+/email firm but polite — We cannot proceed with the production database upgrade until the application team completes compatibility testing.
+
+I can turn that into a ready-to-send email, including a suitable subject, without making it unnecessarily verbose.
+
+
+
