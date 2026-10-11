@@ -1,0 +1,55 @@
+# aurora_pg_check.conf - settings for aurora_pg_check.sh
+#
+# Format: key = value. One per line. '#' starts a comment. Quote a value to keep '#' in it.
+# This file is PARSED, never sourced. Unknown keys are an error. Command-line options win.
+# Credentials are NOT accepted here: use an AWS CLI profile, SSO, or an instance/task role.
+
+# --- scope -----------------------------------------------------------------
+profile        = dba-readonly          # AWS CLI profile (omit to use the default chain)
+regions        = ap-south-1, us-east-1 # comma-separated; or all_regions = yes
+# all_regions  = yes
+# clusters     = orders-prod, payments-prod   # default: every aurora-postgresql cluster
+checks         = all                   # cluster,versions,config,backups,metrics,events
+# exclude_checks = events
+lookback       = 24h                   # metrics/events window (90m, 6h, 2d, 1w)
+period         = 300                   # CloudWatch period in seconds (multiple of 60)
+
+# --- output ----------------------------------------------------------------
+format         = text                  # text | json | html
+# output       = /var/log/dba/aurora_latest.txt
+only_problems  = yes                   # text: hide OK rows
+details        = no                    # text: details for every row
+log_file       = /var/log/dba/aurora_pg_check.log
+verbose        = no
+
+# --- AWS CLI behaviour -------------------------------------------------------
+aws_timeout    = 30                    # connect/read timeout per call (s)
+max_attempts   = 5                     # AWS_MAX_ATTEMPTS (retries on throttling)
+
+# --- alerts (e-mail via mail/mailx/sendmail, webhooks via curl) -----------------
+# alert_emails         = dba-team@example.com
+# alert_from           = aurora-check@example.com
+# alert_webhooks       = "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+# alert_webhook_format = slack         # slack | json
+alert_on       = warn                  # warn | crit | always
+
+# --- thresholds (see ./aurora_pg_check.sh --list-thresholds for all) -----------
+min_readers               = 1
+min_azs                   = 2
+backup_retention_warn     = 7
+backup_retention_crit     = 3
+cert_warn_days            = 60
+maint_crit_days           = 7
+support_warn_days         = 180
+require_auto_minor_upgrade = 1
+public_access_crit        = 1          # stricter than the default (WARN)
+cpu_warn                  = 80
+cpu_crit                  = 95
+replica_lag_warn_ms       = 1000
+replica_lag_crit_ms       = 10000
+xid_warn                  = 500000000  # wraparound happens at ~2.1 billion
+xid_crit                  = 1000000000
+conn_pct_warn             = 80
+conn_pct_crit             = 95
+# max_connections         = 5000       # set if the parameter-group value cannot be read
+acu_util_warn             = 90

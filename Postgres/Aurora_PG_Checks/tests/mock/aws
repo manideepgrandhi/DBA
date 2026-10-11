@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+"""Stub `aws` executable for testing aurora_pg_check.sh without AWS credentials.
+
+Returns canned JSON shaped like AWS CLI v2 output (field names taken from
+`aws <svc> <op> --generate-cli-skeleton output`). Timestamps are relative to now.
+
+Env:
+  MOCK_SCENARIO  fleet (default) | issues | metrics | serverless | apifail | badcreds
+  MOCK_LOG       append one JSON line per invocation (argv) here
+  MOCK_CAPTURE   directory to copy file:// arguments to (for replay against the real CLI)
+  MOCK_DEFAULT_REGION  value for `aws configure get region`
+"""
+import hashlib, json, math, os, shutil, sys
+from datetime import datetime, timedelta, timezone
+
+NOW = datetime.now(timezone.utc)
+ACCT = "123456789012"
+SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+
+
+def iso(dt, frac=True):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S") + (".%06d" % dt.microsecond if frac else "") + "+00:00"
+
+
+def ago(**kw):
+    return NOW - timedelta(**kw)
+
+
+def fail(code, op, msg, rc=254):
+    sys.stderr.write("\naws: [ERROR]: An error occurred (%s) when calling the %s operation: %s\n\n" % (code, op, msg))
+    sys.exit(rc)
+
+
+# ------------------------------------------------------------------ argv parsing
+argv = sys.argv[1:]
+if os.environ.get("MOCK_LOG"):
+    with open(os.environ["MOCK_LOG"], "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+if argv[:1] == ["--version"]:
+    print("aws-cli/2.37.12 Python/3.14.6 Linux/6.12 exe/x86_64.mock")
+    sys.exit(0)
+if argv[:3] == ["configure", "get", "region"]:
+    r = os.environ.get("MOCK_DEFAULT_REGION", "")
+    if r:
+        print(r)
+        sys.exit(0)
+    sys.exit(1)
+
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout", "--query"}
+GLOBAL_FLAG = {"--no-cli-pager"}
+ALLOWED = {
+    ("sts", "get-caller-identity"): set(),
+    ("ec2", "describe-regions"): set(),
+    ("ec2", "describe-instance-types"): {"--instance-types"},
+    ("rds", "describe-db-clusters"): {"--filters"},
+    ("rds", "describe-db-instances"): {"--filters"},
+    ("rds", "describe-pending-maintenance-actions"): set(),
+    ("rds", "describe-certificates"): set(),
+    ("rds", "describe-db-engine-versions"): {"--engine", "--engine-version", "--include-all"},
+    ("rds", "describe-db-major-engine-versions"): {"--engine", "--major-engine-version"},
+    ("rds", "describe-db-cluster-snapshots"): {"--db-cluster-identifier"},
+    ("rds", "describe-events"): {"--source-type", "--start-time", "--end-time"},
+    ("rds", "describe-db-parameters"): {"--db-parameter-group-name"},
+    ("cloudwatch", "get-metric-data"): {"--metric-data-queries", "--start-time", "--end-time", "--scan-by"},
+}
+FLAGS = {"--include-all"}
+g, o, pos = {}, {}, []
+i = 0
+while i < len(argv):
+    a = argv[i]
+    if a in GLOBAL_FLAG:
+        g[a] = True
+    elif a in GLOBAL_VAL:
+        g[a] = argv[i + 1]; i += 1
+    elif a.startswith("--"):
+        if a in FLAGS:
+            o[a] = True
+        else:
+            vals = []
+            while i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                vals.append(argv[i + 1]); i += 1
+            o[a] = vals if a == "--instance-types" else (vals[0] if vals else "")
+    else:
+        pos.append(a)
+    i += 1
+if len(pos) != 2 or tuple(pos) not in ALLOWED:
+    sys.stderr.write("\naws: [ERROR]: mock does not implement: %s\n" % " ".join(pos)); sys.exit(252)
+unknown = set(o) - ALLOWED[tuple(pos)]
+if unknown:
+    sys.stderr.write("\naws: [ERROR]: Unknown options: %s\n" % ", ".join(sorted(unknown))); sys.exit(252)
+if g.get("--output") != "json" or "--no-cli-pager" not in g:
+    sys.stderr.write("mock: script must pass --output json --no-cli-pager\n"); sys.exit(252)
+REGION = g.get("--region") or os.environ.get("AWS_REGION") or ""
+if not REGION:
+    sys.stderr.write("\naws: [ERROR]: An error occurred (NoRegion): You must specify a region.\n"); sys.exit(253)
+SVC, OP = pos
+OPNAME = "".join(p.capitalize() for p in OP.split("-")).replace("Db", "DB")
+
+# ------------------------------------------------------------------ world model
+def arn(kind, ident, region=None):
+    return "arn:aws:rds:%s:%s:%s:%s" % (region or REGION, ACCT, kind, ident)
+
+
+def cluster(cid, version, members, **kw):
+    c = {
+        "AllocatedStorage": 1, "AvailabilityZones": ["%sa" % REGION, "%sb" % REGION, "%sc" % REGION],
+        "BackupRetentionPeriod": 14, "DatabaseName": "app", "DBClusterIdentifier": cid,
+        "DBClusterParameterGroup": "default.aurora-postgresql%s" % version.split(".")[0],
+        "DBSubnetGroup": "db-private", "Status": "available", "EarliestRestorableTime": iso(ago(days=14)),
+        "Endpoint": "%s.cluster-cabc123.%s.rds.amazonaws.com" % (cid, REGION),
+        "ReaderEndpoint": "%s.cluster-ro-cabc123.%s.rds.amazonaws.com" % (cid, REGION),
+        "MultiAZ": len(members) > 1, "Engine": "aurora-postgresql", "EngineVersion": version,
+        "LatestRestorableTime": iso(ago(minutes=3)), "Port": 5432, "MasterUsername": "postgres",
+        "PreferredBackupWindow": "19:00-19:30", "PreferredMaintenanceWindow": "sun:20:00-sun:20:30",
+        "ReadReplicaIdentifiers": [],
+        "DBClusterMembers": [{"DBInstanceIdentifier": m[0], "IsClusterWriter": m[1],
+                              "DBClusterParameterGroupStatus": "in-sync", "PromotionTier": m[2]} for m in members],
+        "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0abc1234", "Status": "active"}],
+        "HostedZoneId": "Z2R2ITUGPM61AM", "StorageEncrypted": True,
+        "KmsKeyId": "arn:aws:kms:%s:%s:key/1111-2222" % (REGION, ACCT),
+        "DbClusterResourceId": "cluster-" + hashlib.md5(cid.encode()).hexdigest()[:26].upper(),
+        "DBClusterArn": arn("cluster", cid), "AssociatedRoles": [], "IAMDatabaseAuthenticationEnabled": True,
+        "ClusterCreateTime": iso(ago(days=400)), "EnabledCloudwatchLogsExports": ["postgresql"],
+        "EngineMode": "provisioned", "DeletionProtection": True, "HttpEndpointEnabled": False,
+        "CopyTagsToSnapshot": True, "CrossAccountClone": False, "DomainMemberships": [], "TagList": [],
+        "AutoMinorVersionUpgrade": True, "NetworkType": "IPV4", "StorageType": "aurora",
+        "EngineLifecycleSupport": "open-source-rds-extended-support",
+    }
+    c.update(kw)
+    return c
+
+
+def instance(iid, cid, cls, az, version, **kw):
+    d = {
+        "DBInstanceIdentifier": iid, "DBInstanceClass": cls, "Engine": "aurora-postgresql",
+        "DBInstanceStatus": "available", "MasterUsername": "postgres",
+        "Endpoint": {"Address": "%s.cabc123.%s.rds.amazonaws.com" % (iid, REGION), "Port": 5432, "HostedZoneId": "Z2R2ITUGPM61AM"},
+        "AllocatedStorage": 1, "InstanceCreateTime": iso(ago(days=400)), "PreferredBackupWindow": "19:00-19:30",
+        "BackupRetentionPeriod": 14, "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0abc1234", "Status": "active"}],
+        "DBParameterGroups": [{"DBParameterGroupName": "default.aurora-postgresql%s" % version.split(".")[0], "ParameterApplyStatus": "in-sync"}],
+        "AvailabilityZone": az, "PreferredMaintenanceWindow": "sun:20:00-sun:20:30", "PendingModifiedValues": {},
+        "MultiAZ": False, "EngineVersion": version, "AutoMinorVersionUpgrade": True, "LicenseModel": "postgresql-license",
+        "PubliclyAccessible": False, "StorageType": "aurora", "DbInstancePort": 0, "DBClusterIdentifier": cid,
+        "StorageEncrypted": True, "DbiResourceId": "db-" + hashlib.md5(iid.encode()).hexdigest()[:26].upper(),
+        "CACertificateIdentifier": "rds-ca-rsa2048-g1", "CopyTagsToSnapshot": False,
+        "MonitoringInterval": 60, "EnhancedMonitoringResourceArn": "arn:aws:logs:%s:%s:log-group:RDSOSMetrics:log-stream:x" % (REGION, ACCT),
+        "MonitoringRoleArn": "arn:aws:iam::%s:role/rds-monitoring-role" % ACCT, "PromotionTier": 1,
+        "DBInstanceArn": arn("db", iid), "IAMDatabaseAuthenticationEnabled": True,
+        "PerformanceInsightsEnabled": True, "PerformanceInsightsRetentionPeriod": 7, "DatabaseInsightsMode": "standard",
+        "DeletionProtection": False, "AssociatedRoles": [], "TagList": [], "CustomerOwnedIpEnabled": False,
+        "BackupTarget": "region", "NetworkType": "IPV4", "StorageThroughput": 0,
+        "CertificateDetails": {"CAIdentifier": "rds-ca-rsa2048-g1", "ValidTill": iso(NOW + timedelta(days=300), False)},
+        "DedicatedLogVolume": False, "EngineLifecycleSupport": "open-source-rds-extended-support",
+    }
+    d.update(kw)
+    return d
+
+
+def topo(cid, version, cls, n, region_azs, **ckw):
+    """writer + (n-1) readers spread over AZs"""
+    ins, mem = [], []
+    for k in range(n):
+        iid = "%s-%d" % (cid, k + 1)
+        ins.append(instance(iid, cid, cls if isinstance(cls, str) else cls[k], region_azs[k % len(region_azs)], version,
+                            PromotionTier=0 if k < 2 else 1))
+        mem.append((iid, k == 0, 0 if k < 2 else 1))
+    return cluster(cid, version, mem, **ckw), ins
+
+
+AZ = ["%sa" % REGION, "%sb" % REGION, "%sc" % REGION]
+W = {"clusters": [], "instances": [], "pma": [], "events": [], "metrics": {}, "params": {}}
+
+if SCEN in ("fleet", "badcreds"):
+    if REGION == "us-east-1":
+        c, ins = topo("orders-prod", "16.8", "db.r6g.xlarge", 3, AZ)
+        W["clusters"], W["instances"] = [c], ins
+        W["events"] = [{"SourceIdentifier": "orders-prod-2", "SourceType": "db-instance",
+                        "Message": "Finished applying modification to DB instance class", "EventCategories": ["configuration change"],
+                        "Date": iso(ago(hours=20)), "SourceArn": arn("db", "orders-prod-2")}]
+    elif REGION == "ap-south-1":
+        c, ins = topo("payments-prod", "16.8", "db.r7g.large", 2, AZ)
+        W["clusters"], W["instances"] = [c], ins
+    elif REGION == "us-west-2":
+        c = cluster("legacy-mysql", "8.0.mysql_aurora.3.08.0", [("legacy-mysql-1", True, 1)], Engine="aurora-mysql")
+        W["clusters"] = [c]
+
+elif SCEN == "issues" and REGION == "us-east-1":
+    c, ins = topo("billing-prod", "13.12", ["db.r6g.2xlarge", "db.r6g.large"], 2, ["us-east-1a"],
+                  BackupRetentionPeriod=1, DeletionProtection=False, EnabledCloudwatchLogsExports=[], CopyTagsToSnapshot=False,
+                  PreferredBackupWindow="20:10-20:40", DBClusterParameterGroup="billing-cluster-pg13",
+                  LatestRestorableTime=iso(ago(minutes=25)))
+    c["DBClusterMembers"][0]["DBClusterParameterGroupStatus"] = "pending-reboot"
+    ins[0]["DBParameterGroups"] = [{"DBParameterGroupName": "billing-pg13", "ParameterApplyStatus": "pending-reboot"}]
+    ins[1].update(PubliclyAccessible=True, PerformanceInsightsEnabled=False, AutoMinorVersionUpgrade=False,
+                  MonitoringInterval=0, CACertificateIdentifier="rds-ca-2019",
+                  CertificateDetails={"CAIdentifier": "rds-ca-2019", "ValidTill": iso(ago(days=400), False)})
+    ins[1].pop("PerformanceInsightsRetentionPeriod")
+    W["clusters"], W["instances"] = [c], ins
+    W["pma"] = [
+        {"ResourceIdentifier": arn("cluster", "billing-prod"), "PendingMaintenanceActionDetails": [
+            {"Action": "db-upgrade", "Description": "Upgrade to Aurora PostgreSQL 13.20", "OptInStatus": "pending"}]},
+        {"ResourceIdentifier": arn("db", "billing-prod-2"), "PendingMaintenanceActionDetails": [
+            {"Action": "system-update", "Description": "New Operating System update is available",
+             "AutoAppliedAfterDate": iso(NOW + timedelta(days=3), False), "CurrentApplyDate": iso(NOW + timedelta(days=3), False)}]},
+        {"ResourceIdentifier": arn("db", "some-other-db"), "PendingMaintenanceActionDetails": [
+            {"Action": "system-update", "Description": "not ours"}]}]
+    W["events"] = [{"SourceIdentifier": "billing-prod-1", "SourceType": "db-instance",
+                    "Message": "DB instance restarted", "EventCategories": ["availability"],
+                    "Date": iso(ago(hours=5)), "SourceArn": arn("db", "billing-prod-1")}]
+
+elif SCEN == "metrics" and REGION == "us-east-1":
+    c, ins = topo("analytics-prod", "15.10", "db.r6g.2xlarge", 3, AZ, DBClusterParameterGroup="analytics-cluster-pg15")
+    for x in ins:
+        x["DBParameterGroups"] = [{"DBParameterGroupName": "analytics-pg15", "ParameterApplyStatus": "in-sync"}]
+    W["clusters"], W["instances"] = [c], ins
+    W["metrics"] = {("analytics-prod-1", "CPUUtilization"): (55, 97.4), ("analytics-prod-3", "AuroraReplicaLag"): (40, 15200),
+                    ("analytics-prod", "AuroraReplicaLagMaximum"): (45, 15200),
+                    ("analytics-prod-1", "MaximumUsedTransactionIDs"): (1.1e9, 1.21e9),
+                    ("analytics-prod-1", "DatabaseConnections"): (900, 1712), ("analytics-prod-1", "Deadlocks"): (0, 0.02),
+                    ("analytics-prod-1", "OldestReplicationSlotLag"): (2e8, 3.1e9),
+                    ("analytics-prod-3", "FreeableMemory"): (6e9, 9e8)}
+    W["events"] = [
+        {"SourceIdentifier": "analytics-prod", "SourceType": "db-cluster", "Message": "Started cross AZ failover to DB instance: analytics-prod-1",
+         "EventCategories": ["failover"], "Date": iso(ago(hours=3)), "SourceArn": arn("cluster", "analytics-prod")},
+        {"SourceIdentifier": "analytics-prod", "SourceType": "db-cluster", "Message": "Completed failover to DB instance: analytics-prod-1",
+         "EventCategories": ["failover"], "Date": iso(ago(hours=3) + timedelta(seconds=35)), "SourceArn": arn("cluster", "analytics-prod")},
+        {"SourceIdentifier": "analytics-prod-2", "SourceType": "db-instance", "Message": "DB instance restarted",
+         "EventCategories": ["availability"], "Date": iso(ago(hours=3) + timedelta(seconds=50)), "SourceArn": arn("db", "analytics-prod-2")},
+        {"SourceIdentifier": "analytics-prod-2", "SourceType": "db-instance",
+         "Message": "The database instance has failed. Amazon RDS is recovering the instance.",
+         "EventCategories": ["failure"], "Date": iso(ago(hours=3, seconds=20)), "SourceArn": arn("db", "analytics-prod-2")}]
+    W["params"] = {"analytics-pg15": [{"ParameterName": "max_connections", "ParameterValue": "2000", "Description": "Sets the maximum number of concurrent connections.",
+                                       "Source": "user", "ApplyType": "static", "DataType": "integer", "AllowedValues": "6-262143",
+                                       "IsModifiable": True, "ApplyMethod": "pending-reboot"}]}
+
+elif SCEN == "serverless" and REGION == "eu-west-1":
+    c, ins = topo("events-sls", "16.4", "db.serverless", 2, ["eu-west-1a", "eu-west-1b"],
+                  ServerlessV2ScalingConfiguration={"MinCapacity": 0.5, "MaxCapacity": 16.0}, ServerlessV2PlatformVersion="2")
+    W["clusters"], W["instances"] = [c], ins
+    W["metrics"] = {("events-sls-1", "ACUUtilization"): (40, 96.0), ("events-sls-1", "ServerlessDatabaseCapacity"): (6, 15.4),
+                    ("events-sls-2", "ServerlessDatabaseCapacity"): (1, 2)}
+
+elif SCEN in ("apifail", "instfail") and REGION == "us-east-1":
+    c, ins = topo("inventory-prod", "16.8", "db.r6g.large", 2, AZ)
+    W["clusters"], W["instances"] = [c], ins
+
+if SCEN != "serverless" and REGION == "eu-west-1":
+    pass  # region without clusters
+
+# ------------------------------------------------------------------ helpers for responses
+def parse_filters(s):
+    out = {}
+    if not s:
+        return out
+    name, _, vals = s.partition(",Values=")
+    out[name.replace("Name=", "")] = vals.split(",")
+    return out
+
+
+ENGINE_VERSIONS = {
+    "16.8": (["16.9"], ["17.5"]), "16.4": (["16.6", "16.8", "16.9"], ["17.4", "17.5"]),
+    "15.10": (["15.12", "15.13"], ["16.8", "16.9", "17.5"]), "13.12": (["13.15", "13.18", "13.20", "13.21"], ["14.17", "15.12", "16.8", "17.5"]),
+}
+STD_END = {"13": "2026-02-28", "15": "2027-02-28", "16": "2029-02-28", "17": "2030-02-28"}
+MEM = {"r6g.large": 16384, "r6g.xlarge": 32768, "r6g.2xlarge": 65536, "r7g.large": 16384}
+BASE = {"CPUUtilization": 22, "FreeableMemory": 9e9, "DatabaseConnections": 140, "AuroraReplicaLag": 18,
+        "AuroraReplicaLagMaximum": 21, "FreeLocalStorage": 6.2e10, "DiskQueueDepth": 1.1, "ReadLatency": 0.0011,
+        "WriteLatency": 0.0024, "Deadlocks": 0, "BufferCacheHitRatio": 99.7, "MaximumUsedTransactionIDs": 8.5e7,
+        "TransactionLogsDiskUsage": 3.1e8, "ReplicationSlotDiskUsage": 0, "OldestReplicationSlotLag": 0,
+        "ServerlessDatabaseCapacity": 4, "ACUUtilization": 25}
+
+
+def series(target, metric, n):
+    base, peak = W["metrics"].get((target, metric), (BASE.get(metric, 0), None))
+    seed = int(hashlib.md5((target + metric).encode()).hexdigest()[:6], 16)
+    vals = []
+    for k in range(n):
+        amp = 0.002 if metric == "BufferCacheHitRatio" else 0.08
+        v = min(base * (1 + amp * math.sin((k + seed) / 5.0)), 100.0 if metric.endswith(("Ratio", "Utilization")) else float("inf"))
+        if peak is not None and k >= n - max(2, n // 12):
+            v = peak
+        vals.append(round(v, 6))
+    return vals
+
+
+def out(obj):
+    json.dump(obj, sys.stdout, indent=4)
+    sys.stdout.write("\n")
+    sys.exit(0)
+
+
+# ------------------------------------------------------------------ dispatch
+if SVC == "sts":
+    if SCEN == "badcreds":
+        fail("InvalidClientTokenId", "GetCallerIdentity", "The security token included in the request is invalid.")
+    out({"UserId": "AROAEXAMPLEID:manideep", "Account": ACCT,
+         "Arn": "arn:aws:sts::%s:assumed-role/DBA-ReadOnly/manideep" % ACCT})
+
+if SVC == "ec2" and OP == "describe-regions":
+    out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": s}
+                     for r, s in [("ap-south-1", "opt-in-not-required"), ("eu-west-1", "opt-in-not-required"),
+                                  ("us-east-1", "opt-in-not-required"), ("us-west-2", "opt-in-not-required")]]})
+
+if SVC == "ec2" and OP == "describe-instance-types":
+    bad = [t for t in o["--instance-types"] if t not in MEM]
+    if bad:
+        fail("InvalidInstanceType", "DescribeInstanceTypes", "The following supplied instance types do not exist: [%s]" % ", ".join(bad))
+    out({"InstanceTypes": [{"InstanceType": t, "CurrentGeneration": True, "MemoryInfo": {"SizeInMiB": MEM[t]}}
+                           for t in o["--instance-types"]]})
+
+if OP == "describe-db-clusters":
+    if SCEN == "apifail" and REGION == "eu-west-1":
+        fail("AccessDenied", OPNAME, "User: arn:aws:sts::%s:assumed-role/DBA-ReadOnly/manideep is not authorized to perform: "
+             "rds:DescribeDBClusters with an explicit deny in a service control policy" % ACCT)
+    f = parse_filters(o.get("--filters"))
+    cl = W["clusters"]
+    if "engine" in f:
+        cl = [c for c in cl if c["Engine"] in f["engine"]]
+    if "db-cluster-id" in f:
+        cl = [c for c in cl if c["DBClusterIdentifier"] in f["db-cluster-id"] or c["DBClusterArn"] in f["db-cluster-id"]]
+    out({"DBClusters": cl})
+
+if OP == "describe-db-instances":
+    if SCEN == "instfail":
+        fail("AccessDenied", OPNAME, "User: arn:aws:sts::%s:assumed-role/DBA-ReadOnly/manideep is not authorized to perform: "
+             "rds:DescribeDBInstances on resource: arn:aws:rds:%s:%s:db:* because no identity-based policy allows the "
+             "rds:DescribeDBInstances action" % (ACCT, REGION, ACCT))
+    f = parse_filters(o.get("--filters"))
+    out({"DBInstances": [x for x in W["instances"] if x["DBClusterIdentifier"] in f.get("db-cluster-id", [])]})
+
+if OP == "describe-pending-maintenance-actions":
+    if SCEN == "apifail":
+        fail("AccessDenied", OPNAME, "User: arn:aws:sts::%s:assumed-role/DBA-ReadOnly/manideep is not authorized to perform: "
+             "rds:DescribePendingMaintenanceActions" % ACCT)
+    out({"PendingMaintenanceActions": W["pma"]})
+
+if OP == "describe-certificates":
+    out({"DefaultCertificateForNewLaunches": "rds-ca-rsa2048-g1", "Certificates": [
+        {"CertificateIdentifier": cid, "CertificateType": "CA", "Thumbprint": hashlib.sha1(cid.encode()).hexdigest(),
+         "ValidFrom": vf, "ValidTill": vt, "CertificateArn": "arn:aws:rds:%s::cert:%s" % (REGION, cid), "CustomerOverride": False}
+        for cid, vf, vt in [("rds-ca-2019", "2019-09-19T18:16:53+00:00", "2024-08-22T17:08:50+00:00"),
+                            ("rds-ca-ecc384-g1", "2021-05-21T23:06:38+00:00", "2121-05-21T23:59:59+00:00"),
+                            ("rds-ca-rsa2048-g1", "2021-05-25T23:34:57+00:00", "2061-05-25T23:59:59+00:00"),
+                            ("rds-ca-rsa4096-g1", "2021-05-25T23:38:37+00:00", "2121-05-25T23:59:59+00:00")]]})
+
+if OP == "describe-db-engine-versions":
+    v = o["--engine-version"]
+    mi, ma = ENGINE_VERSIONS.get(v, ([], []))
+    tgt = [{"Engine": "aurora-postgresql", "EngineVersion": t, "Description": "Aurora PostgreSQL (Compatible with PostgreSQL %s)" % t,
+            "AutoUpgrade": False, "IsMajorVersionUpgrade": maj, "SupportedEngineModes": ["provisioned"],
+            "SupportsParallelQuery": False, "SupportsGlobalDatabases": True, "SupportsBabelfish": True,
+            "SupportsLimitlessDatabase": False, "SupportsLocalWriteForwarding": True, "SupportsIntegrations": False}
+           for t, maj in [(x, False) for x in mi] + [(x, True) for x in ma]]
+    out({"DBEngineVersions": [{"Engine": "aurora-postgresql", "MajorEngineVersion": v.split(".")[0], "EngineVersion": v,
+                               "DBParameterGroupFamily": "aurora-postgresql%s" % v.split(".")[0], "DBEngineDescription": "Aurora (PostgreSQL)",
+                               "DBEngineVersionDescription": "Aurora PostgreSQL (Compatible with PostgreSQL %s)" % v,
+                               "ValidUpgradeTarget": tgt, "ExportableLogTypes": ["instance", "postgresql"],
+                               "SupportsLogExportsToCloudwatchLogs": True, "SupportsReadReplica": False,
+                               "SupportedEngineModes": ["provisioned"], "Status": "available",
+                               "SupportsGlobalDatabases": True, "SupportsBabelfish": True}]})
+
+if OP == "describe-db-major-engine-versions":
+    m = o["--major-engine-version"]
+    end = STD_END.get(m, "2030-02-28")
+    y = int(end[:4]) + 3
+    out({"DBMajorEngineVersions": [{"Engine": "aurora-postgresql", "MajorEngineVersion": m, "SupportedEngineLifecycles": [
+        {"LifecycleSupportName": "open-source-rds-standard-support", "LifecycleSupportStartDate": "2021-08-26T00:00:00+00:00",
+         "LifecycleSupportEndDate": end + "T23:59:59+00:00"},
+        {"LifecycleSupportName": "open-source-rds-extended-support", "LifecycleSupportStartDate": end + "T23:59:59+00:00",
+         "LifecycleSupportEndDate": "%d%sT23:59:59+00:00" % (y, end[4:])}]}]})
+
+if OP == "describe-db-cluster-snapshots":
+    cid = o["--db-cluster-identifier"]
+    c = next((x for x in W["clusters"] if x["DBClusterIdentifier"] == cid), None)
+    snaps = []
+    if c:
+        def snap(sid, typ, t):
+            return {"AvailabilityZones": c["AvailabilityZones"], "DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": cid,
+                    "SnapshotCreateTime": iso(t), "Engine": "aurora-postgresql", "EngineMode": "provisioned", "AllocatedStorage": 0,
+                    "Status": "available", "Port": 0, "VpcId": "vpc-0abc", "ClusterCreateTime": c["ClusterCreateTime"],
+                    "MasterUsername": "postgres", "EngineVersion": c["EngineVersion"], "LicenseModel": "postgresql-license",
+                    "SnapshotType": typ, "PercentProgress": 100, "StorageEncrypted": True, "KmsKeyId": c["KmsKeyId"],
+                    "DBClusterSnapshotArn": arn("cluster-snapshot", sid), "IAMDatabaseAuthenticationEnabled": True,
+                    "TagList": [], "StorageType": "aurora", "DbClusterResourceId": c["DbClusterResourceId"]}
+        first = 6 if SCEN != "issues" else 30   # issues: newest automated snapshot is 30h old
+        for d in range(c["BackupRetentionPeriod"]):
+            t = ago(hours=first + 24 * d)
+            snaps.append(snap("rds:%s-%s" % (cid, t.strftime("%Y-%m-%d-%H-%M")), "automated", t))
+        snaps.append(snap("%s-pre-upgrade" % cid, "manual", ago(days=45)))
+        snaps.append(snap("%s-before-release-42" % cid, "manual", ago(days=9)))
+    out({"DBClusterSnapshots": snaps})
+
+if OP == "describe-events":
+    st = o["--source-type"]
+    out({"Events": [e for e in W["events"] if e["SourceType"] == st]})
+
+if OP == "describe-db-parameters":
+    pg = o["--db-parameter-group-name"]
+    params = W["params"].get(pg) or [{"ParameterName": "max_connections", "ParameterValue": "LEAST({DBInstanceClassMemory/9531392},5000)",
+                                     "Description": "Sets the maximum number of concurrent connections.", "Source": "engine-default",
+                                     "ApplyType": "static", "DataType": "integer", "AllowedValues": "6-262143",
+                                     "IsModifiable": True, "ApplyMethod": "pending-reboot"}]
+    q = g.get("--query", "")
+    if q == "Parameters[?ParameterName=='max_connections']":
+        out([p for p in params if p["ParameterName"] == "max_connections"])
+    out({"Parameters": params})
+
+if OP == "get-metric-data":
+    if SCEN == "apifail":
+        fail("Throttling", "GetMetricData", "Rate exceeded")
+    path = o["--metric-data-queries"]
+    if not path.startswith("file://"):
+        sys.stderr.write("mock: expected file:// queries\n"); sys.exit(252)
+    qs = json.load(open(path[7:]))
+    if os.environ.get("MOCK_CAPTURE"):
+        os.makedirs(os.environ["MOCK_CAPTURE"], exist_ok=True)
+        shutil.copy(path[7:], os.path.join(os.environ["MOCK_CAPTURE"], os.path.basename(path[7:])))
+    if len(qs) > 500:
+        fail("ValidationError", "GetMetricData", "The collection MetricDataQueries must not have a size greater than 500.", 254)
+    start = datetime.fromisoformat(o["--start-time"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(o["--end-time"].replace("Z", "+00:00"))
+    res = []
+    for q in qs:
+        assert q["Id"][0].islower(), q["Id"]
+        ms = q["MetricStat"]; per = ms["Period"]
+        tgt = ms["Metric"]["Dimensions"][0]["Value"]; name = ms["Metric"]["MetricName"]
+        t0 = datetime.fromtimestamp((int(start.timestamp()) // per + 1) * per, timezone.utc)
+        ts = []
+        while t0 < end:
+            ts.append(t0); t0 += timedelta(seconds=per)
+        vals = series(tgt, name, len(ts))
+        if SCEN == "fleet" and name in ("ReplicationSlotDiskUsage", "OldestReplicationSlotLag") and tgt.startswith("payments"):
+            ts, vals = [], []   # no data for this metric
+        r = {"Id": q["Id"], "Label": q.get("Label", name), "Timestamps": [iso(t, False) for t in ts], "Values": vals, "StatusCode": "Complete"}
+        if SCEN == "metrics" and len(ts) > 4:   # simulate CLI auto-pagination splitting a result into two entries
+            h = len(ts) // 2
+            res.append(dict(r, Timestamps=r["Timestamps"][:h], Values=vals[:h]))
+            res.append(dict(r, Timestamps=r["Timestamps"][h:], Values=vals[h:]))
+        else:
+            res.append(r)
+    out({"MetricDataResults": res, "Messages": []})
+
+sys.stderr.write("mock: unhandled %s %s\n" % (SVC, OP)); sys.exit(252)
