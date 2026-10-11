@@ -62,7 +62,7 @@ HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
 t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'apply-pending-maintenance-action|read-only|READ-ONLY'
-t version 0 fleet --version;           has version out '1\.0\.0'
+t version 0 fleet --version;           has version out '1\.1\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -123,6 +123,34 @@ jqt fleet_json '[.rows[] | select(.identifier == "crm-sql-prod")] | length == 2'
 jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "os-upgrade") | .urgency == "INFO"'
 jqt fleet_json '.rows[] | select(.identifier == "cms-mariadb") | .tag_columns == {"Environment":"staging","Owner":"web-team","Application":"cms"}'
 
+echo "== apply / undo commands (printed only)"
+jqt fleet_json '.meta.apply_opt_in == "next-maintenance"'
+jqt fleet_json 'all(.rows[] | select(.apply_command != ""); .apply_command | test("^aws (rds|docdb|neptune) apply-pending-maintenance-action --resource-identifier arn:aws:rds:[a-z0-9-]+:[0-9]{12}:(db|cluster):[a-z0-9-]+ --apply-action [a-z-]+ --opt-in-type next-maintenance --region [a-z0-9-]+ --profile (prod|nonprod)$"))'
+jqt fleet_json 'all(.rows[] | select(.undo_command != ""); .undo_command | test("--opt-in-type undo-opt-in "))'
+jqt fleet_json '[.rows[] | select(.apply_command != "")] | length == 13'
+jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "system-update") | .apply_command == "aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod"'
+jqt fleet_json '.rows[] | select(.identifier == "old-replica-2023") | .apply_command == "" and .undo_command == "" and (.apply_note | test("not found"))'
+jqt fleet_json '.rows[] | select(.identifier == "qa-sql") | .apply_command == "" and (.apply_note | test("immediate"))'
+jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | (.apply_command | length > 0) and (.apply_note | test("already opted in"))'
+jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | .apply_command | startswith("aws neptune ")'
+t imm 11 fleet -P prod -r us-east-1 --include-docdb --apply-opt-in Immediate -F json
+jqt imm '.meta.apply_opt_in == "immediate" and all(.rows[] | select(.apply_command != ""); .apply_command | test("--opt-in-type immediate "))'
+jqt imm '.rows[] | select(.identifier == "catalog-docdb") | (.apply_command | startswith("aws docdb ")) and (.apply_note | test("restart"))'
+jqt imm '[.rows[] | select(.identifier == "catalog-docdb-1")][0].apply_command | startswith("aws docdb ")'
+t badapplyopt 1 fleet -r us-east-1 --apply-opt-in undo-opt-in
+MOCK_DEFAULT_REGION=us-east-1 t defprofile 11 fleet -F json
+jqt defprofile 'all(.rows[] | select(.apply_command != ""); (.apply_command | test("--profile") | not) and (.apply_command | endswith("--region us-east-1")))'
+t textcmd 11 fleet -P prod -r us-east-1
+has textcmd out '^         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 '
+has textcmd out 'printed only \(never run\)'
+printf 'region = us-east-1\nprofiles = prod\napply_opt_in = immediate\n' >"$OUT/ao.conf"
+t confapply 11 fleet --config "$OUT/ao.conf" -F csv;  has confapply out 'opt-in-type immediate --region us-east-1 --profile prod"'
+chk "sq quoting round-trips through the shell" bash -c '
+  for x in "plain" "it'"'"'s" "a b\$c\`d" "x;rm -rf /tmp/zz" "*"; do
+    q="$(jq -rn --arg x "$x" -f <(sed -n "/^def sq:/p" "'"$HERE"'/../lib/report.jq"; echo "\$x | sq"))"
+    eval "set -- $q"; [[ $# -eq 1 && "$1" == "$x" ]] || exit 1
+  done'
+
 echo "== thresholds / time zone"
 t thr 10 fleet -P prod -r ap-south-1 -F json --crit-days 1 --warn-days 7
 jqt thr '[.rows[] | select(.identifier == "erp-oracle-prod")][0].urgency == "WARN"'
@@ -182,12 +210,13 @@ t files 11 fleet "${ALL3[@]}" -F csv,html,json,text -o "$OUT/rep" --prefix pm
 n="$(find "$OUT/rep" -name 'pm_[0-9]*_[0-9]*.*' | wc -l)"; chk "4 timestamped files ($n)" test "$n" -eq 4
 f="$(find "$OUT/rep" -name 'pm_*.csv')"
 chk "file mode 0640" test "$(stat -c %a "$f")" = 640
-chk "csv parses: 16 lines, 27 columns" python3 -c "
-import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==27 for x in r)))"
-chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn"$' "$f"
+chk "csv parses: 16 lines, 30 columns" python3 -c "
+import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==30 for x in r)))"
+chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn","apply_command","undo_command","apply_note"$' "$f"
 h="$(find "$OUT/rep" -name 'pm_*.html')"
 chk "html: cards + sortable table + IST + UTC" bash -c "grep -q 'OVERDUE' '$h' && grep -q 'data-s=' '$h' && grep -q 'IST' '$h' && grep -q 'UTC' '$h' && grep -q '<script>' '$h'"
 chk "html: no external resources" bash -c "! grep -Eq '(src|href)=\"https?://' '$h'"
+chk "html: apply command cell with copy button" bash -c "grep -q '<button class=\"cp\"' '$h' && grep -q 'navigator.clipboard' '$h' && grep -q 'undo opt-in' '$h' && grep -q '<code>aws rds apply-pending-maintenance-action' '$h'"
 chk "html parses" python3 -c "import html.parser,sys; html.parser.HTMLParser().feed(open('$h').read())"
 chk "json file valid" jq -e '.summary.total == 15' "$(find "$OUT/rep" -name 'pm_*.json')"
 t stdout_csv 11 fleet -P prod -r us-east-1 -F csv;  has stdout_csv out '^"account_id"'

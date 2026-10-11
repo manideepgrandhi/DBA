@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -40,6 +40,7 @@ PREFIX="rds_pending_maintenance"
 DISPLAY_TZ="Asia/Kolkata"
 CRIT_DAYS=7
 WARN_DAYS=30
+APPLY_OPT_IN="next-maintenance"
 LOG_FILE=""
 CONFIG_FILE=""
 AWS_TIMEOUT=30
@@ -105,6 +106,9 @@ Report:
       --tz ZONE             Second time zone shown next to UTC (default: Asia/Kolkata)
       --crit-days N         Apply date within N days = CRIT (default: 7; past date = OVERDUE)
       --warn-days N         Apply date within N days = WARN (default: 30; later = INFO, no date = OPTIONAL)
+      --apply-opt-in TYPE   Opt-in type used in the printed apply_command column: next-maintenance | immediate
+                            (default: next-maintenance; immediate may restart / fail over the DB).
+                            Commands are only PRINTED, never run. undo_command always uses undo-opt-in
   -l, --log-file FILE       Append log lines to FILE
 
 Alerts:
@@ -179,6 +183,7 @@ load_config() {
             tz)                     DISPLAY_TZ="$val" ;;
             crit_days)              CRIT_DAYS="$val" ;;
             warn_days)              WARN_DAYS="$val" ;;
+            apply_opt_in)           APPLY_OPT_IN="$val" ;;
             log_file)               LOG_FILE="$val" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
             max_attempts)           MAX_ATTEMPTS="$val" ;;
@@ -227,6 +232,7 @@ parse_args() {
             --tz)               need_arg "$opt" $#; DISPLAY_TZ="$2"; shift 2 ;;
             --crit-days)        need_arg "$opt" $#; CRIT_DAYS="$2"; shift 2 ;;
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
+            --apply-opt-in)     need_arg "$opt" $#; APPLY_OPT_IN="$2"; shift 2 ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --config)           shift 2 ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
@@ -264,6 +270,8 @@ validate() {
     for x in "${TAG_FILTERS[@]}"; do [[ "$x" =~ ^[^=]+=.*$ ]] || die 1 "--tag must be KEY=VALUE (got '$x')"; done
     for x in "${URGENCY[@]}"; do case "${x^^}" in OVERDUE|CRIT|WARN|INFO|OPTIONAL) ;; *) die 1 "Unknown urgency '$x'" ;; esac; done
     mapfile -t URGENCY < <(for x in "${URGENCY[@]}"; do echo "${x^^}"; done)
+    case "${APPLY_OPT_IN,,}" in immediate|next-maintenance) APPLY_OPT_IN="${APPLY_OPT_IN,,}" ;;
+        *) die 1 "--apply-opt-in must be next-maintenance or immediate (undo-opt-in is always in undo_command)" ;; esac
     [[ "$CRIT_DAYS" =~ ^[0-9]+$ && "$WARN_DAYS" =~ ^[0-9]+$ ]] || die 1 "--crit-days/--warn-days must be whole numbers"
     (( CRIT_DAYS <= WARN_DAYS )) || die 1 "--crit-days must be <= --warn-days"
     [[ -e "/usr/share/zoneinfo/$DISPLAY_TZ" || "$DISPLAY_TZ" == UTC ]] || die 1 "Unknown time zone: $DISPLAY_TZ"
@@ -304,7 +312,7 @@ filters_text() {
 rjq() {   # rjq <mode> [extra jq args...]
     local mode="$1"; shift
     TZ="$DISPLAY_TZ" jq --arg mode "$mode" --argjson now "$NOW" --argjson crit_days "$CRIT_DAYS" --argjson warn_days "$WARN_DAYS" \
-        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" -f "$LIB" "$@"
+        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" --arg apply_opt "$APPLY_OPT_IN" -f "$LIB" "$@"
 }
 
 # ----------------------------------------------------------------------------
@@ -447,10 +455,10 @@ build_report() {
         --arg tz "$DISPLAY_TZ" --arg tza "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Z')" --arg host "$(hostname 2>/dev/null || echo unknown)" \
         --argjson accounts "$(if (( ${#ACCOUNTS_JSON[@]} )); then printf '%s\n' "${ACCOUNTS_JSON[@]}" | jq -cs .; else echo '[]'; fi)" \
         --argjson regions "$(json_array "${ALL_REGIONS_SEEN[@]}" | jq -c 'unique')" --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" \
-        --argjson crit "$CRIT_DAYS" --argjson warn "$WARN_DAYS" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
+        --argjson crit "$CRIT_DAYS" --argjson warn "$WARN_DAYS" --arg ao "$APPLY_OPT_IN" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
         --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" \
         '{script: $script, version: $version, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tza, host: $host,
-          accounts: $accounts, regions: $regions, tag_columns: $tagcols, crit_days: $crit, warn_days: $warn,
+          accounts: $accounts, regions: $regions, tag_columns: $tagcols, crit_days: $crit, warn_days: $warn, apply_opt_in: $ao,
           filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails}')"
     REPORT="$WORK/report.json"
     jq -n --argjson meta "$meta" --argjson rows "$rows" --argjson errors "$errors" '{meta: $meta, rows: $rows, errors: $errors}' \

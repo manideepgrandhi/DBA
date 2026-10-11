@@ -72,6 +72,26 @@ def rows:
           maint_window_utc: ($mw // ""), next_window_start: ($nw.start // null), next_window_end: ($nw.end // null),
           arn: $r.ResourceIdentifier } ];
 
+# ------------------------------------------------------------------ apply / undo commands (printed only, never run)
+# POSIX shell quoting: plain if only safe characters, else single-quoted with ' -> '\''
+def sq: tostring | if test("^[A-Za-z0-9_./:=@,+%-]+$") then . else "'" + gsub("'"; "'\\''") + "'" end;
+def cli_service: if .source == "docdb" or .engine == "docdb" then "docdb" elif .engine == "neptune" then "neptune" else "rds" end;
+def pma_cmd($type):
+  (["aws", cli_service, "apply-pending-maintenance-action", "--resource-identifier", .arn, "--apply-action", .action, "--opt-in-type", $type]
+   + (if (.region // "") != "" then ["--region", .region] else [] end)
+   + (if (.profile // "") != "" and .profile != "default" then ["--profile", .profile] else [] end))
+  | map(sq) | join(" ");
+def commands:
+  if .resolved | not then {apply_command: "", undo_command: "",
+       apply_note: "resource not found by describe-db-instances/clusters (deleted or renamed?) - verify before applying"}
+  elif (.action // "") == "" or (.arn // "") == "" then {apply_command: "", undo_command: "", apply_note: "no action/ARN reported"}
+  elif .opt_in_status == "immediate" then {apply_command: "", undo_command: "",
+       apply_note: "already opted in (immediate): being applied now, cannot be changed or undone"}
+  else {apply_command: pma_cmd($apply_opt), undo_command: pma_cmd("undo-opt-in"),
+        apply_note: ( if .opt_in_status == $apply_opt then "already opted in (\(.opt_in_status)); command not needed"
+                      elif $apply_opt == "immediate" then "applies as soon as possible - may restart/fail over; check impact first"
+                      else "" end )} end;
+
 # ------------------------------------------------------------------ mode: finalize
 def decorate:
   . + { auto_applied_after_utc: (.auto_applied_after | fu), forced_apply_utc: (.forced_apply | fu),
@@ -79,7 +99,8 @@ def decorate:
         effective_apply_local: (.effective_apply | fl),
         maint_window_local: (if .next_window_start then (.next_window_start | strflocaltime("%a %H:%M")) + "-"
                              + (.next_window_end | strflocaltime("%a %H:%M %Z")) else "" end),
-        next_window_local: (.next_window_start | fl) };
+        next_window_local: (.next_window_start | fl) }
+  | . + commands;
 def counts(f): group_by(f) | map({key: (.[0] | f), value: length}) | sort_by(-.value) | from_entries;
 def finalize:
   . as $r
@@ -118,7 +139,10 @@ def text:
                  + (.account | pad(13)) + (.region | pad(15)) + (.resource_type | pad(9))
                  + ((.identifier + (if .cluster != "" then " (\(.cluster))" else "" end)) | cut(29) | pad(30))
                  + ("\(.engine) \(.engine_version)" | cut(23) | pad(24)) + (.action | pad(24)) + ((.opt_in_status | if . == "" then "-" else . end) | pad(17))
-                 + ([.tag_columns[]] | map(cut(12) | pad(13)) | join("")) ) ) end ),
+                 + ([.tag_columns[]] | map(cut(12) | pad(13)) | join(""))
+                 + "\n         apply: " + (if .apply_command != "" then .apply_command else "-" end)
+                 + (if .apply_note != "" then "\n         note : " + .apply_note else "" end) ) ) end ),
+      (if ($r.rows | length) > 0 then "", "Apply commands use --opt-in-type \($r.meta.apply_opt_in) and are printed only (never run). Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command)." else empty end),
       "",
       "SUMMARY: \($r.summary.total) pending action(s) on \($r.summary.resources) resource(s)"
         + (if $r.summary.unfiltered_total != $r.summary.total then " (\($r.summary.unfiltered_total) before filters)" else "" end),
@@ -138,13 +162,13 @@ def csv:
    + (.meta.tag_columns | map("tag:" + .))
    + ["action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc",
       "effective_apply_utc","effective_apply_\(.meta.tz_abbr | ascii_downcase)","days_until","urgency",
-      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn"]) as $h
+      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn","apply_command","undo_command","apply_note"]) as $h
   | ($h | @csv),
     (.rows[] | ([.account, .profile, .region, .resource_type, .identifier, .cluster, .engine, .engine_version, .instance_class]
                + [.tag_columns[]]
                + [.action, .description, .opt_in_status, .auto_applied_after_utc, .forced_apply_utc, .current_apply_utc,
                   .effective_apply_utc, .effective_apply_local, .days_until, .urgency, .maint_window_utc, .maint_window_local,
-                  .next_window_local, .source, .arn]) | @csv);
+                  .next_window_local, .source, .arn, .apply_command, .undo_command, .apply_note]) | @csv);
 
 def h: tostring | @html;
 def two($e): if $e == null then "<span class=\"muted\">-</span>" else "\($e | fu | h)<br><span class=\"muted\">\($e | fl | h)</span>" end;
@@ -172,6 +196,9 @@ def html:
   + ".u-OVERDUE{background:#7b1fa2}.u-CRIT{background:#d32f2f}.u-WARN{background:#f57c00}.u-INFO{background:#1976d2}.u-OPTIONAL{background:#78909c}"
   + "tr.r-OVERDUE td:first-child{border-left:4px solid #7b1fa2}tr.r-CRIT td:first-child{border-left:4px solid #d32f2f}tr.r-WARN td:first-child{border-left:4px solid #f57c00}"
   + ".errors{background:#fff3e0;border:1px solid #ffb74d;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px}"
+  + ".cmd{display:flex;gap:6px;align-items:flex-start;min-width:420px}.cmd code{font-family:SFMono-Regular,Consolas,Menlo,monospace;font-size:11.5px;background:#f1f3f6;border:1px solid #dde2e8;border-radius:4px;padding:4px 6px;white-space:pre-wrap;word-break:break-all;flex:1}"
+  + ".cp{font-size:11px;padding:3px 8px;border:1px solid #8792a2;border-radius:4px;background:#fff;cursor:pointer;white-space:nowrap}.cp:hover{background:#e9edf2}.cp.ok{background:#2e7d32;color:#fff;border-color:#2e7d32}"
+  + "details{margin-top:4px}details summary{cursor:pointer;color:#52606d;font-size:11.5px}.note{color:#8d6e63;font-size:11.5px;margin-top:3px}"
   + "footer{padding:14px 28px;color:#7b8794;font-size:12px}</style></head><body>\n"
   + "<header><h1>RDS pending maintenance report</h1><p>Generated \($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts: "
   + ($r.meta.accounts | map("\(.account) (\(.profile))") | join(", ") | h) + " &middot; regions: \($r.meta.regions | join(", ") | h)"
@@ -186,7 +213,7 @@ def html:
   + minitable("By region"; $r.summary.by_region) + minitable("By account"; $r.summary.by_account) + "</div>\n"
   + "<input id=\"q\" type=\"search\" placeholder=\"Filter rows (any text)...\">\n<table class=\"main\" id=\"t\"><thead><tr>"
   + (["Urgency", "Days", "Apply (UTC / \($r.meta.tz_abbr))", "Account", "Region", "Type", "Identifier", "Cluster", "Engine", "Class"]
-     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))"]
+     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))", "Apply command (\($r.meta.apply_opt_in))"]
      | map("<th>\(h)</th>") | join(""))
   + "</tr></thead><tbody>\n"
   + ( $r.rows | map(
@@ -200,14 +227,23 @@ def html:
         + "<td><b>\(.action | h)</b></td><td>\(.description | h)</td><td>\(.opt_in_status | h)</td>"
         + "<td data-s=\"\(.auto_applied_after // 9999999999)\">\(two(.auto_applied_after))</td>"
         + "<td data-s=\"\(.forced_apply // 9999999999)\">\(two(.forced_apply))</td>"
-        + "<td>\(.maint_window_utc | h)<br><span class=\"muted\">\(.maint_window_local | h)</span></td></tr>") | join("\n") )
+        + "<td>\(.maint_window_utc | h)<br><span class=\"muted\">\(.maint_window_local | h)</span></td>"
+        + "<td>" + (if .apply_command == "" then "<span class=\"muted\">-</span>"
+                    else "<div class=\"cmd\"><code>\(.apply_command | h)</code><button class=\"cp\" type=\"button\" title=\"Copy to clipboard\">Copy</button></div>"
+                       + "<details><summary>undo opt-in</summary><div class=\"cmd\"><code>\(.undo_command | h)</code><button class=\"cp\" type=\"button\" title=\"Copy to clipboard\">Copy</button></div></details>" end)
+        + (if .apply_note != "" then "<div class=\"note\">\(.apply_note | h)</div>" else "" end) + "</td></tr>") | join("\n") )
   + (if ($r.rows | length) == 0 then "<tr><td colspan=\"30\" style=\"padding:18px;text-align:center\">No pending maintenance actions found.</td></tr>" else "" end)
-  + "\n</tbody></table>\n</main>\n<footer>\($r.meta.script | h) v\($r.meta.version | h) on \($r.meta.host | h) &middot; urgency: OVERDUE = apply date passed, CRIT &le; \($r.meta.crit_days)d, WARN &le; \($r.meta.warn_days)d, INFO later, OPTIONAL = no date &middot; read-only report, nothing was changed &middot; exit \($r.summary.exit_code)</footer>\n"
+  + "\n</tbody></table>\n</main>\n<footer>\($r.meta.script | h) v\($r.meta.version | h) on \($r.meta.host | h) &middot; urgency: OVERDUE = apply date passed, CRIT &le; \($r.meta.crit_days)d, WARN &le; \($r.meta.warn_days)d, INFO later, OPTIONAL = no date &middot; read-only report, nothing was changed; apply commands are printed only - check the maintenance window and impact first (immediate may restart / fail over the DB) &middot; exit \($r.summary.exit_code)</footer>\n"
   + "<script>(function(){var t=document.getElementById('t'),b=t.tBodies[0],dir={};"
   + "t.tHead.addEventListener('click',function(e){var th=e.target.closest('th');if(!th)return;var i=th.cellIndex;dir[i]=!dir[i];"
   + "var rows=Array.prototype.slice.call(b.rows);rows.sort(function(x,y){var a=x.cells[i],c=y.cells[i];if(!a||!c)return 0;"
   + "var va=a.getAttribute('data-s'),vb=c.getAttribute('data-s');var r;if(va!==null&&vb!==null){r=parseFloat(va)-parseFloat(vb);}"
   + "else{r=a.textContent.localeCompare(c.textContent);}return dir[i]?r:-r;});rows.forEach(function(r){b.appendChild(r);});});"
+  + "b.addEventListener('click',function(e){var bt=e.target.closest('.cp');if(!bt)return;var txt=bt.previousElementSibling.textContent;"
+  + "var done=function(){bt.textContent='Copied';bt.classList.add('ok');setTimeout(function(){bt.textContent='Copy';bt.classList.remove('ok');},1500);};"
+  + "var fb=function(){var ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();"
+  + "try{document.execCommand('copy');done();}catch(x){}document.body.removeChild(ta);};"
+  + "if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(txt).then(done,fb);}else{fb();}});"
   + "document.getElementById('q').addEventListener('input',function(){var q=this.value.toLowerCase();"
   + "Array.prototype.forEach.call(b.rows,function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?'':'none';});});})();</script>\n"
   + "</body></html>";
@@ -216,7 +252,7 @@ def alert:
   {status: .summary.overall, exit_code: .summary.exit_code, generated_utc: .meta.generated_utc, generated_local: .meta.generated_local,
    accounts: .meta.accounts, regions: .meta.regions, summary: .summary,
    urgent: [.rows[] | select(.severity == "CRIT") | {account, region, resource_type, identifier, cluster, engine, action, urgency,
-            days_until, effective_apply_utc, effective_apply_local, opt_in_status}],
+            days_until, effective_apply_utc, effective_apply_local, opt_in_status, apply_command, apply_note}],
    errors: .errors};
 
 if $mode == "rows" then rows elif $mode == "finalize" then finalize elif $mode == "text" then text

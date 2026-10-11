@@ -24,7 +24,7 @@ done
 jq -c 'select(.[0] != "--version" and .[0] != "configure")' "$MOCK_LOG" | sort -u >"$OUT/uniq.jsonl"
 echo "distinct command lines: $(wc -l <"$OUT/uniq.jsonl")"
 
-export AWS_ACCESS_KEY_ID=AKIAFAKEFAKEFAKEFAKE AWS_SECRET_ACCESS_KEY=fake AWS_MAX_ATTEMPTS=1 AWS_CONFIG_FILE=/dev/null \
+export AWS_ACCESS_KEY_ID=fake-test-key-id AWS_SECRET_ACCESS_KEY=fake-test-secret AWS_MAX_ATTEMPTS=1 AWS_CONFIG_FILE=/dev/null \
        AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
 pass=0; fail=0
 run_real() {   # run_real <argv...>  -> sets OUTP, RC
@@ -87,4 +87,48 @@ for spec in "rds describe-pending-maintenance-actions" "docdb describe-pending-m
     else echo "SHAPE MISMATCH $cmd: $missing"; fail=$((fail + 1)); fi
 done
 echo "mock response shapes matching CLI skeleton: $shape_ok/6"
+
+# 4. the printed apply_command / undo_command strings (never run by the report) must be accepted by
+#    the real CLI: every action type x both --apply-opt-in values, rds + docdb + neptune
+: >"$OUT/cmds.txt"
+for ao in next-maintenance immediate; do
+    MOCK_SCENARIO=fleet PATH="$HERE/mock:$PATH" "$S" -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1 --include-docdb \
+        --apply-opt-in "$ao" -F json 2>/dev/null | jq -r '.rows[] | .apply_command, .undo_command | select(. != "")' >>"$OUT/cmds.txt"
+done
+sort -u -o "$OUT/cmds.txt" "$OUT/cmds.txt"
+cpass=0; cfail=0; declare -A combo=()
+while IFS= read -r cmd; do
+    eval "set -- $cmd"                       # same word splitting / quote removal as a user's shell
+    [[ "$1" == aws ]] || { echo "BAD COMMAND: $cmd"; cfail=$((cfail + 1)); continue; }
+    shift
+    svc="$1"; act=""; opt=""; prev=""
+    for w in "$@"; do
+        [[ "$prev" == --apply-action ]] && act="$w"; [[ "$prev" == --opt-in-type ]] && opt="$w"; prev="$w"
+    done
+    run_real --output json "$@"
+    if [[ "$OUTP" == *"Could not connect to the endpoint URL"* ]]; then cpass=$((cpass + 1)); combo["$svc $act $opt"]=1
+    else cfail=$((cfail + 1)); echo "FAIL ($RC): $cmd :: ${OUTP:0:300}"; fi
+done <"$OUT/cmds.txt"
+echo "printed apply/undo commands accepted by real CLI: $cpass, rejected: $cfail"
+for act in system-update db-upgrade os-upgrade hardware-maintenance ca-certificate-rotation; do
+    for opt in next-maintenance immediate undo-opt-in; do
+        printf '%s\n' "${!combo[@]}" | grep -qE "^rds $act $opt$" || { echo "MISSING rds $act $opt"; cfail=$((cfail + 1)); }
+    done
+done
+for svc in docdb neptune; do
+    for opt in next-maintenance immediate undo-opt-in; do
+        printf '%s\n' "${!combo[@]}" | grep -qE "^$svc [a-z-]+ $opt$" || { echo "MISSING $svc $opt"; cfail=$((cfail + 1)); }
+    done
+done
+echo "coverage: $(printf '%s\n' "${!combo[@]}" | sort | paste -sd';' -)"
+# negative control for the printed form: a misspelled option and a missing ARN must be rejected client-side
+# (note: --opt-in-type is a free string for the CLI; invalid values are only rejected by the service)
+neg2=0
+run_real --output json --region us-east-1 rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:x --apply-actoin system-update --opt-in-type immediate
+[[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))
+run_real --output json --region us-east-1 docdb apply-pending-maintenance-action --apply-action system-update --opt-in-type immediate
+[[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))
+echo "apply-command negative control rejected: $neg2/2"
+(( neg2 == 2 )) || fail=$((fail + 1))
+fail=$((fail + cfail))
 (( fail == 0 ))

@@ -58,6 +58,11 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
 | `next_window_ist` | Start of the next maintenance window |
 | `source` | `rds` or `docdb` (which API reported it) |
 | `arn` | Resource ARN (use it with `apply-pending-maintenance-action`) |
+| `apply_command` | Copy-pasteable `aws rds\|docdb\|neptune apply-pending-maintenance-action ...` for this row, using `--apply-opt-in` (default `next-maintenance`). **Printed only, never run.** Empty when applying makes no sense; see `apply_note` |
+| `undo_command` | The same command with `--opt-in-type undo-opt-in`, which withdraws a `next-maintenance` opt-in |
+| `apply_note` | Why a command is empty, or a caution, e.g. "resource not found ... verify before applying", "already opted in (immediate) ...", "already opted in (next-maintenance); command not needed" |
+
+In the text format, each row is followed by an indented `apply:` line and, when there is one, a `note:` line. In HTML, the command is shown in a monospace cell with a **Copy** button, and the undo command is in a collapsible "undo opt-in" section.
 
 The IST column names follow `--tz`; for example `--tz UTC` gives `effective_apply_utc` twice. The JSON output also has `effective_basis`, epoch values, the full `tags` map, `resolved` and the summary.
 
@@ -94,6 +99,29 @@ The order of precedence is 11 > 3 > 10 > 0. A CRIT finding is never masked by a 
 | `ca-certificate-rotation` | Rotate the server certificate to a new CA (e.g. to `rds-ca-rsa2048-g1`) | DB restart. **Clients that verify TLS must trust the new CA bundle first** |
 
 Optional actions (no dates) are applied only when you choose. Required actions are applied automatically in your maintenance window after `AutoAppliedAfterDate`, and unconditionally on `ForcedApplyDate`.
+
+### The `apply_command` column (printed, never executed)
+
+Every row gets the exact command to apply that action, for example:
+
+```
+aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+```
+
+* **Opt-in type:** `--apply-opt-in next-maintenance` (default) or `--apply-opt-in immediate`; config key `apply_opt_in`. `next-maintenance` is the default because it keeps the change inside the resource's maintenance window. `undo_command` always uses `undo-opt-in`.
+* **Service:** `aws docdb` for DocumentDB rows (engine `docdb` or rows from `--include-docdb`), `aws neptune` for Neptune, `aws rds` for everything else. All three accept the same RDS ARN.
+* **Region and profile:** `--region` is always included. `--profile` is included only when the report ran with `-P`; with the default credential chain it is left out.
+* **Quoting:** arguments are shell-quoted (single quotes) whenever they contain anything other than `A-Z a-z 0-9 _ . / : = @ , + % -`. Real ARNs and action names never need it.
+* **When the cell is empty:**
+  * the ARN did not resolve, e.g. a deleted or renamed resource ("verify before applying");
+  * the action is already opted in `immediate` (it cannot be changed or undone).
+* **Already opted in:** if the action is already opted in with the same type, the command is still shown, with a note that it is not needed.
+* The script stays **read-only**. It builds these strings with jq and never executes them. The test suite checks that only `describe-*`/`get-*` operations are ever called.
+
+> **Before running an `immediate` command:**
+> * `immediate` starts the maintenance as soon as possible, outside your maintenance window. It **may restart the instance or fail over** a Multi-AZ instance or cluster. It **cannot be undone**.
+> * Check the maintenance window (`maint_window_*` columns), the impact of the action type (table above) and the application's tolerance for a restart first.
+> * Prefer `next-maintenance` unless you have a change window right now.
 
 ### Apply or defer with the CLI (this script never runs these)
 
@@ -171,15 +199,16 @@ CRON_TZ=Asia/Kolkata
 
 ## Tests
 
-* `tests/run_tests.sh`: 159 checks against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
-* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`.
+* `tests/run_tests.sh`: 182 checks against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
+* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`. It also runs every printed `apply_command`/`undo_command` through the real CLI: all five action types × `next-maintenance`/`immediate`/`undo-opt-in` for rds, plus docdb and neptune.
 
-Samples from the mock fleet are in `samples/`, and there is a screenshot of the HTML report at `sample_report.png`.
+Samples from the mock fleet are in `samples/`, with screenshots of the HTML report at `sample_report.png` (full report) and `sample_report_apply_cmd.png` (apply-command column with Copy buttons).
 
 ## Caveats
 
 * Verified against a mock built from CLI skeleton output and the AWS documentation, **not against a live account**. Run it once with `-v --keep-workdir` in a real account to confirm the raw responses look as expected.
 * `AutoAppliedAfterDate` means "applied in the first maintenance window *after* this date". The report uses the date itself as the effective date, which is the earliest possible moment. `next_window_ist` shows the next window to help with planning.
 * Whether `rds describe-pending-maintenance-actions` returns DocumentDB/Neptune resources can vary. `--include-docdb` queries the DocumentDB API explicitly; duplicates are removed.
+* `--opt-in-type` is a free string to the CLI, so the CLI accepts any value; only the service validates it. The printed commands only ever use `immediate`, `next-maintenance` or `undo-opt-in`. The commands were checked for syntax against CLI 2.37.12, but have not been run against AWS.
 * `OptInStatus` values are shown as AWS returns them. Only `immediate` and `next-maintenance` change the effective date.
 * Maintenance windows and dates are UTC in AWS; the second time zone is display only.

@@ -1,6 +1,6 @@
 # rds_pending_maintenance_report.sh: examples
 
-All output below comes from the mock fleet in `tests/mock/aws`. Dates are relative to the run time (2026-10-11 08:18 IST).
+All output below comes from the mock fleet in `tests/mock/aws`. Dates are relative to the run time (2026-10-11 09:04 IST).
 
 ## 1. One account, default region, text to the terminal
 
@@ -16,17 +16,24 @@ All output below comes from the mock fleet in `tests/mock/aws`. Dates are relati
 ```
 
 ```
-RDS pending maintenance report - rds_pending_maintenance_report.sh v1.0.0
-Generated : 2026-10-11 02:53 UTC / 2026-10-11 08:23 IST
+RDS pending maintenance report - rds_pending_maintenance_report.sh v1.1.0
+Generated : 2026-10-11 03:34 UTC / 2026-10-11 09:04 IST
 Accounts  : 111111111111 (prod), 222222222222 (nonprod)
 Regions   : ap-south-1, eu-west-1, us-east-1
 Filters   : engine=aurora*
 
 URGENCY  DAYS   APPLY (IST)           ACCOUNT      REGION         TYPE     IDENTIFIER                    ENGINE                  ACTION                  OPT-IN           Environment  Owner        
 CRIT     1.7    2026-10-13 02:00      111111111111 ap-south-1     cluster  payments-ams                  aurora-mysql 8.0.mysq.. db-upgrade              next-maintenance prod         payments-t.. 
-CRIT     3      2026-10-14 08:23      111111111111 us-east-1      instance orders-prod-2 (orders-prod)   aurora-postgresql 16.8  system-update           -                prod         payments-t.. 
-WARN     20     2026-10-31 08:23      111111111111 us-east-1      cluster  orders-prod                   aurora-postgresql 16.8  db-upgrade              pending          prod         payments-t.. 
-INFO     90     2027-01-09 08:23      222222222222 ap-south-1     cluster  dev-apg                       aurora-postgresql 15.8  ca-certificate-rotation -                dev          platform-t.. 
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:payments-ams --apply-action db-upgrade --opt-in-type next-maintenance --region ap-south-1 --profile prod
+         note : already opted in (next-maintenance); command not needed
+CRIT     3      2026-10-14 09:04      111111111111 us-east-1      instance orders-prod-2 (orders-prod)   aurora-postgresql 16.8  system-update           -                prod         payments-t.. 
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+WARN     20     2026-10-31 09:04      111111111111 us-east-1      cluster  orders-prod                   aurora-postgresql 16.8  db-upgrade              pending          prod         payments-t.. 
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --apply-action db-upgrade --opt-in-type next-maintenance --region us-east-1 --profile prod
+INFO     90     2027-01-09 09:04      222222222222 ap-south-1     cluster  dev-apg                       aurora-postgresql 15.8  ca-certificate-rotation -                dev          platform-t.. 
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:222222222222:cluster:dev-apg --apply-action ca-certificate-rotation --opt-in-type next-maintenance --region ap-south-1 --profile nonprod
+
+Apply commands use --opt-in-type next-maintenance and are printed only (never run). Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command).
 
 SUMMARY: 4 pending action(s) on 4 resource(s) (15 before filters)
   by urgency : CRIT=2, WARN=1, INFO=1
@@ -88,7 +95,7 @@ The cluster-level action appeared only through the docdb API (`source: docdb`). 
 ERRORS (report incomplete):
   111111111111 prod eu-west-1 rds describe-pending-maintenance-actions: An error occurred (AccessDenied) when calling the DescribePendingMaintenanceActions operation: User: arn:aws:sts::111111111111:assumed-role/DBA-ReadOnly/manideep is not authorized to perform: rds:DescribePendingMaintenanceActions with an explicit deny in a service control policy
 Overall: CRIT (exit 11)
-2026-10-11 08:23:09 [INFO] Result: CRIT - 2 pending action(s) on 2 resource(s); urgency CRIT=2; 1 error(s); 5 AWS call(s); exit 11
+2026-10-11 09:04:53 [INFO] Result: CRIT - 2 pending action(s) on 2 resource(s); urgency CRIT=2; 1 error(s); 5 AWS call(s); exit 11
 ```
 
 If nothing were CRIT, the exit code would be 3 so the gap cannot go unnoticed.
@@ -137,7 +144,34 @@ esac
 ./rds_pending_maintenance_report.sh -P prod -r us-east-1 -v --keep-workdir         # keeps raw JSON responses
 ```
 
-## 11. From a report row to action (manual; the script never does this)
+## 11. The apply_command column
+
+```bash
+# default: commands use --opt-in-type next-maintenance
+./rds_pending_maintenance_report.sh -P prod -r us-east-1 -i orders-prod
+```
+
+```
+CRIT     3      2026-10-14 09:04      111111111111 us-east-1      instance orders-prod-2 (orders-prod)   aurora-postgresql 16.8  system-update  ...
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+WARN     20     2026-10-31 09:04      111111111111 us-east-1      cluster  orders-prod                   aurora-postgresql 16.8  db-upgrade     ...
+         apply: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --apply-action db-upgrade --opt-in-type next-maintenance --region us-east-1 --profile prod
+```
+
+```bash
+# print 'immediate' commands instead. They may restart / fail over the DB and cannot be undone; check the window first
+./rds_pending_maintenance_report.sh -P nonprod -A --apply-opt-in immediate -F csv -o ~/reports
+# just the commands for overdue/critical rows, for review in a change ticket
+./rds_pending_maintenance_report.sh -P prod -A -u OVERDUE,CRIT -F json | jq -r '.rows[] | select(.apply_command != "") | "# \(.identifier) \(.action) (\(.urgency))\n\(.apply_command)"'
+# rows that need a manual look (empty command)
+./rds_pending_maintenance_report.sh -P prod -A -F json | jq -r '.rows[] | select(.apply_command == "") | "\(.identifier): \(.apply_note)"'
+```
+
+* DocumentDB rows get `aws docdb apply-pending-maintenance-action ...` and Neptune rows get `aws neptune ...`.
+* `undo_command` holds the matching `--opt-in-type undo-opt-in` command.
+* In the HTML report, each command has a **Copy** button (see `sample_report_apply_cmd.png`).
+
+## 12. From a report row to action (manual; the script never does this)
 
 ```bash
 jq -r '.rows[] | select(.urgency == "OVERDUE" or .urgency == "CRIT")
@@ -145,4 +179,4 @@ jq -r '.rows[] | select(.urgency == "OVERDUE" or .urgency == "CRIT")
    /var/reports/rds_pm/rds_pending_maintenance_*.json
 ```
 
-This prints the commands for review; it runs nothing. See README.md for what each opt-in type does.
+This prints the commands for review; it runs nothing. Since v1.1.0, the same commands are in the `apply_command` column. See README.md for what each opt-in type does.
