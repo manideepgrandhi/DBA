@@ -1,0 +1,38 @@
+# rds_pending_maintenance_report.sh configuration (key = value; parsed, never sourced).
+# Command-line options override these. Lists are comma-separated. Quotes are optional.
+# Credentials are NOT accepted here; use AWS CLI profiles / SSO / instance roles.
+
+# --- scope
+profiles      = prod, nonprod          # one AWS CLI profile per account; empty = default chain
+regions       = us-east-1, ap-south-1  # or: all_regions = yes
+# all_regions = no
+include_docdb = yes                    # also call `aws docdb describe-pending-maintenance-actions`
+
+# --- filters (globs, case-insensitive; tag keys exact)
+# engines     = aurora-*, postgres, sqlserver-*
+# actions     = system-update, db-upgrade
+# identifiers = prod-*
+# tags        = Environment=prod, Owner=payments*
+# urgency     = OVERDUE, CRIT, WARN
+
+# --- report
+tag_columns   = Environment, Owner, Application
+formats       = csv, html
+output_dir    = /var/reports/rds_pm
+prefix        = rds_pending_maintenance
+tz            = Asia/Kolkata
+crit_days     = 7
+warn_days     = 30
+log_file      = /var/log/dba/rds_pm.log
+
+# --- AWS CLI behaviour
+aws_timeout   = 30
+max_attempts  = 5
+verbose       = no
+
+# --- alerts
+# alert_emails         = dba-team@example.com
+# alert_from           = rds-report@example.com
+# alert_webhooks       = https://hooks.slack.com/services/XXX/YYY/ZZZ
+# alert_webhook_format = slack            # slack | json
+alert_on      = crit                     # crit | pending | always

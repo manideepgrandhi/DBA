@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Stub `aws` for testing rds_pending_maintenance_report.sh without AWS credentials.
+
+Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2). Dates are relative to now.
+Env: MOCK_SCENARIO = fleet (default) | none | accessdenied | badcreds ; MOCK_LOG = JSONL of argv ;
+     MOCK_DEFAULT_REGION = answer for `aws configure get region`.
+Profiles: prod -> 111111111111, nonprod -> 222222222222, (none) -> 111111111111, broken -> invalid credentials.
+"""
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+NOW = datetime.now(timezone.utc)
+SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+
+
+def iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S") + "+00:00"
+
+
+def days(n):
+    return iso(NOW + timedelta(days=n))
+
+
+def fail(code, op, msg, rc=254):
+    sys.stderr.write("\naws: [ERROR]: An error occurred (%s) when calling the %s operation: %s\n\n" % (code, op, msg))
+    sys.exit(rc)
+
+
+argv = sys.argv[1:]
+if os.environ.get("MOCK_LOG"):
+    with open(os.environ["MOCK_LOG"], "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+if argv[:1] == ["--version"]:
+    print("aws-cli/2.37.12 Python/3.14.6 Linux/6.12 exe/x86_64.mock"); sys.exit(0)
+if argv[:3] == ["configure", "get", "region"]:
+    r = os.environ.get("MOCK_DEFAULT_REGION", "")
+    if r:
+        print(r); sys.exit(0)
+    sys.exit(1)
+
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout"}
+ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
+           ("rds", "describe-pending-maintenance-actions"): set(), ("docdb", "describe-pending-maintenance-actions"): set(),
+           ("rds", "describe-db-instances"): {"--filters"}, ("rds", "describe-db-clusters"): {"--filters"}}
+g, o, pos, i = {}, {}, [], 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--no-cli-pager":
+        g[a] = True
+    elif a in GLOBAL_VAL:
+        g[a] = argv[i + 1]; i += 1
+    elif a.startswith("--"):
+        o[a] = argv[i + 1] if i + 1 < len(argv) else ""; i += 1
+    else:
+        pos.append(a)
+    i += 1
+if len(pos) != 2 or tuple(pos) not in ALLOWED:
+    sys.stderr.write("\naws: [ERROR]: mock does not implement: %s\n" % " ".join(pos)); sys.exit(252)
+bad = set(o) - ALLOWED[tuple(pos)]
+if bad:
+    sys.stderr.write("\naws: [ERROR]: Unknown options: %s\n" % ", ".join(sorted(bad))); sys.exit(252)
+if g.get("--output") != "json" or "--no-cli-pager" not in g:
+    sys.stderr.write("mock: script must pass --output json --no-cli-pager\n"); sys.exit(252)
+REGION = g.get("--region") or os.environ.get("AWS_REGION", "")
+if not REGION:
+    sys.stderr.write("\naws: [ERROR]: An error occurred (NoRegion): You must specify a region.\n"); sys.exit(253)
+PROFILE = g.get("--profile", "")
+SVC, OP = pos
+OPNAME = "".join(p.capitalize() for p in OP.split("-")).replace("Db", "DB")
+
+if PROFILE == "broken" or SCEN == "badcreds":
+    fail("InvalidClientTokenId", OPNAME if SVC != "sts" else "GetCallerIdentity", "The security token included in the request is invalid.")
+if PROFILE not in ("", "prod", "nonprod"):
+    sys.stderr.write("\naws: [ERROR]: The config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
+ACCT = "222222222222" if PROFILE == "nonprod" else "111111111111"
+
+
+def arn(kind, ident):
+    return "arn:aws:rds:%s:%s:%s:%s" % (REGION, ACCT, kind, ident)
+
+
+def tags(env=None, owner=None, app=None, **extra):
+    t = [{"Key": k, "Value": v} for k, v in (("Environment", env), ("Owner", owner), ("Application", app)) if v]
+    return t + [{"Key": k, "Value": v} for k, v in extra.items()]
+
+
+def inst(iid, engine, ver, cls, win, tg, cluster=None, **kw):
+    d = {"DBInstanceIdentifier": iid, "DBInstanceClass": cls, "Engine": engine, "DBInstanceStatus": "available",
+         "Endpoint": {"Address": "%s.cxyz.%s.rds.amazonaws.com" % (iid, REGION), "Port": 5432, "HostedZoneId": "Z2R2ITUGPM61AM"},
+         "AvailabilityZone": REGION + "a", "PreferredMaintenanceWindow": win, "PreferredBackupWindow": "18:00-18:30",
+         "EngineVersion": ver, "AutoMinorVersionUpgrade": True, "PubliclyAccessible": False, "MultiAZ": False,
+         "StorageType": "gp3", "DBInstanceArn": arn("db", iid), "TagList": tg, "CACertificateIdentifier": "rds-ca-rsa2048-g1",
+         "DbiResourceId": "db-" + iid.upper().replace("-", "")[:20]}
+    if cluster:
+        d["DBClusterIdentifier"] = cluster
+    d.update(kw)
+    return d
+
+
+def clus(cid, engine, ver, win, tg, members, **kw):
+    d = {"DBClusterIdentifier": cid, "DBClusterArn": arn("cluster", cid), "Engine": engine, "EngineVersion": ver,
+         "Status": "available", "PreferredMaintenanceWindow": win, "PreferredBackupWindow": "18:00-18:30",
+         "MultiAZ": len(members) > 1, "EngineMode": "provisioned", "TagList": tg, "StorageEncrypted": True,
+         "DBClusterMembers": [{"DBInstanceIdentifier": m, "IsClusterWriter": k == 0, "DBClusterParameterGroupStatus": "in-sync",
+                               "PromotionTier": 1} for k, m in enumerate(members)]}
+    d.update(kw)
+    return d
+
+
+def act(action, desc, auto=None, forced=None, cur=None, opt=None):
+    d = {"Action": action, "Description": desc}
+    if auto is not None: d["AutoAppliedAfterDate"] = days(auto)
+    if forced is not None: d["ForcedApplyDate"] = days(forced)
+    if cur is not None: d["CurrentApplyDate"] = days(cur)
+    if opt: d["OptInStatus"] = opt
+    return d
+
+
+I, C, P, D = [], [], [], []   # instances, clusters, rds pending actions, docdb-only pending actions
+if SCEN != "none":
+    if ACCT == "111111111111" and REGION == "us-east-1":
+        t = tags("prod", "payments-team", "orders")
+        C.append(clus("orders-prod", "aurora-postgresql", "16.8", "sun:20:00-sun:20:30", t, ["orders-prod-1", "orders-prod-2"]))
+        I += [inst("orders-prod-1", "aurora-postgresql", "16.8", "db.r6g.xlarge", "sun:20:00-sun:20:30", t, "orders-prod"),
+              inst("orders-prod-2", "aurora-postgresql", "16.8", "db.r6g.xlarge", "sun:20:00-sun:20:30", t, "orders-prod")]
+        I.append(inst("crm-sql-prod", "sqlserver-se", "15.00.4415.2.v1", "db.m6i.2xlarge", "sat:21:00-sat:22:00", tags("prod", "crm-team", "crm")))
+        I.append(inst("web-mysql-prod", "mysql", "8.0.39", "db.r6g.large", "tue:19:30-tue:20:00", tags("prod", "web-team", "storefront")))
+        C.append(clus("catalog-docdb", "docdb", "5.0.0", "wed:18:00-wed:18:30", tags("prod", "catalog-team", "catalog"), ["catalog-docdb-1"]))
+        I.append(inst("catalog-docdb-1", "docdb", "5.0.0", "db.r6g.large", "wed:18:00-wed:18:30", tags("prod", "catalog-team", "catalog"), "catalog-docdb"))
+        P += [{"ResourceIdentifier": arn("cluster", "orders-prod"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to Aurora PostgreSQL 16.9", auto=20, opt="pending")]},
+              {"ResourceIdentifier": arn("db", "orders-prod-2"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "New Operating System update is available", forced=3, cur=3)]},
+              {"ResourceIdentifier": arn("db", "crm-sql-prod"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "SQL Server CU security patch", auto=-2),
+                  act("os-upgrade", "Upgrade to Windows Server 2022 based host", auto=55)]},
+              {"ResourceIdentifier": arn("db", "web-mysql-prod"), "PendingMaintenanceActionDetails": [
+                  act("ca-certificate-rotation", "Rotate the CA to rds-ca-rsa2048-g1")]},
+              {"ResourceIdentifier": arn("db", "catalog-docdb-1"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to Amazon DocumentDB 5.0 patch", auto=12)]}]
+        D += [{"ResourceIdentifier": arn("cluster", "catalog-docdb"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "DocumentDB engine patch", forced=5)]},
+              {"ResourceIdentifier": arn("db", "catalog-docdb-1"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to Amazon DocumentDB 5.0 patch", auto=12)]}]
+    elif ACCT == "111111111111" and REGION == "ap-south-1":
+        C.append(clus("payments-ams", "aurora-mysql", "8.0.mysql_aurora.3.05.2", "mon:20:30-mon:21:00", tags("prod", "payments-team", "payments"),
+                      ["payments-ams-1"], ServerlessV2ScalingConfiguration={"MinCapacity": 2.0, "MaxCapacity": 32.0}))
+        I.append(inst("payments-ams-1", "aurora-mysql", "8.0.mysql_aurora.3.05.2", "db.serverless", "mon:20:30-mon:21:00",
+                      tags("prod", "payments-team", "payments"), "payments-ams"))
+        I.append(inst("reporting-pg", "postgres", "15.7", "db.m7g.xlarge", "thu:21:30-thu:22:00", tags("prod", "bi-team", "reporting")))
+        I.append(inst("erp-oracle-prod", "oracle-ee", "19.0.0.0.ru-2024-07.rur-2024-07.r1", "db.r6i.4xlarge", "sat:22:00-sat:23:00",
+                      tags("prod", "erp-team", "erp")))
+        C.append(clus("graph-neptune", "neptune", "1.3.2.1", "fri:19:00-fri:19:30", tags("prod", "data-team", "graph"), ["graph-neptune-1"]))
+        P += [{"ResourceIdentifier": arn("cluster", "payments-ams"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to Aurora MySQL 3.08.0", forced=45, opt="next-maintenance")]},
+              {"ResourceIdentifier": arn("db", "reporting-pg"), "PendingMaintenanceActionDetails": [
+                  act("hardware-maintenance", "Hardware maintenance on the underlying host", auto=10)]},
+              {"ResourceIdentifier": arn("db", "erp-oracle-prod"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to 19.0.0.0.ru-2025-01.rur-2025-01.r1", auto=40, cur=6, opt="next-maintenance")]},
+              {"ResourceIdentifier": arn("cluster", "graph-neptune"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "Neptune engine patch")]}]
+    elif ACCT == "111111111111" and REGION == "eu-west-1":
+        if SCEN == "accessdenied" and OP == "describe-pending-maintenance-actions":
+            fail("AccessDenied", OPNAME, "User: arn:aws:sts::111111111111:assumed-role/DBA-ReadOnly/manideep is not authorized to perform: "
+                 "rds:DescribePendingMaintenanceActions with an explicit deny in a service control policy")
+        I.append(inst("cms-mariadb", "mariadb", "10.11.8", "db.t4g.large", "wed:02:00-wed:02:30", tags("staging", "web-team", "cms")))
+        P.append({"ResourceIdentifier": arn("db", "cms-mariadb"), "PendingMaintenanceActionDetails": [
+            act("os-upgrade", "New Operating System upgrade is available", auto=25)]})
+    elif ACCT == "222222222222" and REGION == "us-east-1":
+        I.append(inst("qa-sql", "sqlserver-ex", "16.00.4135.4.v1", "db.t3.xlarge", "sun:03:00-sun:03:30", tags("qa", "qa-team")))
+        I.append(inst("dev-pg-01", "postgres", "16.4", "db.t4g.medium", "mon:04:00-mon:04:30", tags("dev", "platform-team", "sandbox")))
+        P += [{"ResourceIdentifier": arn("db", "qa-sql"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "SQL Server CU security patch", auto=15, cur=0, opt="immediate")]},
+              {"ResourceIdentifier": arn("db", "dev-pg-01"), "PendingMaintenanceActionDetails": [
+                  act("db-upgrade", "Upgrade to PostgreSQL 16.6", auto=33)]},
+              {"ResourceIdentifier": arn("db", "old-replica-2023"), "PendingMaintenanceActionDetails": [
+                  act("system-update", "New Operating System update is available", auto=8)]}]
+    elif ACCT == "222222222222" and REGION == "ap-south-1":
+        C.append(clus("dev-apg", "aurora-postgresql", "15.8", "tue:23:00-tue:23:30", tags("dev", "platform-team"), ["dev-apg-1"]))
+        P.append({"ResourceIdentifier": arn("cluster", "dev-apg"), "PendingMaintenanceActionDetails": [
+            act("ca-certificate-rotation", "Rotate the CA to rds-ca-rsa2048-g1", auto=90)]})
+
+
+def out(obj):
+    json.dump(obj, sys.stdout, indent=4); sys.stdout.write("\n"); sys.exit(0)
+
+
+def filt():
+    name, _, vals = o.get("--filters", "").partition(",Values=")
+    return name.replace("Name=", ""), set(vals.split(",")) if vals else set()
+
+
+if SVC == "sts":
+    out({"UserId": "AROAEXAMPLE:manideep", "Account": ACCT, "Arn": "arn:aws:sts::%s:assumed-role/DBA-ReadOnly/manideep" % ACCT})
+if SVC == "ec2":
+    out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": "opt-in-not-required"}
+                     for r in ("ap-south-1", "eu-west-1", "us-east-1", "us-west-2")]})
+if OP == "describe-pending-maintenance-actions":
+    out({"PendingMaintenanceActions": D if SVC == "docdb" else P})
+if OP == "describe-db-instances":
+    n, v = filt()
+    assert n == "db-instance-id", n
+    out({"DBInstances": [x for x in I if x["DBInstanceArn"] in v or x["DBInstanceIdentifier"] in v]})
+if OP == "describe-db-clusters":
+    n, v = filt()
+    assert n == "db-cluster-id", n
+    out({"DBClusters": [x for x in C if x["DBClusterArn"] in v or x["DBClusterIdentifier"] in v]})
+sys.stderr.write("mock: unhandled\n"); sys.exit(252)

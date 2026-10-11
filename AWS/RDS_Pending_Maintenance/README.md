@@ -1,0 +1,185 @@
+# rds_pending_maintenance_report.sh
+
+A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that has **pending maintenance**: what is pending, when it will be applied, and how urgent it is. It works across several AWS accounts (profiles) and regions. Output formats are text, CSV, JSON and a single-file HTML report. It can send optional e-mail or webhook alerts, and its exit codes are suitable for cron and monitoring.
+
+```
+./rds_pending_maintenance_report.sh -P prod,nonprod -r us-east-1,ap-south-1 -F csv,html -o /var/reports/rds
+```
+
+* **Engines:** Aurora PostgreSQL/MySQL, RDS PostgreSQL, MySQL, MariaDB, SQL Server (all editions), Oracle and Db2. DocumentDB and Neptune are included when the RDS API returns them. `--include-docdb` also queries `aws docdb describe-pending-maintenance-actions`; results are merged and de-duplicated per resource+action, and the rds entry wins.
+* **Strictly read-only.** The only calls are `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds|docdb describe-pending-maintenance-actions`, `rds describe-db-instances` and `rds describe-db-clusters`. The script never applies, defers or modifies anything. The apply/defer commands below are documentation only.
+* **Requirements:** Bash 4.4+, AWS CLI v2, jq 1.6+. curl is needed for webhooks and mail/mailx/sendmail for e-mail. The script consists of the main file plus `lib/report.jq`; keep them together.
+
+## How it works
+
+1. For each profile, `sts get-caller-identity` returns the account id. If a profile's credentials are invalid or expired, it is recorded as an error and the other profiles continue.
+2. For each region: `describe-pending-maintenance-actions` returns ARNs plus action details. The ARNs are resolved through `describe-db-instances` and `describe-db-clusters` with `--filters Name=db-instance-id|db-cluster-id,Values=<ARNs>`. Lookups are batched 50 ARNs per call and made once per region. They add engine, version, instance class, cluster membership, maintenance window and tags (from `TagList`, so no extra tagging API is called). ARNs that no longer resolve, such as deleted resources, are still reported with engine `unknown`.
+3. Each action gets an **effective apply date**:
+
+   | Priority | Rule | `effective_basis` |
+   |---|---|---|
+   | 1 | `CurrentApplyDate` if present | `current-apply-date` |
+   | 2 | OptInStatus `next-maintenance` → start of the next maintenance window | `next-window (opted in)` |
+   | 3 | OptInStatus `immediate` → now | `immediate (opted in)` |
+   | 4 | earliest of `AutoAppliedAfterDate` / `ForcedApplyDate` | `auto-applied-after` / `forced-apply` |
+   | 5 | none → optional, no date | `none` |
+
+4. **Urgency** comes from the days until the effective date:
+   * `OVERDUE`: the date has passed.
+   * `CRIT`: 7 days or less.
+   * `WARN`: 30 days or less.
+   * `INFO`: later.
+   * `OPTIONAL`: no date.
+
+   Change the 7 and 30 with `--crit-days` and `--warn-days`.
+5. Filters are applied, rows are sorted by the soonest effective date (undated rows last), and the summary is computed: counts by urgency, action, engine, region and account.
+
+## Report columns (CSV; the same fields are in JSON, HTML and text)
+
+| Column | Meaning |
+|---|---|
+| `account_id`, `profile`, `region` | Where the resource lives |
+| `resource_type` | `instance` or `cluster` (from the ARN) |
+| `identifier` | DB instance or cluster identifier |
+| `cluster` | For an instance that belongs to a cluster (Aurora, DocumentDB, Neptune): the cluster identifier |
+| `engine`, `engine_version` | From describe-db-instances / describe-db-clusters (`unknown` if the ARN no longer resolves) |
+| `instance_class` | e.g. `db.r6g.xlarge`. For clusters, `DBClusterInstanceClass` (Multi-AZ DB clusters) or `serverless v2 <min>-<max> ACU` |
+| `tag:<Key>` | One column per `--tag-columns` key (default `Environment,Owner,Application`) |
+| `action` | `system-update`, `db-upgrade`, `os-upgrade`, `hardware-maintenance`, `ca-certificate-rotation`, ... |
+| `description` | AWS description of the action |
+| `opt_in_status` | `OptInStatus` from AWS (empty = no opt-in requested) |
+| `auto_applied_after_utc` | `AutoAppliedAfterDate`: applied in the first maintenance window after this date |
+| `forced_apply_utc` | `ForcedApplyDate`: applied automatically on this date, regardless of the window |
+| `current_apply_utc` | `CurrentApplyDate`: the date AWS currently plans to apply it (takes opt-ins into account) |
+| `effective_apply_utc`, `effective_apply_ist` | Effective date (see above) in UTC and in `--tz` (default Asia/Kolkata, IST) |
+| `days_until` | Days from report time to the effective date (1 decimal; negative = overdue) |
+| `urgency` | `OVERDUE`, `CRIT`, `WARN`, `INFO` or `OPTIONAL` |
+| `maint_window_utc`, `maint_window_ist` | `PreferredMaintenanceWindow` as returned (UTC), and converted, e.g. `Tue 02:00-Tue 02:30 IST` |
+| `next_window_ist` | Start of the next maintenance window |
+| `source` | `rds` or `docdb` (which API reported it) |
+| `arn` | Resource ARN (use it with `apply-pending-maintenance-action`) |
+
+The IST column names follow `--tz`; for example `--tz UTC` gives `effective_apply_utc` twice. The JSON output also has `effective_basis`, epoch values, the full `tags` map, `resolved` and the summary.
+
+**HTML** is a single file with no external resources. It has:
+* summary cards and count tables
+* a free-text row filter
+* click-to-sort columns
+* colour-coded urgency
+* every timestamp in both UTC and IST
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Nothing pending (after filters) |
+| 10 | Pending actions, none CRIT/OVERDUE |
+| 11 | At least one CRIT or OVERDUE action |
+| 1 | Usage / configuration error |
+| 2 | Pre-check failed: aws/jq missing, or **no** profile had valid credentials or a region |
+| 3 | Some AWS calls failed (e.g. AccessDenied in one region, one bad profile) and nothing is CRIT. The report says "report incomplete" |
+| 4 | Output error |
+| 130 | Interrupted |
+
+The order of precedence is 11 > 3 > 10 > 0. A CRIT finding is never masked by a partial failure. The failure is still listed under "ERRORS" in every format.
+
+## Pending action types: what they mean and how to apply or defer them
+
+| Action | What it is | Impact when applied |
+|---|---|---|
+| `system-update` | OS/host patches or engine patches that AWS manages (security, stability). Often **required**: these have `AutoAppliedAfterDate` or `ForcedApplyDate` | Usually a reboot. Multi-AZ instances patch the standby first, then fail over (short outage). Aurora patches each instance (zero-downtime patching where supported) |
+| `os-upgrade` | Upgrade of the underlying operating system (e.g. new OS major version) | Reboot / failover as above. For Multi-AZ, the standby is upgraded first |
+| `db-upgrade` | Engine minor version upgrade or required engine patch (e.g. auto minor version upgrade, end-of-support upgrade) | Engine restart; downtime depends on engine and Multi-AZ. Test the new version first |
+| `hardware-maintenance` | Move to new underlying hardware | Instance restart or failover; plan for a few minutes of unavailability |
+| `ca-certificate-rotation` | Rotate the server certificate to a new CA (e.g. to `rds-ca-rsa2048-g1`) | DB restart. **Clients that verify TLS must trust the new CA bundle first** |
+
+Optional actions (no dates) are applied only when you choose. Required actions are applied automatically in your maintenance window after `AutoAppliedAfterDate`, and unconditionally on `ForcedApplyDate`.
+
+### Apply or defer with the CLI (this script never runs these)
+
+```bash
+ARN=arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod      # from the report's arn column
+# apply as soon as possible (cannot be undone)
+aws rds apply-pending-maintenance-action --resource-identifier "$ARN" --apply-action system-update --opt-in-type immediate
+# apply during the next maintenance window
+aws rds apply-pending-maintenance-action --resource-identifier "$ARN" --apply-action system-update --opt-in-type next-maintenance
+# defer: withdraw a next-maintenance opt-in (back to AWS's schedule; Auto/Forced dates still apply)
+aws rds apply-pending-maintenance-action --resource-identifier "$ARN" --apply-action system-update --opt-in-type undo-opt-in
+```
+
+* `--apply-action` takes the value from the `action` column: `system-update`, `db-upgrade`, `os-upgrade`, `hardware-maintenance` or `ca-certificate-rotation`. Use the cluster ARN for cluster-level rows.
+* DocumentDB rows: use `aws docdb apply-pending-maintenance-action` with the same options.
+* `immediate` cannot be undone with `undo-opt-in`.
+* A required action cannot be deferred past its `ForcedApplyDate`. To control *when* it happens, move the maintenance window (`aws rds modify-db-instance` / `modify-db-cluster --preferred-maintenance-window`) or apply it yourself earlier at a time of your choosing.
+* Check the result afterwards with `aws rds describe-pending-maintenance-actions --filters Name=db-instance-id,Values=$ARN`, or re-run this report.
+
+### Console
+
+1. Go to RDS console → **Databases**, then select the instance or cluster.
+2. Open the **Maintenance & backups** tab. **Pending maintenance** lists each action with its status and dates.
+3. Select an action, then choose **Apply now** (immediate) or **Apply at next maintenance window** (next-maintenance). For an action you already scheduled, **Defer upgrade** is shown (undo-opt-in).
+4. To change when maintenance runs, choose **Modify**, set **Maintenance window**, and apply the change.
+
+The **Maintenance** column of the Databases list shows `required`, `available` or `next window`, which is useful for a quick look.
+
+## IAM policy (read-only)
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RdsPendingMaintenanceReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribePendingMaintenanceActions",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "ec2:DescribeRegions"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+* DocumentDB and Neptune use the same `rds:` IAM actions, so `--include-docdb` needs nothing extra.
+* `sts:GetCallerIdentity` needs no permission.
+* `ec2:DescribeRegions` is only used with `--all-regions`.
+* Tags come from `TagList` in the describe responses, so no `rds:ListTagsForResource` is needed.
+* The AWS managed policy `AmazonRDSReadOnlyAccess` also covers everything except `ec2:DescribeRegions`.
+
+## Multiple accounts
+
+Give one AWS CLI profile per account (SSO or role-assuming profiles work), e.g. `-P prod -P nonprod` or `-P prod,nonprod`. Each profile's account id is resolved with STS. With no `-r`, a profile's configured region is used. The script never reads, accepts or logs credentials. Config files containing credential keys are rejected.
+
+## Configuration file
+
+Use `--config FILE` with simple `key = value` lines; command-line options override them. The file is parsed, never sourced. See `rds_pending_maintenance_report.conf.example` for all keys.
+
+## Cron examples
+
+```cron
+CRON_TZ=Asia/Kolkata
+# Weekdays 08:00 IST: CSV + HTML for all accounts and regions; e-mail only when something is CRIT/overdue
+0 8 * * 1-5  /opt/dba/rds_pending_maintenance/rds_pending_maintenance_report.sh --config /etc/dba/rds_pm.conf -F csv,html -o /var/reports/rds_pm -l /var/log/dba/rds_pm.log --alert-email dba-team@example.com >/dev/null 2>&1
+# Monday 09:00 IST: weekly digest of everything pending (always mailed)
+0 9 * * 1    /opt/dba/rds_pending_maintenance/rds_pending_maintenance_report.sh --config /etc/dba/rds_pm.conf --alert-on always --alert-email dba-team@example.com >/dev/null 2>&1
+# Housekeeping: keep 90 days of reports
+30 8 * * *   find /var/reports/rds_pm -name 'rds_pending_maintenance_*' -mtime +90 -delete
+```
+
+## Tests
+
+* `tests/run_tests.sh`: 159 checks against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
+* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`.
+
+Samples from the mock fleet are in `samples/`, and there is a screenshot of the HTML report at `sample_report.png`.
+
+## Caveats
+
+* Verified against a mock built from CLI skeleton output and the AWS documentation, **not against a live account**. Run it once with `-v --keep-workdir` in a real account to confirm the raw responses look as expected.
+* `AutoAppliedAfterDate` means "applied in the first maintenance window *after* this date". The report uses the date itself as the effective date, which is the earliest possible moment. `next_window_ist` shows the next window to help with planning.
+* Whether `rds describe-pending-maintenance-actions` returns DocumentDB/Neptune resources can vary. `--include-docdb` queries the DocumentDB API explicitly; duplicates are removed.
+* `OptInStatus` values are shown as AWS returns them. Only `immediate` and `next-maintenance` change the effective date.
+* Maintenance windows and dates are UTC in AWS; the second time zone is display only.
