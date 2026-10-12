@@ -61,7 +61,7 @@ HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
 t help 0 fleet --help;                          has help out 'Exit codes'
-t version 0 fleet --version;                    has version out '1\.0\.0'
+t version 0 fleet --version;                    has version out '1\.0\.1'
 t thresholds 0 fleet --list-thresholds;         has thresholds out 'xid_crit +1000000000'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -f xml
@@ -198,6 +198,25 @@ MOCK_SCENARIO=fleet PATH="$NOJQ" "$SCRIPT" -r us-east-1 >/dev/null 2>"$OUT/nojq.
 V1="$OUT/v1"; mkdir -p "$V1"; printf '#!/bin/sh\necho "aws-cli/1.29.0 Python/3.8 Linux botocore/1.31"\n' >"$V1/aws"; chmod +x "$V1/aws"
 PATH="$V1:$PATH" "$SCRIPT" -r us-east-1 >/dev/null 2>"$OUT/v1.err"; rc=$?
 [[ $rc == 2 ]] && grep -q 'AWS CLI v2 required' "$OUT/v1.err" && ok "aws v1 -> 2" || bad "aws v1 rc=$rc"
+
+echo "== large data (argv-size regression: v1.0.0 failed with 'Argument list too long')"
+names="orders-prod$(for i in $(seq 1 6999); do printf ',ghost-cluster-name-%05d' "$i"; done)"
+printf 'region = us-east-1\nclusters = %s\n' "$names" >"$OUT/big.conf"     # ~175 KB > 128 KiB MAX_ARG_STRLEN
+: >"$MAIL_SINK"; : >"$OUT/webhook.txt"
+t0=$SECONDS
+t bigclusters 11 fleet --config "$OUT/big.conf" -f json -q --alert-email dba@example.invalid --alert-webhook "$HOOK" --alert-webhook-format json
+el=$(( SECONDS - t0 ))
+[[ $el -lt 120 ]] && ok "7000-cluster list finished in ${el}s" || bad "7000-cluster list took ${el}s"
+hasnt bigclusters err 'Argument list too long'
+jq -e '([.results[] | select(.check == "cluster_found" and .status == "CRIT")] | length) == 6999 and .summary.overall == "CRIT"' "$OUT/bigclusters.out" >/dev/null \
+    && ok "6999 missing clusters reported" || bad "missing-cluster results"
+n="$(jq -r 'select(.[0] == "--output" or true) | select(index("describe-db-clusters")) | .[index("--filters") + 1] | length' "$MOCK_LOG" | sort -n | tail -1)"
+[[ -n "$n" && "$n" -lt 2000 ]] && ok "describe-db-clusters --filters batched (largest value ${n} chars)" || bad "filters not batched (${n})"
+[[ "$(stat -c %s "$MAIL_SINK")" -gt 131072 ]] && grep -q 'ghost-cluster-name-06999' "$MAIL_SINK" && ok "large mail body streamed" || bad "large mail body"
+jq -e -s 'length == 1 and (.[0].text | length) > 131072' "$OUT/webhook.txt" >/dev/null && ok "large json webhook payload delivered" || bad "large webhook"
+: >"$OUT/webhook.txt"
+t bigslack 11 fleet --config "$OUT/big.conf" -q --alert-webhook "$HOOK"
+jq -e -s 'length == 1 and (.[0].text | length) < 40000 and (.[0].text | test("truncated"))' "$OUT/webhook.txt" >/dev/null && ok "slack payload truncated < 40k" || bad "slack truncation"
 
 echo "== read-only guarantee"
 ops="$(jq -r '. as $a | ([range(length)] | map(select($a[.] | IN("rds","sts","ec2","cloudwatch"))) | .[0]) as $i

@@ -2,7 +2,7 @@
 """Stub `aws` for testing rds_pending_maintenance_report.sh without AWS credentials.
 
 Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2). Dates are relative to now.
-Env: MOCK_SCENARIO = fleet (default) | none | accessdenied | badcreds ; MOCK_LOG = JSONL of argv ;
+Env: MOCK_SCENARIO = fleet (default) | none | accessdenied | badcreds | large ; MOCK_LOG = JSONL of argv ;
      MOCK_DEFAULT_REGION = answer for `aws configure get region`.
 Profiles: prod -> 111111111111, nonprod -> 222222222222, (none) -> 111111111111, broken -> invalid credentials.
 """
@@ -179,6 +179,41 @@ if SCEN != "none":
         C.append(clus("dev-apg", "aurora-postgresql", "15.8", "tue:23:00-tue:23:30", tags("dev", "platform-team"), ["dev-apg-1"]))
         P.append({"ResourceIdentifier": arn("cluster", "dev-apg"), "PendingMaintenanceActionDetails": [
             act("ca-certificate-rotation", "Rotate the CA to rds-ca-rsa2048-g1", auto=90)]})
+
+
+if SCEN == "large":
+    # LARGE fleet for the argv-size regression test: per (account, region) 520 instances (40 in 20 Aurora
+    # clusters) -> 3120 instances + 120 clusters over 2 accounts x 3 regions; ~5400 actions; long text; 15 tags.
+    I, C, P, D = [], [], [], []
+    acts = ["system-update", "db-upgrade", "os-upgrade", "hardware-maintenance", "ca-certificate-rotation"]
+    engines = [("postgres", "16.4"), ("mysql", "8.0.39"), ("sqlserver-se", "15.00.4415.2.v1"), ("oracle-ee", "19.0.0.0.ru-2024-07.rur-2024-07.r1"),
+               ("mariadb", "10.11.8"), ("aurora-postgresql", "16.8")]
+    long_desc = ("Mandatory maintenance: new operating system and engine patch bundle with security fixes, "
+                 "stability improvements and updated drivers. The update requires a restart of the DB instance; "
+                 "Multi-AZ deployments fail over to the standby first. Please review the release notes. ") * 1
+    rk = {"us-east-1": 0, "ap-south-1": 1, "eu-west-1": 2}.get(REGION, 3)
+    for n in range(520):
+        ident = "fleet-%s-%d-db-%04d" % (ACCT[-2:], rk, n)
+        eng, ver = engines[n % len(engines)]
+        tg = tags("prod" if n % 3 else "dev", "team-%02d" % (n % 37), "app-%03d" % (n % 211),
+                  **{"CostCenter": "CC-%05d" % n, "Project": "project-%d" % (n % 53), "DataClass": "confidential",
+                     "Backup": "daily", "Compliance": "pci-dss,sox,iso27001", "Tier": "tier-%d" % (n % 4),
+                     "Region": REGION, "Squad": "squad-%d" % (n % 19), "OnCall": "oncall-%d@example.invalid" % (n % 7),
+                     "Runbook": "https://wiki.example.invalid/runbooks/%s" % ident, "CreatedBy": "terraform", "Ticket": "CHG-%06d" % (n * 7)})
+        cl = None
+        if n < 40:
+            cl = "fleet-%s-%d-cl-%02d" % (ACCT[-2:], rk, n // 2); eng, ver = "aurora-postgresql", "16.8"
+            if n % 2 == 0:
+                C.append(clus(cl, eng, ver, "sun:20:00-sun:20:30", tg, [cl + "-a", cl + "-b"]))
+                P.append({"ResourceIdentifier": arn("cluster", cl), "PendingMaintenanceActionDetails": [
+                    act("db-upgrade", "Upgrade to Aurora PostgreSQL 16.9. " + long_desc, auto=(n % 60) - 5)]})
+        I.append(inst(ident, eng, ver, "db.r6g.%dxlarge" % (1 + n % 4), "%s:%02d:00-%s:%02d:30" % (
+            ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][n % 7], n % 24, ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][n % 7], n % 24), tg, cl))
+        details = [act(acts[n % 5], acts[n % 5] + ": " + long_desc, auto=(n % 90) - 10, forced=(n % 120) if n % 4 == 0 else None,
+                       opt=("next-maintenance" if n % 11 == 0 else None))]
+        if n % 3 != 2:
+            details.append(act(acts[(n + 2) % 5], acts[(n + 2) % 5] + ": " + long_desc, forced=(n % 45) + 1 if n % 2 else None))
+        P.append({"ResourceIdentifier": arn("db", ident), "PendingMaintenanceActionDetails": details})
 
 
 def out(obj):

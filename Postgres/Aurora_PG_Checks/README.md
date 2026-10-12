@@ -395,3 +395,12 @@ is checked against a local fake RDS endpoint.
 * A global-database secondary has no writer and is reported WARN, not CRIT.
 * The script relies on the AWS CLI's built-in retries (`--max-attempts`, default 5, standard mode).
   A very large fleet can still hit API throttling. Failed calls show up as ERROR rows (exit 3).
+
+## Changelog
+
+* **1.0.1**: large-input fixes.
+  * Cluster lists, report metadata, alert bodies and webhook payloads now go to jq/curl/mail through files or stdin instead of command-line arguments. This avoids `Argument list too long` (128 KiB per argument / ARG_MAX).
+  * An explicit cluster list (`-c` / `clusters =` in the config) is queried 50 ids per `describe-db-clusters --filters` call; before, every id went into a single filter value.
+  * Text/HTML rendering is linear instead of quadratic: 7,000 clusters render in under 3 s instead of about 60 s.
+  * Slack payloads are cut to 35,000 characters.
+  * Regression test: a 7,000-cluster config with large e-mail and webhook alerts.

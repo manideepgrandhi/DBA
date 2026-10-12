@@ -62,7 +62,7 @@ HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
 t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'apply-pending-maintenance-action|read-only|READ-ONLY'
-t version 0 fleet --version;           has version out '1\.1\.0'
+t version 0 fleet --version;           has version out '1\.1\.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -152,7 +152,7 @@ chk "sq quoting round-trips through the shell" bash -c '
   done'
 
 echo "== thresholds / time zone"
-t thr 10 fleet -P prod -r ap-south-1 -F json --crit-days 1 --warn-days 7
+t thr 10 fleet -P prod -r ap-south-1 -F json --crit-days 0 --warn-days 7   # crit 0: independent of time of day
 jqt thr '[.rows[] | select(.identifier == "erp-oracle-prod")][0].urgency == "WARN"'
 jqt thr '[.rows[] | select(.identifier == "reporting-pg")][0].urgency == "INFO"'
 t tzutc 11 fleet -P prod -r ap-south-1 --tz UTC;   has tzutc out 'APPLY \(UTC\)'; hasnt tzutc out 'IST'
@@ -257,6 +257,43 @@ jq -e '.text | startswith("*[rds_pending_maintenance] CRIT")' "$OUT/webhook.txt"
 t alert_test 0 fleet --alert-test --alert-webhook "$HOOK" --alert-email dba@example.invalid
 t alert_deadhook 11 fleet -P prod -r us-east-1 --alert-webhook "http://127.0.0.1:9/x"
 has alert_deadhook err 'webhook .* failed'
+
+echo "== large fleet (argv-size regression: v1.1.0 failed with 'Argument list too long')"
+: >"$MAIL_SINK"; : >"$OUT/webhook.txt"
+t0=$SECONDS
+t large 11 large "${ALL3[@]}" --include-docdb -F csv,html,json,text -o "$OUT/large" --keep-workdir \
+    --alert-email dba@example.invalid --alert-webhook "$HOOK" --alert-webhook-format json --alert-on always
+el=$(( SECONDS - t0 ))
+chk "large fleet finished in ${el}s (< 180s)" test "$el" -lt 180
+hasnt large err 'Argument list too long'
+has large err 'Result: CRIT - 5322 pending action\(s\) on 3240 resource\(s\)'
+lw="$(sed -n 's/.*Raw AWS responses kept in //p' "$OUT/large.err" | tail -1)"
+chk "large: rows payload > 128 KiB MAX_ARG_STRLEN ($(stat -c %s "$lw/all_rows.json" 2>/dev/null) bytes)" test "$(stat -c %s "$lw/all_rows.json" 2>/dev/null || echo 0)" -gt 131072
+chk "large: rows payload > ARG_MAX ($(getconf ARG_MAX))" test "$(stat -c %s "$lw/all_rows.json" 2>/dev/null || echo 0)" -gt "$(getconf ARG_MAX)"
+chk "large: alert body > 128 KiB" test "$(stat -c %s "$lw/alert_body.txt" 2>/dev/null || echo 0)" -gt 131072
+rm -rf -- "$lw"
+lj="$(find "$OUT/large" -name '*.json')"
+chk "large json: 5322 rows, 3120 instances resolved, unique ARNs 3240" jq -e '(.rows | length) == 5322 and ([.rows[] | select(.resource_type == "instance" and .resolved)] | map(.arn) | unique | length) == 3120 and .summary.resources == 3240 and ([.rows[] | select(.resolved | not)] | length) == 0' "$lj"
+chk "large json: 15 tags kept, long descriptions intact" jq -e '[.rows[] | select(.resource_type == "instance")][0] | (.tags | length) == 15 and (.description | length) > 250' "$lj"
+chk "large json: sorted by effective date" jq -e '[.rows[] | .effective_apply // 1e18] as $e | $e == ($e | sort)' "$lj"
+chk "large csv: 5323 lines" test "$(python3 -c "import csv,sys; print(len(list(csv.reader(open(sys.argv[1])))))" "$(find "$OUT/large" -name '*.csv')")" -eq 5323
+chk "large html parses, 5322 rows" python3 -c "
+import html.parser,sys
+class P(html.parser.HTMLParser):
+    n=0
+    def handle_starttag(self,t,a):
+        if t=='tr' and any(k=='class' and v.startswith('r-') for k,v in a): P.n+=1
+p=P(); p.feed(open(sys.argv[1]).read()); sys.exit(P.n!=5322)" "$(find "$OUT/large" -name '*.html')"
+chk "large: mail body streamed (> 1 MB, has rows)" bash -c "test \$(stat -c %s '$MAIL_SINK') -gt 1000000 && grep -q 'fleet-11-0-db-0000' '$MAIL_SINK'"
+chk "large: json webhook payload delivered (5322-row report text)" jq -e -s 'length == 1 and .[0].summary.total == 5322 and (.[0].text | length) > 1000000' "$OUT/webhook.txt"
+: >"$OUT/webhook.txt"
+t large_slack 11 large -P prod -r us-east-1 --alert-webhook "$HOOK"
+chk "large: slack payload truncated under 40k chars" jq -e -s 'length == 1 and (.[0].text | length) < 40000 and (.[0].text | test("truncated"))' "$OUT/webhook.txt"
+
+if [[ -n "${OLD_SCRIPT:-}" ]]; then   # e.g. OLD_SCRIPT=/path/to/v1.1.0/rds_pending_maintenance_report.sh
+    MOCK_SCENARIO=large "$OLD_SCRIPT" "${ALL3[@]}" --include-docdb -F json >/dev/null 2>"$OUT/old.err"; orc=$?
+    chk "old script ($OLD_SCRIPT) fails on large fleet (rc=$orc) with 'Argument list too long'" grep -q 'Argument list too long' "$OUT/old.err"
+fi
 
 echo "== safety"
 bad_ops="$(python3 - "$MOCK_LOG" <<'PY'

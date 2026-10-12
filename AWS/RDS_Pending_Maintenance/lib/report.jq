@@ -155,7 +155,7 @@ def text:
           ($r.errors[] | "  \(.account) \(.profile) \(.region) \(.call): \(.message)") else empty end ),
       "",
       "Overall: \($r.summary.overall) (exit \($r.summary.exit_code))"
-    ] | join("\n");
+    ] | .[];   # one string per line: same bytes as join("\n") under jq -r, without O(n^2) concatenation
 
 def csv:
   (["account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class"]

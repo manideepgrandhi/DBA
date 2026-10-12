@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.1.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -41,6 +41,7 @@ DISPLAY_TZ="Asia/Kolkata"
 CRIT_DAYS=7
 WARN_DAYS=30
 APPLY_OPT_IN="next-maintenance"
+readonly SLACK_MAX_CHARS=35000
 LOG_FILE=""
 CONFIG_FILE=""
 AWS_TIMEOUT=30
@@ -394,15 +395,21 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
         else op=describe-db-clusters; flt=db-cluster-id; key=DBClusters; fi
         mapfile -t arns < <(jq -r --arg k ":$kind:" '[.[].ResourceIdentifier | select(contains($k))] | unique[]' "$d/pma.json")
         (( ${#arns[@]} )) || continue
+        # 50 ARNs per call keeps --filters small (~4 KB) and within the API's filter-value limit
+        local -a got=()
         for (( i = 0; i < ${#arns[@]}; i += 50 )); do
             chunk="$(IFS=,; echo "${arns[*]:i:50}")"
             if aws_call "$d/r_${kind}_$i.json" "$profile" "$region" rds "$op" --filters "Name=$flt,Values=$chunk"; then
-                jq -s --arg key "$key" '.[0] + (.[1][$key] // [])' "$d/${kind/db/instance}s.json" "$d/r_${kind}_$i.json" >"$d/res.tmp" \
-                    && mv -f -- "$d/res.tmp" "$d/${kind/db/instance}s.json"
+                got+=("$d/r_${kind}_$i.json")
             else
                 add_error "$account" "$profile" "$region" "rds $op" "$LAST_ERR"
             fi
         done
+        # one merge per region and kind (file inputs, no argv payload); unique in case pages overlap
+        if (( ${#got[@]} )); then
+            jq -s --arg key "$key" 'map(.[$key] // []) | add // [] | unique_by(.DBInstanceArn // .DBClusterArn)' -- "${got[@]}" \
+                >"$d/${kind/db/instance}s.json" || die 4 "Merging $op output failed for ${profile:-default}/$region"
+        fi
     done
     rjq rows -n --arg profile "${profile:-default}" --arg account "$account" --arg region "$region" \
         --slurpfile pma "$d/pma.json" --slurpfile instances "$d/instances.json" --slurpfile clusters "$d/clusters.json" \
@@ -447,22 +454,26 @@ collect_profile() {   # collect_profile <index> <profile>
 build_report() {
     local -a rowfiles=()
     mapfile -t rowfiles < <(find "$WORK" -name rows.json -type f | sort)
-    local rows errors meta
-    if (( ${#rowfiles[@]} )); then rows="$(jq -cs 'add // []' "${rowfiles[@]}")"; else rows="[]"; fi
-    if [[ -s "$WORK/errors.jsonl" ]]; then errors="$(jq -cs . "$WORK/errors.jsonl")"; else errors="[]"; fi
-    meta="$(jq -cn --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" \
+    # Large data (rows, errors, account list) is passed to jq only as FILES, never as arguments:
+    # a single argv string is limited to 128 KiB (MAX_ARG_STRLEN) and all of argv+env to ARG_MAX.
+    if (( ${#rowfiles[@]} )); then jq -cs 'add // []' -- "${rowfiles[@]}" >"$WORK/all_rows.json"; else printf '[]' >"$WORK/all_rows.json"; fi
+    if [[ -s "$WORK/errors.jsonl" ]]; then jq -cs . "$WORK/errors.jsonl" >"$WORK/all_errors.json"; else printf '[]' >"$WORK/all_errors.json"; fi
+    : >"$WORK/accounts.jsonl"
+    if (( ${#ACCOUNTS_JSON[@]} )); then printf '%s\n' "${ACCOUNTS_JSON[@]}" >"$WORK/accounts.jsonl"; fi
+    jq -n --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" \
         --arg gu "$(date -u -d "@$NOW" '+%Y-%m-%d %H:%M UTC')" --arg gl "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Y-%m-%d %H:%M %Z')" \
         --arg tz "$DISPLAY_TZ" --arg tza "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Z')" --arg host "$(hostname 2>/dev/null || echo unknown)" \
-        --argjson accounts "$(if (( ${#ACCOUNTS_JSON[@]} )); then printf '%s\n' "${ACCOUNTS_JSON[@]}" | jq -cs .; else echo '[]'; fi)" \
+        --slurpfile accounts "$WORK/accounts.jsonl" \
         --argjson regions "$(json_array "${ALL_REGIONS_SEEN[@]}" | jq -c 'unique')" --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" \
         --argjson crit "$CRIT_DAYS" --argjson warn "$WARN_DAYS" --arg ao "$APPLY_OPT_IN" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
         --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" \
         '{script: $script, version: $version, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tza, host: $host,
           accounts: $accounts, regions: $regions, tag_columns: $tagcols, crit_days: $crit, warn_days: $warn, apply_opt_in: $ao,
-          filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails}')"
+          filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     REPORT="$WORK/report.json"
-    jq -n --argjson meta "$meta" --argjson rows "$rows" --argjson errors "$errors" '{meta: $meta, rows: $rows, errors: $errors}' \
-        | rjq finalize >"$REPORT" || die 4 "Finalizing the report failed"
+    jq -n --slurpfile meta "$WORK/meta.json" --slurpfile rows "$WORK/all_rows.json" --slurpfile errors "$WORK/all_errors.json" \
+        '{meta: $meta[0], rows: $rows[0], errors: $errors[0]}' >"$WORK/raw_report.json" || die 4 "Assembling the report failed"
+    rjq finalize "$WORK/raw_report.json" >"$REPORT" || die 4 "Finalizing the report failed"
 }
 
 render() {   # render <format>  -> stdout
@@ -490,8 +501,8 @@ write_outputs() {
     done
 }
 
-send_email_alert() {
-    local subject="$1" body="$2" mailer="" to
+send_email_alert() {   # send_email_alert <subject> <body-file>   (body is streamed from the file)
+    local subject="$1" bodyfile="$2" mailer="" to
     local -a tmo=()
     command -v timeout >/dev/null 2>&1 && tmo=(timeout 60)
     if command -v mail >/dev/null 2>&1; then mailer="mail"
@@ -501,28 +512,30 @@ send_email_alert() {
     else log_warn "Alert: no mail/mailx/sendmail found"; return 1; fi
     if [[ "$mailer" == mail || "$mailer" == mailx ]]; then
         local -a from=(); [[ -n "$ALERT_FROM" ]] && from=(-r "$ALERT_FROM")
-        printf '%s\n' "$body" | "${tmo[@]}" "$mailer" "${from[@]}" -s "$subject" -- "${ALERT_EMAILS[@]}"
+        "${tmo[@]}" "$mailer" "${from[@]}" -s "$subject" -- "${ALERT_EMAILS[@]}" <"$bodyfile"
     else
         to="$(IFS=,; printf '%s' "${ALERT_EMAILS[*]}")"
         { [[ -n "$ALERT_FROM" ]] && printf 'From: %s\n' "$ALERT_FROM"
-          printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' "$to" "$subject" "$body"; } | "${tmo[@]}" "$mailer" -t -oi
+          printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n' "$to" "$subject"; cat -- "$bodyfile"; } | "${tmo[@]}" "$mailer" -t -oi
     fi
 }
-send_webhook_alert() {
-    local url="$1" json="$2" out
+send_webhook_alert() {   # send_webhook_alert <url> <payload-file>
+    local url="$1" payload="$2" out
     command -v curl >/dev/null 2>&1 || { log_warn "Alert: curl not installed; webhook skipped"; return 1; }
     out="$(printf 'url = "%s"\n' "${url//\"/\\\"}" | curl -sS --fail --max-time 20 --retry 2 \
-            -H 'Content-Type: application/json' --data-binary "$json" -o /dev/null -w '%{http_code}' -K - 2>&1)" \
+            -H 'Content-Type: application/json' --data-binary "@$payload" -o /dev/null -w '%{http_code}' -K - 2>&1)" \
         || { log_warn "Alert: webhook $(redact_url "$url") failed: ${out%%$'\n'*}"; return 1; }
     log_info "Alert: webhook $(redact_url "$url") -> HTTP $out"
 }
 send_alerts() {   # send_alerts <rc> [test]
-    local rc="$1" mode="${2:-}" subject body json url status
+    local rc="$1" mode="${2:-}" subject url status
     (( ${#ALERT_EMAILS[@]} + ${#ALERT_WEBHOOKS[@]} )) || return 0
+    # body and payload can be megabytes for a big fleet: keep them in files, never in argv
+    local body="$WORK/alert_body.txt" payload="$WORK/alert_payload.json"
     if [[ "$mode" == test ]]; then
         status="TEST"; subject="[rds_pending_maintenance] TEST alert from $(hostname 2>/dev/null || echo unknown)"
-        body="Test alert from $SCRIPT_NAME v$SCRIPT_VERSION at $(date '+%Y-%m-%d %H:%M:%S %Z'). No AWS calls were made."
-        json="$(jq -cn --arg t "$subject"$'\n\n'"$body" '{status: "TEST", exit_code: 0, text: $t}')"
+        printf 'Test alert from %s v%s at %s. No AWS calls were made.\n' "$SCRIPT_NAME" "$SCRIPT_VERSION" "$(date '+%Y-%m-%d %H:%M:%S %Z')" >"$body"
+        jq -cn --arg s "$subject" --rawfile b "$body" '{status: "TEST", exit_code: 0, text: ($s + "\n\n" + $b)}' >"$payload"
     else
         case "$ALERT_ON" in
             crit)    (( rc == 11 || rc == 3 )) || return 0 ;;
@@ -530,16 +543,23 @@ send_alerts() {   # send_alerts <rc> [test]
         esac
         status="$(jq -r '.summary.overall' "$REPORT")"
         subject="[rds_pending_maintenance] $status: $(jq -r '"\(.summary.total) pending, \(.summary.by_urgency.OVERDUE // 0) overdue, \(.summary.by_urgency.CRIT // 0) due <= \(.meta.crit_days)d"' "$REPORT") (exit $rc)"
-        body="$(render text)"
-        if (( ${#WRITTEN[@]} )); then body+=$'\n\nReport files:\n'"$(printf '  %s\n' "${WRITTEN[@]}")"; fi
-        json="$(rjq alert -c "$REPORT" | jq -c --arg t "$subject"$'\n\n'"$body" '. + {text: $t}')"
+        render text >"$body" || { log_warn "Alert: rendering the body failed"; return 0; }
+        if (( ${#WRITTEN[@]} )); then printf '\n\nReport files:\n' >>"$body"; printf '  %s\n' "${WRITTEN[@]}" >>"$body"; fi
+        if ! { rjq alert -c "$REPORT" >"$payload.tmp" \
+               && jq -c --arg s "$subject" --rawfile b "$body" '. + {text: ($s + "\n\n" + $b)}' "$payload.tmp" >"$payload"; }; then
+            log_warn "Alert: building the webhook payload failed"; return 0
+        fi
     fi
-    [[ "$ALERT_WEBHOOK_FORMAT" == slack ]] && json="$(jq -cn --arg h "$subject" --arg b "$body" '{text: ("*" + $h + "*\n```" + $b + "```")}')"
+    if [[ "$ALERT_WEBHOOK_FORMAT" == slack ]]; then
+        # Slack rejects/truncates messages over ~40k characters
+        jq -cn --arg h "$subject" --rawfile b "$body" --argjson max "$SLACK_MAX_CHARS" \
+            '{text: ("*" + $h + "*\n```" + (if ($b | length) > $max then $b[0:$max] + "\n... (truncated - see the report files / e-mail)" else $b end) + "```")}' >"$payload"
+    fi
     if (( ${#ALERT_EMAILS[@]} )); then
         if send_email_alert "$subject" "$body"; then log_info "Alert: e-mail ($status) sent to ${ALERT_EMAILS[*]}"
         else log_warn "Alert: e-mail to ${ALERT_EMAILS[*]} failed"; fi
     fi
-    for url in "${ALERT_WEBHOOKS[@]}"; do send_webhook_alert "$url" "$json" || true; done
+    for url in "${ALERT_WEBHOOKS[@]}"; do send_webhook_alert "$url" "$payload" || true; done
     return 0
 }
 
@@ -587,6 +607,7 @@ main() {
     export AWS_PAGER="" AWS_MAX_ATTEMPTS="$MAX_ATTEMPTS" AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
     if (( ALERT_TEST )); then
         (( ${#ALERT_EMAILS[@]} + ${#ALERT_WEBHOOKS[@]} )) || die 1 "--alert-test needs --alert-email or --alert-webhook"
+        WORK="$(mktemp -d "${TMPDIR:-/tmp}/rds_pmr.XXXXXX")"
         send_alerts 0 test; exit 0
     fi
     if (( DRY_RUN )); then dry_run_plan; exit 0; fi

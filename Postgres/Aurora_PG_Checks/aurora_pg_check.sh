@@ -14,7 +14,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.0.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB_DIR="${AURORA_PG_CHECK_LIB:-$SCRIPT_DIR/lib}"
@@ -515,14 +515,25 @@ collect_region() {
     printf '{}' >"$d/errors.json"
     for f in clusters instances pma certs engver major params itypes snaps events metrics; do printf 'null' >"$d/$f.json"; done
 
-    if (( ${#CLUSTERS[@]} )); then filt="Name=db-cluster-id,Values=$(IFS=,; echo "${CLUSTERS[*]}")"
-    else filt="Name=engine,Values=aurora-postgresql"; fi
-    aws_call "$d/r_clusters.json" clusters "$region" rds describe-db-clusters --filters "$filt" || return 0
-    jq '.DBClusters // []' "$d/r_clusters.json" >"$d/clusters.json"
+    if (( ${#CLUSTERS[@]} )); then
+        # explicit cluster list: 50 ids per --filters value (small argv, within the API's filter-value limit)
+        local -a got=()
+        for (( i = 0; i < ${#CLUSTERS[@]}; i += 50 )); do
+            filt="Name=db-cluster-id,Values=$(IFS=,; echo "${CLUSTERS[*]:i:50}")"
+            aws_call "$d/r_clusters_$i.json" clusters "$region" rds describe-db-clusters --filters "$filt" || return 0
+            got+=("$d/r_clusters_$i.json")
+        done
+        jq -s 'map(.DBClusters // []) | add // [] | unique_by(.DBClusterArn)' -- "${got[@]}" >"$d/clusters.json"
+    else
+        filt="Name=engine,Values=aurora-postgresql"
+        aws_call "$d/r_clusters.json" clusters "$region" rds describe-db-clusters --filters "$filt" || return 0
+        jq '.DBClusters // []' "$d/r_clusters.json" >"$d/clusters.json"
+    fi
     mapfile -t -O "${#FOUND_CLUSTERS[@]}" FOUND_CLUSTERS < <(jq -r '.[] | .DBClusterIdentifier, .DBClusterArn' "$d/clusters.json")
     mapfile -t ids < <(jq -r '.[] | select(.Engine == "aurora-postgresql") | .DBClusterIdentifier' "$d/clusters.json")
     if (( ${#ids[@]} == 0 )); then log_info "[$region] no aurora-postgresql clusters"; return 0; fi
-    log_info "[$region] ${#ids[@]} cluster(s): ${ids[*]}"
+    if (( ${#ids[@]} > 20 )); then log_info "[$region] ${#ids[@]} cluster(s): ${ids[*]:0:20} ..."
+    else log_info "[$region] ${#ids[@]} cluster(s): ${ids[*]}"; fi
 
     # instances, 50 cluster ids per filter
     for (( i = 0; i < ${#ids[@]}; i += 50 )); do
@@ -632,37 +643,37 @@ run_checks_jq() {   # run_checks_jq <mode> <region>
 # Report
 # ----------------------------------------------------------------------------
 build_report() {
-    local region missing="[]" extra
+    local region
+    # cluster name lists go to jq as files, not argv (MAX_ARG_STRLEN = 128 KiB per argument)
+    : >"$WORK/req_clusters.txt"; : >"$WORK/found_clusters.txt"
+    if (( ${#CLUSTERS[@]} )); then printf '%s\n' "${CLUSTERS[@]}" >"$WORK/req_clusters.txt"; fi
+    if (( ${#FOUND_CLUSTERS[@]} )); then printf '%s\n' "${FOUND_CLUSTERS[@]}" >"$WORK/found_clusters.txt"; fi
     for region in "${REGIONS[@]}"; do
         run_checks_jq evaluate "$region" >"$WORK/$region/eval.json" || die 4 "Evaluating checks failed for $region"
     done
-    if (( ${#CLUSTERS[@]} )); then
-        missing="$(jq -n --argjson req "$(json_array "${CLUSTERS[@]}")" --argjson found "$(json_array "${FOUND_CLUSTERS[@]}")" \
-            --arg regions "${REGIONS[*]}" \
-            '[$req[] | select(. as $c | $found | index($c) | not)
-              | {region: "-", cluster: ., group: "cluster", check: "cluster_found", status: "CRIT", value: "",
-                 reason: "cluster not found in region(s): \($regions)", details: []}]')"
-    fi
-    extra="$(jq -n --argjson missing "$missing" --arg regions "${REGIONS[*]}" --argjson nreq "${#CLUSTERS[@]}" \
-        --argjson found "$(json_array "${FOUND_CLUSTERS[@]}")" \
-        'if $nreq == 0 and ($found | length) == 0 then
-           [{region: ($regions | gsub(" "; ",")), cluster: "(none)", group: "cluster", check: "clusters_found", status: "WARN",
-             value: "0", reason: "no aurora-postgresql clusters found", details: []}]
-         else $missing end')"
-    local meta
-    meta="$(jq -n --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" --arg generated "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
+    jq -n --rawfile reqf "$WORK/req_clusters.txt" --rawfile foundf "$WORK/found_clusters.txt" --arg regions "${REGIONS[*]}" \
+        '($reqf | split("\n") | map(select(. != ""))) as $req | ($foundf | split("\n") | map(select(. != ""))) as $found
+         | ($found | map({key: ., value: true}) | from_entries) as $fs
+         | [$req[] | select($fs[.] | not)
+            | {region: "-", cluster: ., group: "cluster", check: "cluster_found", status: "CRIT", value: "",
+               reason: "cluster not found in region(s): \($regions)", details: []}] as $missing
+         | if ($req | length) == 0 and ($found | length) == 0 then
+             [{region: ($regions | gsub(" "; ",")), cluster: "(none)", group: "cluster", check: "clusters_found", status: "WARN",
+               value: "0", reason: "no aurora-postgresql clusters found", details: []}]
+           else $missing end' >"$WORK/extra.json" || die 4 "Building cluster checks failed"
+    jq -n --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" --arg generated "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
         --arg host "$(hostname 2>/dev/null || echo unknown)" --arg account "$ACCOUNT" --arg arn "$CALLER_ARN" \
         --arg profile "${PROFILE:-default}" --argjson regions "$(json_array "${REGIONS[@]}")" \
         --arg lookback "$(human_secs "$LOOKBACK_S")" --argjson period "$PERIOD" --argjson checks "$(json_array "${GROUPS_ON[@]}")" \
         --argjson aws_calls "$AWS_CALLS" --argjson aws_failures "$AWS_FAILS" --argjson thresholds "$TH_JSON" \
         '{script: $script, version: $version, generated: $generated, host: $host, account: $account, caller_arn: $arn,
           profile: $profile, regions: $regions, lookback: $lookback, period: $period, checks: $checks,
-          aws_calls: $aws_calls, aws_failures: $aws_failures, thresholds: $thresholds}')"
+          aws_calls: $aws_calls, aws_failures: $aws_failures, thresholds: $thresholds}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     REPORT="$WORK/report.json"
     local -a evals=()
     for region in "${REGIONS[@]}"; do evals+=("$WORK/$region/eval.json"); done
-    jq -s --argjson meta "$meta" --argjson extra "$extra" \
-        '{meta: $meta, clusters: (map(.clusters) | add // []), results: ((map(.results) | add // []) + $extra)}' \
+    jq -s --slurpfile meta "$WORK/meta.json" --slurpfile extra "$WORK/extra.json" \
+        '($meta[0]) as $meta | ($extra[0]) as $extra | {meta: $meta, clusters: (map(.clusters) | add // []), results: ((map(.results) | add // []) + $extra)}' \
         "${evals[@]}" >"$WORK/raw_report.json" || die 4 "Assembling the report failed"
     render finalize <"$WORK/raw_report.json" >"$REPORT" || die 4 "Finalizing the report failed"
 }
@@ -699,8 +710,8 @@ should_alert() {
     esac
 }
 
-send_email_alert() {   # send_email_alert <subject> <body>
-    local subject="$1" body="$2" mailer="" to
+send_email_alert() {   # send_email_alert <subject> <body-file>   (body streamed from the file)
+    local subject="$1" bodyfile="$2" mailer="" to
     local -a tmo=()
     command -v timeout >/dev/null 2>&1 && tmo=(timeout 60)
     if command -v mail >/dev/null 2>&1; then mailer="mail"
@@ -711,51 +722,61 @@ send_email_alert() {   # send_email_alert <subject> <body>
     if [[ "$mailer" == mail || "$mailer" == mailx ]]; then
         local -a from=()
         [[ -n "$ALERT_FROM" ]] && from=(-r "$ALERT_FROM")
-        printf '%s\n' "$body" | "${tmo[@]}" "$mailer" "${from[@]}" -s "$subject" -- "${ALERT_EMAILS[@]}"
+        "${tmo[@]}" "$mailer" "${from[@]}" -s "$subject" -- "${ALERT_EMAILS[@]}" <"$bodyfile"
     else
         to="$(IFS=,; printf '%s' "${ALERT_EMAILS[*]}")"
         {
             [[ -n "$ALERT_FROM" ]] && printf 'From: %s\n' "$ALERT_FROM"
-            printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' "$to" "$subject" "$body"
+            printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n' "$to" "$subject"
+            cat -- "$bodyfile"
         } | "${tmo[@]}" "$mailer" -t -oi
     fi
 }
 
-send_webhook_alert() {   # send_webhook_alert <url> <json>
-    local url="$1" json="$2" out
+send_webhook_alert() {   # send_webhook_alert <url> <payload-file>
+    local url="$1" payload="$2" out
     command -v curl >/dev/null 2>&1 || { log_warn "Alert: curl not installed; webhook skipped"; return 1; }
     # URL goes through a curl config on stdin so it never shows up in `ps`
     out="$(printf 'url = "%s"\n' "${url//\"/\\\"}" | curl -sS --fail --max-time 20 --retry 2 \
-            -H 'Content-Type: application/json' --data-binary "$json" -o /dev/null -w '%{http_code}' -K - 2>&1)" \
+            -H 'Content-Type: application/json' --data-binary "@$payload" -o /dev/null -w '%{http_code}' -K - 2>&1)" \
         || { log_warn "Alert: webhook $(redact_url "$url") failed: ${out%%$'\n'*}"; return 1; }
     log_info "Alert: webhook $(redact_url "$url") -> HTTP $out"
 }
 
 send_alerts() {   # send_alerts <rc> [test]
-    local rc="$1" mode="${2:-}" status subject body json url
+    local rc="$1" mode="${2:-}" status subject url
     (( ${#ALERT_EMAILS[@]} + ${#ALERT_WEBHOOKS[@]} )) || return 0
+    # body and payload can be large: keep them in files, never in argv
+    [[ -n "$WORK" && -d "$WORK" ]] || WORK="$(mktemp -d "${TMPDIR:-/tmp}/aurora_pg_check.XXXXXX")"
+    local body="$WORK/alert_body.txt" payload="$WORK/alert_payload.json"
     if [[ "$mode" == test ]]; then
         status="TEST"
         subject="[aurora_pg_check] TEST alert from $(hostname 2>/dev/null || echo unknown)"
-        body="Test alert from $SCRIPT_NAME v$SCRIPT_VERSION on $(hostname 2>/dev/null || echo unknown) at $(date '+%Y-%m-%d %H:%M:%S %Z'). No checks were run."
-        json="$(jq -n --arg s "$subject" --arg b "$body" '{status: "TEST", exit_code: 0, text: ($s + "\n\n" + $b)}')"
+        printf 'Test alert from %s v%s on %s at %s. No checks were run.\n' "$SCRIPT_NAME" "$SCRIPT_VERSION" \
+            "$(hostname 2>/dev/null || echo unknown)" "$(date '+%Y-%m-%d %H:%M:%S %Z')" >"$body"
+        jq -n --arg s "$subject" --rawfile b "$body" '{status: "TEST", exit_code: 0, text: ($s + "\n\n" + $b)}' >"$payload"
     else
         should_alert "$rc" || return 0
         status="$(jq -r '.summary.overall' "$REPORT")"
         local regs; regs="$(IFS=,; echo "${REGIONS[*]:0:4}")"
         if (( ${#REGIONS[@]} > 4 )); then regs+=",..."; fi
         subject="[aurora_pg_check] $status: $(jq -r '.summary.cluster_count' "$REPORT") cluster(s), account $ACCOUNT, $regs (exit $rc)"
-        body="$(render text 1 0 <"$REPORT")"
-        json="$(render alert <"$REPORT" | jq -c --arg t "$subject"$'\n\n'"$body" '. + {text: $t}')"
+        render text 1 0 <"$REPORT" >"$body" || { log_warn "Alert: rendering the body failed"; return 0; }
+        if ! { render alert <"$REPORT" >"$payload.tmp" \
+               && jq -c --arg s "$subject" --rawfile b "$body" '. + {text: ($s + "\n\n" + $b)}' "$payload.tmp" >"$payload"; }; then
+            log_warn "Alert: building the webhook payload failed"; return 0
+        fi
     fi
     if [[ "$ALERT_WEBHOOK_FORMAT" == slack ]]; then
-        json="$(jq -cn --arg h "$subject" --arg b "$body" '{text: ("*" + $h + "*\n```" + $b + "```")}')"
+        # Slack rejects/truncates messages over ~40k characters
+        jq -cn --arg h "$subject" --rawfile b "$body" --argjson max 35000 \
+            '{text: ("*" + $h + "*\n```" + (if ($b | length) > $max then $b[0:$max] + "\n... (truncated - see the full report)" else $b end) + "```")}' >"$payload"
     fi
     if (( ${#ALERT_EMAILS[@]} )); then
         if send_email_alert "$subject" "$body"; then log_info "Alert: e-mail ($status) sent to ${ALERT_EMAILS[*]}"
         else log_warn "Alert: e-mail to ${ALERT_EMAILS[*]} failed"; fi
     fi
-    for url in "${ALERT_WEBHOOKS[@]}"; do send_webhook_alert "$url" "$json" || true; done
+    for url in "${ALERT_WEBHOOKS[@]}"; do send_webhook_alert "$url" "$payload" || true; done
     return 0
 }
 
@@ -782,7 +803,8 @@ dry_run_plan() {
     for r in "${regs[@]}"; do
         echo "Region $r:"
         aws_base "$r"
-        if (( ${#CLUSTERS[@]} )); then show_cmd "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=db-cluster-id,Values=$(IFS=,; echo "${CLUSTERS[*]}")"
+        if (( ${#CLUSTERS[@]} )); then show_cmd "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=db-cluster-id,Values=$(IFS=,; echo "${CLUSTERS[*]:0:50}")"
+            (( ${#CLUSTERS[@]} > 50 )) && echo "    ... ($(( (${#CLUSTERS[@]} + 49) / 50 )) calls, 50 cluster ids each)"
         else show_cmd "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=engine,Values=aurora-postgresql"; fi
         show_cmd "${AWS_CMD[@]}" rds describe-db-instances --filters "Name=db-cluster-id,Values=<found-cluster-ids>"
         for g in "${GROUPS_ON[@]}"; do

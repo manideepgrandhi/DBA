@@ -199,10 +199,28 @@ CRON_TZ=Asia/Kolkata
 
 ## Tests
 
-* `tests/run_tests.sh`: 182 checks against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
+* `tests/run_tests.sh`: 198 checks (including a large-fleet regression test) against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
 * `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`. It also runs every printed `apply_command`/`undo_command` through the real CLI: all five action types × `next-maintenance`/`immediate`/`undo-opt-in` for rds, plus docdb and neptune.
 
 Samples from the mock fleet are in `samples/`, with screenshots of the HTML report at `sample_report.png` (full report) and `sample_report_apply_cmd.png` (apply-command column with Copy buttons).
+
+## Large fleets and pagination
+
+* **v1.1.1** fixes `jq: Argument list too long`, which v1.1.0 hit with large fleets: the whole result set was passed to jq as a command-line argument.
+* No result data is passed as a command-line argument any more. Results, errors, alert bodies and webhook payloads move through files and stdin (`jq --slurpfile/--rawfile`, `curl --data-binary @file`, mail fed from a file). This avoids Linux's 128 KiB limit per argument (MAX_ARG_STRLEN) and the ~2 MiB ARG_MAX limit.
+* ARNs are resolved 50 per `describe-db-instances`/`describe-db-clusters` call, with one merge per region.
+* Pagination: the script never passes `--max-items`, `--page-size` or `--no-paginate`, so the AWS CLI v2 follows every `Marker` page itself. `tests/validate_cli.sh` checks this end to end: it points the real CLI at a local fake endpoint that pages every response.
+* Measured on the mock large fleet (2 accounts × 3 regions, 3,120 instances + 120 clusters, 5,322 pending actions, 15 tags each, long descriptions, about 7.7 MB of rows):
+
+  | Formats | Time |
+  |---|---|
+  | json | about 8 s |
+  | text | about 10 s |
+  | html | about 17 s |
+  | csv + html + json + text | about 20 s |
+
+  Most of that time is the mocked AWS calls.
+* Slack webhook messages are cut to 35,000 characters (Slack's limit is about 40k). E-mail and JSON webhooks carry the full report.
 
 ## Caveats
 

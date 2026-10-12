@@ -131,4 +131,33 @@ run_real --output json --region us-east-1 docdb apply-pending-maintenance-action
 echo "apply-command negative control rejected: $neg2/2"
 (( neg2 == 2 )) || fail=$((fail + 1))
 fail=$((fail + cfail))
+# 5. pagination end-to-end with the REAL CLI: run the script against a local fake RDS/STS endpoint that
+#    splits every response into pages (Marker). The CLI must follow all pages with the script's exact
+#    options (no --max-items / --no-paginate / --page-size), and the report must contain everything.
+python3 "$HERE/fake_rds_endpoint.py" "$OUT/fport" "$OUT/freq.jsonl" &
+FAKE=$!
+for _ in $(seq 50); do [[ -s "$OUT/fport" ]] && break; sleep 0.1; done
+mkdir -p "$OUT/realbin"
+cat >"$OUT/realbin/aws" <<WRAP
+#!/usr/bin/env bash
+# real AWS CLI, every service call redirected to the local fake endpoint
+case " \$* " in *" configure "*|*" --version "*) exec "$REAL_AWS" "\$@" ;; esac
+exec "$REAL_AWS" "\$@" --endpoint-url "http://127.0.0.1:$(cat "$OUT/fport")"
+WRAP
+chmod +x "$OUT/realbin/aws"
+PATH="$OUT/realbin:$PATH" "$S" -r us-east-1 --include-docdb -F json >"$OUT/pag.json" 2>"$OUT/pag.err"; prc=$?
+kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null
+pg_ok=1
+summ="$(jq -sc 'group_by(.action) | map({key: .[0].action, value: {requests: length, pages_after_first: (map(select(.marker != null)) | length)}}) | from_entries' "$OUT/freq.jsonl")"
+echo "fake endpoint requests: $summ"
+jq -e '.DescribePendingMaintenanceActions.requests == 6 and .DescribePendingMaintenanceActions.pages_after_first == 4
+       and .DescribeDBInstances.requests == 14 and .DescribeDBInstances.pages_after_first == 9
+       and .DescribeDBClusters.requests == 2 and .DescribeDBClusters.pages_after_first == 1' <<<"$summ" >/dev/null || pg_ok=0
+jq -e '.summary.total == 260 and .summary.resources == 260 and ([.rows[] | select(.resolved | not)] | length) == 0
+       and ([.rows[] | select(.resource_type == "instance")] | length) == 230 and .summary.errors == 0' "$OUT/pag.json" >/dev/null 2>&1 || pg_ok=0
+if (( pg_ok )) && [[ "$prc" == 10 || "$prc" == 11 ]]; then
+    echo "pagination: OK (real CLI followed every Marker page; report has all 260 actions on 260 resources, rc=$prc)"
+else
+    echo "pagination: FAIL (rc=$prc)"; tail -5 "$OUT/pag.err"; fail=$((fail + 1))
+fi
 (( fail == 0 ))

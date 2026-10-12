@@ -23,18 +23,22 @@ def finalize:
   | $r + {summary: {overall: $ov, exit_code: ($ov | rc), clusters: $pc, counts: ($r.results | counts),
                     cluster_count: ($r.clusters | length)}};
 
-def info_of($r; $c): ($r.clusters | map(select(.region == $c.region and .cluster == $c.cluster)) | .[0]);
+# per-cluster lookups are indexed once (O(n)); scanning all results per cluster was O(clusters x results)
+def ckey: "\(.region)\u0000\(.cluster)";
+def results_by: (.results | group_by(ckey) | map({key: (.[0] | ckey), value: .}) | from_entries);   # group_by is stable
+def clusters_by: reduce (.clusters // [])[] as $x ({}; ($x | ckey) as $k | if has($k) then . else .[$k] = $x end);
+def info_of($cb; $c): $cb[$c | ckey];
 
 def text:
-  . as $r | ($only_problems == "1") as $op | ($details == "1") as $dt
+  . as $r | ($only_problems == "1") as $op | ($details == "1") as $dt | ($r | results_by) as $RB | ($r | clusters_by) as $CB
   | [ "Aurora PostgreSQL checks - \($r.meta.script) v\($r.meta.version)",
       "Generated : \($r.meta.generated)   (host \($r.meta.host))",
       "Account   : \($r.meta.account)   profile: \($r.meta.profile)",
       "Regions   : \($r.meta.regions | join(", "))",
       "Window    : lookback \($r.meta.lookback) (metrics period \($r.meta.period)s)   checks: \($r.meta.checks | join(","))",
       "",
-      ( $r.summary.clusters[] as $c | info_of($r; $c) as $i
-        | ($r.results | map(select(.region == $c.region and .cluster == $c.cluster))) as $rows
+      ( $r.summary.clusters[] as $c | info_of($CB; $c) as $i
+        | ($RB[$c | ckey] // []) as $rows
         | ($rows | map(select(if $op then problem else true end))) as $show
         | "=== \($c.region) / \($c.cluster) : \($c.status)"
           + (if $i then "  (aurora-postgresql \($i.engine_version), \($i.instances) instance(s): \($i.writers) writer, \($i.readers) reader(s)\(if $i.serverless then ", serverless v2" else "" end))" else "" end),
@@ -49,11 +53,11 @@ def text:
           + (.ok | pad(5)) + (.warn | pad(6)) + (.crit | pad(6)) + (.error | tostring) ),
       "",
       "Overall: \($r.summary.overall) (exit \($r.summary.exit_code)) - \($r.summary.cluster_count) cluster(s), \($r.summary.counts.total) checks: \($r.summary.counts.ok) ok, \($r.summary.counts.warn) warn, \($r.summary.counts.crit) crit, \($r.summary.counts.error) error"
-    ] | join("\n");
+    ] | .[];   # one string per line: same bytes as join("\n") under jq -r, without O(n^2) concatenation
 
 def badge: "<span class=\"st st-\(. | ascii_downcase)\">\(. | @html)</span>";
 def html:
-  . as $r
+  . as $r | ($r | results_by) as $RB | ($r | clusters_by) as $CB
   | "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Aurora PostgreSQL checks - \($r.summary.overall)</title>\n"
   + "<style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#222}"
   + "table{border-collapse:collapse;width:100%;margin-bottom:18px;font-size:13px}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}"
@@ -66,15 +70,15 @@ def html:
       ["Exit code", ($r.summary.exit_code | tostring)], ["Tool", "\($r.meta.script) v\($r.meta.version) on \($r.meta.host)"]]
      | map("<tr><td><b>\(.[0])</b></td><td>\(.[1] | @html)</td></tr>") | join(""))
   + "</table>\n<h2>Summary</h2>\n<table><tr><th>Region</th><th>Cluster</th><th>Version</th><th>Instances</th><th>Status</th><th>OK</th><th>WARN</th><th>CRIT</th><th>ERROR</th></tr>"
-  + ($r.summary.clusters | map(. as $c | info_of($r; $c) as $i
+  + ($r.summary.clusters | map(. as $c | info_of($CB; $c) as $i
        | "<tr><td>\($c.region | @html)</td><td><a href=\"#\($c.region | @html)-\($c.cluster | @html)\">\($c.cluster | @html)</a></td><td>\($i.engine_version // "-" | @html)</td>"
        + "<td>\($i.instances // "-")</td><td>\($c.status | badge)</td><td>\($c.ok)</td><td>\($c.warn)</td><td>\($c.crit)</td><td>\($c.error)</td></tr>") | join(""))
   + "</table>\n"
   + ($r.summary.clusters | map(. as $c
        | "<h2 id=\"\($c.region | @html)-\($c.cluster | @html)\">\($c.region | @html) / \($c.cluster | @html) \($c.status | badge)</h2>\n"
        + "<table><tr><th>Status</th><th>Group</th><th>Check</th><th>Value</th><th>Reason</th></tr>"
-       + ($r.results | map(select(.region == $c.region and .cluster == $c.cluster)
-            | "<tr><td>\(.status | badge)</td><td>\(.group | @html)</td><td>\(.check | @html)</td><td>\(.value | @html)</td><td>\(.reason | @html)"
+       + (($RB[$c | ckey] // []) | map(
+              "<tr><td>\(.status | badge)</td><td>\(.group | @html)</td><td>\(.check | @html)</td><td>\(.value | @html)</td><td>\(.reason | @html)"
               + (if (.details | length) > 0 then "<ul>" + (.details | map("<li>\(@html)</li>") | join("")) + "</ul>" else "" end) + "</td></tr>") | join(""))
        + "</table>\n") | join(""))
   + "</body></html>";
