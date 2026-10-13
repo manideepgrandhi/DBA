@@ -16,7 +16,7 @@ export MOCK_LOG="$OUT/calls.jsonl"
 S="$HERE/../rds_pending_maintenance_report.sh"
 
 for s in "fleet -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1 --include-docdb" "fleet -P nonprod --all-regions" \
-         "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1"; do
+         "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "fleet -P prod -r us-west-2"; do
     read -r scen args <<<"$s"
     # shellcheck disable=SC2086
     MOCK_SCENARIO="$scen" PATH="$HERE/mock:$PATH" "$S" $args -F json >/dev/null 2>&1
@@ -98,8 +98,9 @@ echo "mock response shapes matching CLI skeleton: $shape_ok/9"
 #    every action type, rds + docdb + neptune, instance + cluster
 CMDS='.rows[] | .apply_immediate_command, .status_command, .pending_actions_command, .minor_upgrade_command | select(. != "")'
 : >"$OUT/cmds.txt"
-MOCK_SCENARIO=fleet PATH="$HERE/mock:$PATH" "$S" -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1 --include-docdb -F json 2>/dev/null \
-    | jq -r "$CMDS" >>"$OUT/cmds.txt"
+MOCK_SCENARIO=fleet PATH="$HERE/mock:$PATH" "$S" -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1,us-west-2 --include-docdb -F json \
+    2>/dev/null >"$OUT/fleet.json"
+jq -r "$CMDS" "$OUT/fleet.json" >>"$OUT/cmds.txt"
 # synthetic rows through the real finalize step: a neptune instance (not in the mock fleet) and awkward
 # values that need shell quoting; eval must give back exactly the original words
 # shellcheck disable=SC2016  # literal $ and backtick in test data are intentional
@@ -117,24 +118,51 @@ SYN='[{"account":"123456789012","profile":"default","region":"us-east-1","source
   "identifier":"it'"'"'s a b$c`d;rm -rf x","cluster":"","engine":"postgres","engine_version":"16","instance_class":"db.t4g.micro","resolved":false,
   "tags":{},"tag_columns":{},"action":"system-update","description":"x","opt_in_status":"","effective_apply":null,
   "urgency":"OPTIONAL","severity":"INFO","arn":"arn:aws:rds:us-east-1:123456789012:db:it'"'"'s a b$c`d;rm -rf x",
-  "minor_behind":true,"latest_minor_version":"16.8","next_minor_version":"16.8"}]'
+  "minor_behind":true,"latest_minor_version":"16.8","next_minor_version":"16.8"},
+ {"account":"123456789012","profile":"default","region":"us-east-1","source":"rds","resource_type":"instance",
+  "identifier":"'"$(printf '9Weird__ID--x%.0s' {1..25})"'-","cluster":"","engine":"postgres","engine_version":"16","instance_class":"db.t4g.micro","resolved":true,
+  "tags":{},"tag_columns":{},"action":"system-update","description":"x","opt_in_status":"","effective_apply":null,"source_instance":"",
+  "urgency":"OPTIONAL","severity":"INFO","arn":"arn:aws:rds:us-east-1:123456789012:db:weird","role":"primary","patch_sequence":2,"patch_group":"w",
+  "minor_behind":false,"latest_minor_version":"","next_minor_version":"up to date"}]'
 jq -n --argjson rows "$SYN" '{meta: {tz_abbr: "IST", tag_columns: [], version_check: true}, rows: $rows, errors: []}' \
   | TZ=Asia/Kolkata jq --arg mode finalize --argjson now 0 --argjson crit_days 7 --argjson warn_days 30 --argjson tagcols '[]' \
       --argjson f '{"engines":[],"actions":[],"identifiers":[],"urgency":[],"tags":[]}' \
       -f "$HERE/../lib/report.jq" >"$OUT/syn.json"
 jq -r "$CMDS" "$OUT/syn.json" >>"$OUT/cmds.txt"
+# backup + wait: shell snippets (variable + $(date -u ...)); run them in bash exactly as pasted, with `aws`
+# replaced by a recorder, then replay every recorded argv through the real CLI and check the snapshot name rules
+: >"$OUT/bk_argv.jsonl"; bk_pairs=0; bk_bad=0
+while IFS= read -r pair; do
+    b="$(jq -r '.[0]' <<<"$pair")"; w="$(jq -r '.[1]' <<<"$pair")"
+    : >"$OUT/bk_one.jsonl"
+    REC="$OUT/bk_one.jsonl" bash -c 'aws() { python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "$@" >>"$REC"; }; eval "$1" && eval "$2"' _ "$b" "$w" \
+        || { echo "BACKUP SNIPPET FAILED IN BASH: $b"; bk_bad=$((bk_bad + 1)); continue; }
+    names="$(jq -r '. as $a | (index("--db-snapshot-identifier") // index("--db-cluster-snapshot-identifier")) as $i | $a[$i + 1]' "$OUT/bk_one.jsonl" | sort -u)"
+    if [[ "$(wc -l <<<"$names")" -ne 1 || "$(wc -l <"$OUT/bk_one.jsonl")" -ne 2 ]]; then echo "BACKUP/WAIT NAME MISMATCH: $names"; bk_bad=$((bk_bad + 1)); fi
+    # RDS snapshot identifier rules: 1-255 chars, letters/digits/hyphens, first a letter, no '--', no trailing '-'
+    if [[ ! "$names" =~ ^[A-Za-z][A-Za-z0-9-]{0,254}$ || "$names" == *--* || "$names" == *- || ! "$names" =~ ^pre-maint-.+-[0-9]{8}-[0-9]{4}$ ]]; then
+        echo "BAD SNAPSHOT NAME (${#names}): $names"; bk_bad=$((bk_bad + 1))
+    fi
+    cat "$OUT/bk_one.jsonl" >>"$OUT/bk_argv.jsonl"; bk_pairs=$((bk_pairs + 1))
+done < <(jq -c '.rows[] | select(.backup_command != "") | [.backup_command, .backup_wait_command]' "$OUT/fleet.json" "$OUT/syn.json" | sort -u)
+long="$(jq -r '.rows[] | select(.arn | endswith(":weird")) | .backup_snapshot_name' "$OUT/syn.json")"
+[[ ${#long} -le 255 && "$long" == pre-maint-9Weird-ID-x9Weird-ID-x*-YYYYMMDD-HHMM && "$long" != *--* ]] || { echo "LONG/AWKWARD ID NOT SANITISED: $long"; bk_bad=$((bk_bad + 1)); }
+echo "backup snippets run in bash: $bk_pairs, name-rule/consistency failures: $bk_bad (longest name ${#long} chars incl. YYYYMMDD-HHMM)"
+fail=$((fail + bk_bad))
 qok=0
 awk_id="it's a b\$c\`d;rm -rf x"
 for field in status_command pending_actions_command minor_upgrade_command; do
-    c="$(jq -r --arg f "$field" '.rows[] | select(.engine == "postgres") | .[$f]' "$OUT/syn.json")"
+    c="$(jq -r --arg f "$field" '.rows[] | select(.identifier | test("^it.s a b")) | .[$f]' "$OUT/syn.json")"
+    [[ "$c" != *$'\n'* ]] || { echo "QUOTING: more than one command selected"; fail=$((fail + 1)); continue; }
     eval "set -- $c"
     want="$awk_id"; [[ "$field" == pending_actions_command ]] && want="arn:aws:rds:us-east-1:123456789012:db:$awk_id"
     [[ "$5" == "$want" ]] && qok=$((qok + 1)) || echo "QUOTING FAIL $field: got [$5]"
 done
-[[ "$(jq -r '.rows[] | select(.engine == "postgres") | .apply_immediate_command' "$OUT/syn.json")" == "" ]] && qok=$((qok + 1)) || echo "unresolved row has an immediate command"
+[[ "$(jq -r '.rows[] | select(.identifier | test("^it.s a b")) | .apply_immediate_command' "$OUT/syn.json")" == "" ]] && qok=$((qok + 1)) || echo "unresolved row has an immediate command"
 echo "quoting of awkward values round-trips through the shell: $qok/4"
 (( qok == 4 )) || fail=$((fail + 1))
 sort -u -o "$OUT/cmds.txt" "$OUT/cmds.txt"
+jq -r '@sh' "$OUT/bk_argv.jsonl" | sort -u | sed 's/^/aws /' >>"$OUT/cmds.txt"   # recorded backup / wait argv, re-quoted
 cpass=0; cfail=0; declare -A combo=()
 while IFS= read -r cmd; do
     eval "set -- $cmd"                       # same word splitting / quote removal as a user's shell
@@ -147,18 +175,22 @@ while IFS= read -r cmd; do
     run_real "$@"
     if [[ "$OUTP" == *"Could not connect to the endpoint URL"* ]]; then
         cpass=$((cpass + 1))
-        if [[ "$op" == apply-pending-maintenance-action ]]; then combo["$svc $act $opt"]=1; else combo["$svc $op"]=1; fi
+        if [[ "$op" == apply-pending-maintenance-action ]]; then combo["$svc $act $opt"]=1
+        elif [[ "$op" == wait ]]; then combo["$svc wait $3"]=1; else combo["$svc $op"]=1; fi
         [[ "$cmd" == *"--opt-in-type next-maintenance"* || "$cmd" == *undo-opt-in* || "$cmd" == *--apply-immediately* ]] \
             && { echo "UNEXPECTED (removed in 1.3.0 / must not be printed): $cmd"; cfail=$((cfail + 1)); }
     else cfail=$((cfail + 1)); echo "FAIL ($RC): $cmd :: ${OUTP:0:300}"; fi
 done <"$OUT/cmds.txt"
-echo "printed immediate/status/pending/minor-upgrade commands accepted by real CLI: $cpass, rejected: $cfail"
+echo "printed immediate/status/pending/minor-upgrade/backup/wait commands accepted by real CLI: $cpass, rejected: $cfail"
 for svc in rds docdb neptune; do
     for op in describe-db-instances describe-db-clusters describe-pending-maintenance-actions modify-db-cluster; do
         [[ -n "${combo[$svc $op]:-}" ]] || { echo "MISSING $svc $op"; cfail=$((cfail + 1)); }
     done
 done
-[[ -n "${combo[rds modify-db-instance]:-}" ]] || { echo "MISSING rds modify-db-instance"; cfail=$((cfail + 1)); }
+for k in "rds modify-db-instance" "rds create-db-snapshot" "rds create-db-cluster-snapshot" "docdb create-db-cluster-snapshot" \
+         "neptune create-db-cluster-snapshot" "rds wait db-snapshot-available" "rds wait db-cluster-snapshot-available"; do
+    [[ -n "${combo[$k]:-}" ]] || { echo "MISSING $k"; cfail=$((cfail + 1)); }
+done
 for act in system-update db-upgrade os-upgrade hardware-maintenance ca-certificate-rotation; do
     printf '%s\n' "${!combo[@]}" | grep -qE "^rds $act immediate$" || { echo "MISSING rds $act immediate"; cfail=$((cfail + 1)); }
 done
@@ -177,8 +209,12 @@ run_real --output json --region us-east-1 rds modify-db-cluster --engine-version
 [[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))
 run_real --output json --region us-east-1 rds modify-db-instance --db-instance-identifier x --engine-verison 16.8
 [[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))
-echo "printed-command negative control rejected: $neg2/4"
-(( neg2 == 4 )) || fail=$((fail + 1))
+run_real --output json --region us-east-1 rds create-db-cluster-snapshot --db-cluster-snapshot-identifier pre-maint-x-20261013-1200
+[[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))
+run_real --output json --region us-east-1 docdb wait db-cluster-snapshot-available --db-cluster-snapshot-identifier x
+[[ "$OUTP" != *"Could not connect"* ]] && neg2=$((neg2 + 1))   # docdb has no snapshot waiter -> the report uses aws rds wait
+echo "printed-command negative control rejected: $neg2/6"
+(( neg2 == 6 )) || fail=$((fail + 1))
 fail=$((fail + cfail))
 # 5. pagination end-to-end with the REAL CLI: run the script against a local fake RDS/STS endpoint that
 #    splits every response into pages (Marker). The CLI must follow all pages with the script's exact

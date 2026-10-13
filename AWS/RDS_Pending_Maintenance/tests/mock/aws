@@ -170,6 +170,32 @@ if SCEN != "none":
         I.append(inst("cms-mariadb", "mariadb", "10.11.8", "db.t4g.large", "wed:02:00-wed:02:30", tags("staging", "web-team", "cms")))
         P.append({"ResourceIdentifier": arn("db", "cms-mariadb"), "PendingMaintenanceActionDetails": [
             act("os-upgrade", "New Operating System upgrade is available", auto=25)]})
+    elif ACCT == "111111111111" and REGION == "us-west-2":
+        # roles / patch order: Aurora writer + 2 readers, RDS primary (Multi-AZ) + same-region and cross-region
+        # read replicas, a global-database secondary cluster (no writer member)
+        t = tags("prod", "finance-team", "ledger")
+        C.append(clus("ledger-ams", "aurora-mysql", "8.0.mysql_aurora.3.08.0", "sun:10:00-sun:10:30", t,
+                      ["ledger-ams-1", "ledger-ams-2", "ledger-ams-3"]))
+        I += [inst("ledger-ams-%d" % k, "aurora-mysql", "8.0.mysql_aurora.3.08.0", "db.r7g.2xlarge", "sun:10:00-sun:10:30", t, "ledger-ams")
+              for k in (1, 2, 3)]
+        tb = tags("prod", "billing-team", "billing")
+        I.append(inst("billing-pg", "postgres", "16.4", "db.m7g.2xlarge", "sat:11:00-sat:11:30", tb, MultiAZ=True,
+                      ReadReplicaDBInstanceIdentifiers=["billing-pg-rr1"]))
+        I.append(inst("billing-pg-rr1", "postgres", "16.4", "db.m7g.xlarge", "sat:11:00-sat:11:30", tb,
+                      ReadReplicaSourceDBInstanceIdentifier="billing-pg", ReplicaMode="open-read-only"))
+        I.append(inst("billing-pg-dr", "postgres", "16.4", "db.m7g.xlarge", "sat:11:00-sat:11:30", tb,
+                      ReadReplicaSourceDBInstanceIdentifier="arn:aws:rds:us-east-1:111111111111:db:billing-pg-east"))
+        C.append(clus("risk-apg-west", "aurora-postgresql", "16.8", "sun:12:00-sun:12:30", tags("prod", "risk-team", "risk"),
+                      ["risk-apg-west-1"], GlobalClusterIdentifier="risk-global"))
+        C[-1]["DBClusterMembers"][0]["IsClusterWriter"] = False
+        sysupd = "New Operating System update is available"
+        P += [{"ResourceIdentifier": arn("db", "ledger-ams-1"), "PendingMaintenanceActionDetails": [act("system-update", sysupd, auto=21)]},
+              {"ResourceIdentifier": arn("db", "ledger-ams-2"), "PendingMaintenanceActionDetails": [act("system-update", sysupd, auto=21)]},
+              {"ResourceIdentifier": arn("db", "ledger-ams-3"), "PendingMaintenanceActionDetails": [act("system-update", sysupd, auto=21)]},
+              {"ResourceIdentifier": arn("db", "billing-pg"), "PendingMaintenanceActionDetails": [act("os-upgrade", "New Operating System upgrade is available", auto=28)]},
+              {"ResourceIdentifier": arn("db", "billing-pg-rr1"), "PendingMaintenanceActionDetails": [act("os-upgrade", "New Operating System upgrade is available", auto=28)]},
+              {"ResourceIdentifier": arn("db", "billing-pg-dr"), "PendingMaintenanceActionDetails": [act("os-upgrade", "New Operating System upgrade is available", auto=28)]},
+              {"ResourceIdentifier": arn("cluster", "risk-apg-west"), "PendingMaintenanceActionDetails": [act("db-upgrade", "Upgrade to Aurora PostgreSQL 16.9", auto=35)]}]
     elif ACCT == "222222222222" and REGION == "us-east-1":
         I.append(inst("qa-sql", "sqlserver-ex", "16.00.4135.4.v1", "db.t3.xlarge", "sun:03:00-sun:03:30", tags("qa", "qa-team")))
         I.append(inst("dev-pg-01", "postgres", "16.4", "db.t4g.medium", "mon:04:00-mon:04:30", tags("dev", "platform-team", "sandbox")))
@@ -243,6 +269,7 @@ EV = {
     ("sqlserver-se", "15.00.4415.2.v1"): [("15.00.4420.2.v1", False), ("15.00.4430.1.v1", False), ("16.00.4185.3.v1", True)],
     ("mysql", "8.0.39"): [("8.0.40", False), ("8.0.41", False), ("8.0.42", False), ("8.4.5", True)],
     ("docdb", "5.0.0"): [],
+    ("aurora-mysql", "8.0.mysql_aurora.3.08.0"): [("8.0.mysql_aurora.3.10.0", False)],
     ("aurora-mysql", "8.0.mysql_aurora.3.05.2"): [("8.0.mysql_aurora.3.06.1", False), ("8.0.mysql_aurora.3.08.0", False)],
     ("postgres", "15.7"): [("15.8", False), ("15.10", False), ("15.12", False), ("15.13", False), ("15.14", False),
                            ("15.15", False), ("15.16", False), ("16.8", True)],

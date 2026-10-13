@@ -62,7 +62,7 @@ HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
 t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'read-only'; has help out '--no-version-check'; hasnt help out 'apply-opt-in'
-t version 0 fleet --version;           has version out '1\.3\.0'
+t version 0 fleet --version;           has version out '1\.4\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -100,7 +100,7 @@ for x in crm-sql-prod qa-sql payments-ams orders-prod-2 erp-oracle-prod reportin
     has fleet out " $x"
 done
 has fleet out 'Accounts  : 111111111111 \(prod\), 222222222222 \(nonprod\)'
-hasnt fleet out 'catalog-docdb '   # docdb cluster only appears with --include-docdb
+hasnt fleet out 'cluster +[0-9-]+ +cluster +catalog-docdb'   # docdb cluster row only appears with --include-docdb
 t fleet_json 11 fleet "${ALL3[@]}" -F json
 jqt fleet_json '.summary.total == 15 and .summary.unfiltered_total == 15'
 jqt fleet_json '[.rows[].action] | unique == ["ca-certificate-rotation","db-upgrade","hardware-maintenance","os-upgrade","system-update"]'
@@ -109,8 +109,8 @@ jqt fleet_json '[.rows[].engine] | unique | length == 11'
 jqt fleet_json '.summary.by_urgency == {"OVERDUE":1,"CRIT":4,"WARN":5,"INFO":3,"OPTIONAL":2}'
 jqt fleet_json '.summary.by_region == {"us-east-1":9,"ap-south-1":5,"eu-west-1":1}'
 jqt fleet_json '.summary.by_account == {"111111111111":11,"222222222222":4}'
-jqt fleet_json '.rows[0].identifier == "crm-sql-prod" and .rows[0].urgency == "OVERDUE" and .rows[0].action == "system-update"'
-jqt fleet_json '[.rows[] | .effective_apply // 1e18] as $e | $e == ($e | sort)'
+jqt fleet_json '.rows[0].engine == "aurora-mysql" and .rows[0].identifier == "payments-ams" and .rows[-1].engine == "unknown"'
+jqt fleet_json '[.rows[] | [(.engine | ascii_downcase), (.patch_group | ascii_downcase), .account, .region, (.patch_sequence // 9), (.identifier | ascii_downcase)]] as $k | $k == ($k | sort)'
 jqt fleet_json '.rows | map(select(.urgency == "OPTIONAL")) | all(.effective_apply == null and .days_until == null)'
 jqt fleet_json '.rows[] | select(.identifier == "orders-prod-2") | .cluster == "orders-prod" and .instance_class == "db.r6g.xlarge" and .effective_basis == "current-apply-date" and .tags.Owner == "payments-team"'
 jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | .instance_class == "serverless v2 2.0-32.0 ACU" and .effective_basis == "next-window (opted in)" and .maint_window_local == "Tue 02:00-Tue 02:30 IST" and (.effective_apply_utc | endswith("20:30 UTC"))'
@@ -203,6 +203,54 @@ chk "sq quoting round-trips through the shell" bash -c '
     eval "set -- $q"; [[ $# -eq 1 && "$1" == "$x" ]] || exit 1
   done'
 
+echo "== roles / patch sequence / backup commands / engine sections"
+t roles 10 fleet -P prod -r us-west-2 -F json
+jqt roles '[.rows[] | select(.cluster == "ledger-ams")] | map([.identifier, .role, .patch_sequence]) == [["ledger-ams-2","replica (reader)",1],["ledger-ams-3","replica (reader)",1],["ledger-ams-1","primary (writer)",2]]'
+jqt roles '[.rows[] | select(.engine == "postgres")] | map([.identifier, .role, .patch_sequence, .patch_group]) == [["billing-pg-rr1","replica",1,"billing-pg"],["billing-pg","primary (Multi-AZ)",2,"billing-pg"],["billing-pg-dr","replica",1,"billing-pg-dr"]]'
+jqt roles '.rows[] | select(.identifier == "billing-pg") | .sequence_note | test("source of 1 read replica.*billing-pg-rr1.*Multi-AZ")'
+jqt roles '.rows[] | select(.identifier == "risk-apg-west") | .role == "cluster (global secondary)" and .patch_sequence == 1 and (.sequence_note | test("risk-global"))'
+jqt roles '[.engines[] | [.engine, .total, (.rows | length)]] == [["aurora-mysql",3,3],["aurora-postgresql",1,1],["postgres",3,3]] and (.rows | length) == 7'
+jqt roles '.rows[] | select(.identifier == "ledger-ams-2") | .backup_command == "SNAP_ledger_ams=\"pre-maint-ledger-ams-$(date -u +%Y%m%d-%H%M)\" && aws rds create-db-cluster-snapshot --db-cluster-identifier ledger-ams --db-cluster-snapshot-identifier \"$SNAP_ledger_ams\" --region us-west-2 --profile prod" and .backup_wait_command == "aws rds wait db-cluster-snapshot-available --db-cluster-snapshot-identifier \"$SNAP_ledger_ams\" --region us-west-2 --profile prod" and (.backup_note | test("cluster snapshot covers all members")) and .backup_snapshot_name == "pre-maint-ledger-ams-YYYYMMDD-HHMM"'
+jqt roles '.rows[] | select(.identifier == "billing-pg-rr1") | (.backup_command | contains("create-db-snapshot --db-instance-identifier billing-pg --db-snapshot-identifier \"$SNAP_billing_pg\"")) and (.backup_note | test("source billing-pg"))'
+jqt roles '.rows[] | select(.identifier == "billing-pg") | .backup_wait_command == "aws rds wait db-snapshot-available --db-snapshot-identifier \"$SNAP_billing_pg\" --region us-west-2 --profile prod"'
+jqt roles '.rows[] | select(.identifier == "billing-pg-dr") | .backup_command == "" and .backup_wait_command == "" and (.backup_note | test("cross-region read replica"))'
+grep -q '"describe-db-clusters", "--filters", "Name=db-cluster-id,Values=arn:aws:rds:us-west-2:111111111111:cluster:ledger-ams"' "$MOCK_LOG" && ok "member cluster described for writer/reader roles" || bad "member cluster not described"
+jqt fleet_json '.rows[] | select(.identifier == "orders-prod-2") | .role == "replica (reader)" and .patch_sequence == 1 and .patch_group == "orders-prod"'
+jqt fleet_json '.rows[] | select(.identifier == "orders-prod") | .role == "cluster" and .patch_sequence == 1 and (.sequence_note | test("cluster-level"))'
+jqt fleet_json '.rows[] | select(.identifier == "old-replica-2023") | .role == "unknown" and .patch_sequence == null and .backup_command == ""'
+jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | (.backup_command | contains("&& aws neptune create-db-cluster-snapshot --db-cluster-identifier graph-neptune ")) and (.backup_wait_command | startswith("aws rds wait db-cluster-snapshot-available "))'
+jqt docv '.rows[] | select(.identifier == "catalog-docdb-1") | .role == "primary (writer)" and (.backup_command | contains("aws docdb create-db-cluster-snapshot --db-cluster-identifier catalog-docdb "))'
+jqt fleet_json 'all(.rows[] | select(.backup_command != ""); .backup_command | test("^SNAP_[A-Za-z0-9_]+=\"pre-maint-[A-Za-z][A-Za-z0-9-]*-\\$\\(date -u \\+%Y%m%d-%H%M\\)\" && aws (rds|docdb|neptune) create-db(-cluster)?-snapshot "))'
+chk "backup + wait commands run in bash: same snapshot name, UTC timestamp, valid identifier" bash -c '
+  cmds="$(jq -r ".rows[] | select(.identifier == \"ledger-ams-1\") | .backup_command, .backup_wait_command" "'"$OUT"'/roles.out")"
+  aws() { printf "%s\n" "$*" >>"'"$OUT"'/fakeaws.txt"; }; : >"'"$OUT"'/fakeaws.txt"
+  eval "$cmds"
+  n1="$(sed -n "1s/.*--db-cluster-snapshot-identifier \([^ ]*\).*/\1/p" "'"$OUT"'/fakeaws.txt")"; n2="$(sed -n "2s/.*--db-cluster-snapshot-identifier \([^ ]*\).*/\1/p" "'"$OUT"'/fakeaws.txt")"
+  [[ "$n1" == "$n2" && "$n1" =~ ^pre-maint-ledger-ams-[0-9]{8}-[0-9]{4}$ && "${n1: -13}" == "$(date -u +%Y%m%d-%H%M)" || "${n1: -13}" < "$(date -u +%Y%m%d-%H%M)" ]]'
+t textsec 10 fleet -P prod -r us-west-2
+has textsec out '^ENGINE: aurora-mysql - 3 pending action\(s\) on 3 resource\(s\) in 1 cluster/server group\(s\)'
+has textsec out '^ENGINE: postgres - 3 pending'
+has textsec out '^         backup   : SNAP_ledger_ams="pre-maint-ledger-ams-\$\(date -u \+%Y%m%d-%H%M\)" && aws rds create-db-cluster-snapshot '
+has textsec out '^         wait     : aws rds wait db-cluster-snapshot-available '
+has textsec out '^         sequence : reader of ledger-ams: patch readers first'
+chk "text: ledger-ams readers listed before the writer" bash -c "grep -oE '^WARN .* ledger-ams-[123] \\(ledger-ams\\)' '$OUT/textsec.out' | grep -oE 'ledger-ams-[123]' | paste -sd, - | grep -qx 'ledger-ams-2,ledger-ams-3,ledger-ams-1'"
+t split 10 fleet -P prod -r us-west-2 -F csv,html -o "$OUT/split" --split-by-engine --prefix sp
+chk "--split-by-engine: 3 per-engine CSVs + main csv + html" test "$(find "$OUT/split" -type f | wc -l)" -eq 5
+chk "split csv only has its engine" python3 -c "
+import csv,glob,sys; f=glob.glob('$OUT/split/sp_*_postgres.csv')[0]; r=list(csv.DictReader(open(f))); sys.exit(not (len(r)==3 and all(x['engine']=='postgres' for x in r)))"
+t splitnoout 1 fleet -P prod -r us-west-2 --split-by-engine
+t splitnocsv 1 fleet -P prod -r us-west-2 -F html -o "$OUT/split2" --split-by-engine
+t htmlsec 10 fleet -P prod -r us-west-2 -F html
+chk "html: TOC + one section/table per engine + seq column + backup section" bash -c "grep -q '<nav class=\"toc\">' '$OUT/htmlsec.out' && test \$(grep -o '<section id=\"eng-' '$OUT/htmlsec.out' | wc -l) -eq 3 && test \$(grep -o '<table class=\"main\"' '$OUT/htmlsec.out' | wc -l) -eq 3 && grep -q 'href=\"#eng-aurora-mysql\"' '$OUT/htmlsec.out' && grep -q '<th>Seq / role</th>' '$OUT/htmlsec.out' && grep -q '1. backup first' '$OUT/htmlsec.out' && grep -q 'wait until the snapshot is available' '$OUT/htmlsec.out' && grep -q 'querySelectorAll' '$OUT/htmlsec.out'"
+chk "html: backup command survives HTML escaping (Copy gives the exact text)" python3 -c "
+import html,re,sys; s=open('$OUT/htmlsec.out').read(); c=[html.unescape(x) for x in re.findall(r'<code>(.*?)</code>', s)]
+sys.exit(not any(x.startswith('SNAP_ledger_ams=\"pre-maint-ledger-ams-\$(date -u +%Y%m%d-%H%M)\" && aws rds create-db-cluster-snapshot') for x in c))"
+chk "csv: backup command round-trips through CSV quoting" python3 -c "
+import csv,io,json,subprocess,sys
+rows=list(csv.DictReader(open([l for l in __import__('glob').glob('$OUT/split/sp_*.csv') if __import__('os').path.basename(l).count('_')==2][0])))
+js={r['identifier']: r['backup_command'] for r in json.load(open('$OUT/roles.out'))['rows']}
+sys.exit(not all(r['backup_command']==js[r['identifier']] for r in rows))"
+
 echo "== thresholds / time zone"
 t thr 10 fleet -P prod -r ap-south-1 -F json --crit-days 0 --warn-days 7   # crit 0: independent of time of day
 jqt thr '[.rows[] | select(.identifier == "erp-oracle-prod")][0].urgency == "WARN"'
@@ -262,9 +310,9 @@ t files 11 fleet "${ALL3[@]}" -F csv,html,json,text -o "$OUT/rep" --prefix pm
 n="$(find "$OUT/rep" -name 'pm_[0-9]*_[0-9]*.*' | wc -l)"; chk "4 timestamped files ($n)" test "$n" -eq 4
 f="$(find "$OUT/rep" -name 'pm_*.csv')"
 chk "file mode 0640" test "$(stat -c %a "$f")" = 640
-chk "csv parses: 16 lines, 37 columns" python3 -c "
-import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==37 for x in r)))"
-chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn","apply_immediate_command","apply_note","status_command","pending_actions_command","auto_minor_upgrade","next_minor_version","latest_minor_version","minor_versions_available","minor_upgrade_command","minor_upgrade_note"$' "$f"
+chk "csv parses: 16 lines, 45 columns" python3 -c "
+import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==45 for x in r)))"
+chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn","apply_immediate_command","apply_note","status_command","pending_actions_command","auto_minor_upgrade","next_minor_version","latest_minor_version","minor_versions_available","minor_upgrade_command","minor_upgrade_note","patch_group","role","patch_sequence","sequence_note","backup_snapshot_name","backup_command","backup_wait_command","backup_note"$' "$f"
 h="$(find "$OUT/rep" -name 'pm_*.html')"
 chk "html: cards + sortable table + IST + UTC" bash -c "grep -q 'OVERDUE' '$h' && grep -q 'data-s=' '$h' && grep -q 'IST' '$h' && grep -q 'UTC' '$h' && grep -q '<script>' '$h'"
 chk "html: no external resources" bash -c "! grep -Eq '(src|href)=\"https?://' '$h'"
@@ -328,7 +376,7 @@ rm -rf -- "$lw"
 lj="$(find "$OUT/large" -name '*.json')"
 chk "large json: 5322 rows, 3120 instances resolved, unique ARNs 3240" jq -e '(.rows | length) == 5322 and ([.rows[] | select(.resource_type == "instance" and .resolved)] | map(.arn) | unique | length) == 3120 and .summary.resources == 3240 and ([.rows[] | select(.resolved | not)] | length) == 0' "$lj"
 chk "large json: 15 tags kept, long descriptions intact" jq -e '[.rows[] | select(.resource_type == "instance")][0] | (.tags | length) == 15 and (.description | length) > 250' "$lj"
-chk "large json: sorted by effective date" jq -e '[.rows[] | .effective_apply // 1e18] as $e | $e == ($e | sort)' "$lj"
+chk "large json: patching order (engine, group, sequence, instance) + engine sections" jq -e '([.rows[] | [(.engine | ascii_downcase), (.patch_group | ascii_downcase), .account, .region, (.patch_sequence // 9), (.identifier | ascii_downcase)]] as $k | $k == ($k | sort)) and (.engines | length) == 6 and ([.engines[].rows | length] | add) == 5322' "$lj"
 chk "large csv: 5323 lines" test "$(python3 -c "import csv,sys; print(len(list(csv.reader(open(sys.argv[1])))))" "$(find "$OUT/large" -name '*.csv')")" -eq 5323
 chk "large html parses, 5322 rows" python3 -c "
 import html.parser,sys

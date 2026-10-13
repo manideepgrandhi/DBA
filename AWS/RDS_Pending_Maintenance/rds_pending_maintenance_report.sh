@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.3.0"
+readonly SCRIPT_VERSION="1.4.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -41,6 +41,7 @@ DISPLAY_TZ="Asia/Kolkata"
 CRIT_DAYS=7
 WARN_DAYS=30
 VERSION_CHECK=1
+SPLIT_BY_ENGINE=0
 readonly SLACK_MAX_CHARS=35000
 LOG_FILE=""
 CONFIG_FILE=""
@@ -107,11 +108,16 @@ Report:
       --tz ZONE             Second time zone shown next to UTC (default: Asia/Kolkata)
       --crit-days N         Apply date within N days = CRIT (default: 7; past date = OVERDUE)
       --warn-days N         Apply date within N days = WARN (default: 30; later = INFO, no date = OPTIONAL)
+      --split-by-engine     With csv and -o: also write one CSV per engine (<prefix>_<stamp>_<engine>.csv)
       --no-version-check    Skip the minor-version lookup (describe-db-engine-versions); the columns
                             auto_minor_upgrade stays, next/latest_minor_version show 'not checked'
                             Printed per row (NEVER run): apply_immediate_command (--opt-in-type immediate,
                             may restart / fail over the DB), status_command, pending_actions_command,
-                            minor_upgrade_command (--engine-version upgrade, in the next window)
+                            minor_upgrade_command (--engine-version upgrade, in the next window),
+                            backup_command + backup_wait_command (manual snapshot named
+                            pre-maint-<id>-<UTC YYYYMMDD-HHMM at run time>; take it before patching)
+                            Rows: grouped per engine, sorted by cluster / server, then patch_sequence
+                            (replicas / readers 1, primary / writer 2), then instance
   -l, --log-file FILE       Append log lines to FILE
 
 Alerts:
@@ -187,6 +193,7 @@ load_config() {
             crit_days)              CRIT_DAYS="$val" ;;
             warn_days)              WARN_DAYS="$val" ;;
             apply_opt_in)           log_warn "Config $file:$lineno: apply_opt_in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored" ;;
+            split_by_engine)        if is_true "$val"; then SPLIT_BY_ENGINE=1; else SPLIT_BY_ENGINE=0; fi ;;
             version_check)          if is_true "$val"; then VERSION_CHECK=1; else VERSION_CHECK=0; fi ;;
             log_file)               LOG_FILE="$val" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
@@ -238,6 +245,7 @@ parse_args() {
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
             --apply-opt-in)     need_arg "$opt" $#; log_warn "--apply-opt-in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored"; shift 2 ;;
             --no-version-check) VERSION_CHECK=0; shift ;;
+            --split-by-engine)  SPLIT_BY_ENGINE=1; shift ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --config)           shift 2 ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
@@ -265,6 +273,10 @@ validate() {
     for x in "${FORMATS[@]}"; do case "${x,,}" in text|csv|json|html) ;; *) die 1 "Unknown format '$x' (text,csv,json,html)" ;; esac; done
     mapfile -t FORMATS < <(printf '%s\n' "${FORMATS[@],,}" | awk '!s[$0]++')
     if (( ${#FORMATS[@]} > 1 )) && [[ -z "$OUTPUT_DIR" ]]; then die 1 "Several formats need --output-dir"; fi
+    if (( SPLIT_BY_ENGINE )); then
+        [[ -n "$OUTPUT_DIR" ]] || die 1 "--split-by-engine needs --output-dir"
+        printf '%s\n' "${FORMATS[@]}" | grep -qx csv || die 1 "--split-by-engine needs csv in --format"
+    fi
     if [[ -n "$OUTPUT_DIR" && "$DRY_RUN" -eq 0 ]]; then
         if ! mkdir -p -- "$OUTPUT_DIR" 2>/dev/null || [[ ! -w "$OUTPUT_DIR" ]]; then die 1 "Output directory not writable: $OUTPUT_DIR"; fi
     fi
@@ -396,7 +408,7 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
         if [[ "$kind" == db ]]; then op=describe-db-instances; flt=db-instance-id; key=DBInstances
         else op=describe-db-clusters; flt=db-cluster-id; key=DBClusters; fi
         mapfile -t arns < <(jq -r --arg k ":$kind:" '[.[].ResourceIdentifier | select(contains($k))] | unique[]' "$d/pma.json")
-        (( ${#arns[@]} )) || continue
+        (( ${#arns[@]} )) || [[ "$kind" == cluster ]] || continue
         # 50 ARNs per call keeps --filters small (~4 KB) and within the API's filter-value limit
         local -a got=()
         for (( i = 0; i < ${#arns[@]}; i += 50 )); do
@@ -407,6 +419,23 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
                 add_error "$account" "$profile" "$region" "rds $op" "$LAST_ERR"
             fi
         done
+        # instances that belong to a cluster without a pending action of its own: describe that cluster
+        # too (read-only) so DBClusterMembers.IsClusterWriter gives the writer / reader role
+        if [[ "$kind" == cluster ]]; then
+            local -a cids=()
+            mapfile -t cids < <(jq -r -s '(.[1] | map(.DBClusterArn)) as $have
+                | [.[0][] | select((.DBClusterIdentifier // "") != "")
+                   | (.DBInstanceArn | sub(":db:[^:]+$"; ":cluster:")) + .DBClusterIdentifier | select(. as $a | $have | index($a) | not)]
+                | unique[]' "$d/instances.json" <(jq -s 'map(.DBClusters // []) | add // []' -- "${got[@]}" /dev/null))
+            for (( i = 0; i < ${#cids[@]}; i += 50 )); do
+                chunk="$(IFS=,; echo "${cids[*]:i:50}")"
+                if aws_call "$d/r_member_cluster_$i.json" "$profile" "$region" rds describe-db-clusters --filters "Name=db-cluster-id,Values=$chunk"; then
+                    got+=("$d/r_member_cluster_$i.json")
+                else
+                    add_error "$account" "$profile" "$region" "rds describe-db-clusters (member roles)" "$LAST_ERR"
+                fi
+            done
+        fi
         # one merge per region and kind (file inputs, no argv payload); unique in case pages overlap
         if (( ${#got[@]} )); then
             jq -s --arg key "$key" 'map(.[$key] // []) | add // [] | unique_by(.DBInstanceArn // .DBClusterArn)' -- "${got[@]}" \
@@ -513,7 +542,7 @@ build_report() {
 
 render() {   # render <format>  -> stdout
     case "$1" in
-        json) jq . "$REPORT" ;;
+        json) rjq json "$REPORT" ;;
         text) rjq text -r "$REPORT" ;;
         csv)  rjq csv -r "$REPORT" ;;
         html) rjq html -r "$REPORT" ;;
@@ -534,6 +563,16 @@ write_outputs() {
         WRITTEN+=("$file")
         log_info "Wrote $file"
     done
+    if (( SPLIT_BY_ENGINE )); then
+        local eng safe
+        while IFS= read -r eng; do
+            safe="$(printf '%s' "$eng" | tr -c 'A-Za-z0-9._-' '_')"
+            file="${OUTPUT_DIR%/}/${PREFIX}_${stamp}_${safe}.csv"
+            if ! { rjq csv -r --arg only_engine "$eng" "$REPORT" >"$file.tmp.$$" && mv -f -- "$file.tmp.$$" "$file"; }; then die 4 "Cannot write $file"; fi
+            chmod 0640 -- "$file" 2>/dev/null || true
+            WRITTEN+=("$file"); log_info "Wrote $file"
+        done < <(jq -r '[.rows[].engine] | unique[]' "$REPORT")
+    fi
 }
 
 send_email_alert() {   # send_email_alert <subject> <body-file>   (body is streamed from the file)
@@ -616,6 +655,7 @@ dry_run_plan() {
             (( INCLUDE_DOCDB )) && printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" docdb describe-pending-maintenance-actions)"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-instances --filters "Name=db-instance-id,Values=<pending-instance-arns>")"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=db-cluster-id,Values=<pending-cluster-arns>")"
+            printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=db-cluster-id,Values=<clusters-of-pending-instances>") (writer / reader roles; only if needed)"
             (( VERSION_CHECK )) && printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-engine-versions --engine "<engine>" --engine-version "<version>") (once per engine+version; docdb/neptune for those engines)"
         done
     done

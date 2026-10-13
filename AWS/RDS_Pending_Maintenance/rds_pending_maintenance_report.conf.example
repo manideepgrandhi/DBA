@@ -23,6 +23,7 @@ prefix        = rds_pending_maintenance
 tz            = Asia/Kolkata
 crit_days     = 7
 warn_days     = 30
+split_by_engine = no                   # yes: also one CSV per engine (needs csv in formats and output_dir)
 version_check = yes                    # minor-version columns via describe-db-engine-versions (no = skip the extra calls)
 # apply_opt_in was removed in 1.3.0 (ignored with a warning); commands printed per row: apply_immediate_command,
 # status_command, pending_actions_command, minor_upgrade_command
