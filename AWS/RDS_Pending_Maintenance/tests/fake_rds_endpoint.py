@@ -69,6 +69,14 @@ class H(http.server.BaseHTTPRequestHandler):
             items, nxt = page(sel, marker, PAGE_DESC)
             body = ("<%sResponse><%sResult><%s>%s</%s>%s</%sResult></%sResponse>"
                     % (action, action, tag, "".join(items), tag, "<Marker>%s</Marker>" % nxt if nxt else "", action, action))
+        elif action == "DescribeDBEngineVersions":
+            eng, ver = q.get("Engine", [""])[0], q.get("EngineVersion", [""])[0]
+            tg = {("postgres", "16.4"): [("16.6", "false"), ("16.8", "false"), ("17.4", "true")]}.get((eng, ver), [])
+            body = ("<DescribeDBEngineVersionsResponse><DescribeDBEngineVersionsResult><DBEngineVersions><DBEngineVersion>"
+                    "<Engine>%s</Engine><EngineVersion>%s</EngineVersion><ValidUpgradeTarget>%s</ValidUpgradeTarget></DBEngineVersion>"
+                    "</DBEngineVersions></DescribeDBEngineVersionsResult></DescribeDBEngineVersionsResponse>"
+                    % (eng, ver, "".join("<UpgradeTarget><Engine>%s</Engine><EngineVersion>%s</EngineVersion><IsMajorVersionUpgrade>%s"
+                                         "</IsMajorVersionUpgrade></UpgradeTarget>" % (eng, t, m) for t, m in tg)))
         else:
             self.send_response(400); self.end_headers(); return
         data = body.encode()

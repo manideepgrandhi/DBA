@@ -1,94 +1,120 @@
-RDS pending maintenance report - rds_pending_maintenance_report.sh v1.2.0
-Generated : 2026-10-13 04:50 UTC / 2026-10-13 10:20 IST
+RDS pending maintenance report - rds_pending_maintenance_report.sh v1.3.0
+Generated : 2026-10-13 14:18 UTC / 2026-10-13 19:48 IST
 Accounts  : 111111111111 (prod), 222222222222 (nonprod)
 Regions   : ap-south-1, eu-west-1, us-east-1
 Filters   : include-docdb
 
 URGENCY  DAYS   APPLY (IST)           ACCOUNT      REGION         TYPE     IDENTIFIER                    ENGINE                  ACTION                  OPT-IN           Environment  Owner        Application  
-OVERDUE  -2     2026-10-11 10:20      111111111111 us-east-1      instance crm-sql-prod                  sqlserver-se 15.00.44.. system-update           -                prod         crm-team     crm          
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+OVERDUE  -2     2026-10-11 19:48      111111111111 us-east-1      instance crm-sql-prod                  sqlserver-se 15.00.44.. system-update           -                prod         crm-team     crm          
+         version  : 15.00.4415.2.v1 -> next 15.00.4420.2.v1, latest 15.00.4430.1.v1 (available: 15.00.4420.2.v1, 15.00.4430.1.v1) | auto minor upgrade: false
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier crm-sql-prod --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --output table --region us-east-1 --profile prod
-CRIT     0      2026-10-13 10:20      222222222222 us-east-1      instance qa-sql                        sqlserver-ex 16.00.41.. system-update           immediate        qa           qa-team                   
-         apply    : -
+         minor upg: aws rds modify-db-instance --db-instance-identifier crm-sql-prod --engine-version 15.00.4430.1.v1 --region us-east-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+CRIT     0      2026-10-13 19:48      222222222222 us-east-1      instance qa-sql                        sqlserver-ex 16.00.41.. system-update           immediate        qa           qa-team                   
+         version  : 16.00.4135.4.v1 (up to date) | auto minor upgrade: true
+         immediate: -
          status   : aws rds describe-db-instances --db-instance-identifier qa-sql --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile nonprod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:222222222222:db:qa-sql --output table --region us-east-1 --profile nonprod
-         note     : already opted in (immediate): being applied now, cannot be changed or undone
-CRIT     3      2026-10-16 10:20      111111111111 us-east-1      instance orders-prod-2 (orders-prod)   aurora-postgresql 16.8  system-update           -                prod         payments-t.. orders       
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+         note     : already opted in (immediate): being applied now, cannot be changed
+CRIT     3      2026-10-16 19:48      111111111111 us-east-1      instance orders-prod-2 (orders-prod)   aurora-postgresql 16.8  system-update           -                prod         payments-t.. orders       
+         version  : 16.8 -> next 16.9, latest 16.10 (available: 16.9, 16.10) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier orders-prod-2 --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --output table --region us-east-1 --profile prod
-CRIT     5      2026-10-18 10:20      111111111111 us-east-1      cluster  catalog-docdb                 docdb 5.0.0             system-update           -                prod         catalog-team catalog      
-         apply    : aws docdb apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:catalog-docdb --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+         minor upg: aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 --region us-east-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+CRIT     5      2026-10-18 19:48      111111111111 us-east-1      cluster  catalog-docdb                 docdb 5.0.0             system-update           -                prod         catalog-team catalog      
+         version  : 5.0.0 (up to date) | auto minor upgrade: true
          immediate: aws docdb apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:catalog-docdb --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws docdb describe-db-clusters --db-cluster-identifier catalog-docdb --query 'DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}' --output table --region us-east-1 --profile prod
          pending  : aws docdb describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:catalog-docdb --output table --region us-east-1 --profile prod
-CRIT     6      2026-10-19 10:20      111111111111 ap-south-1     instance erp-oracle-prod               oracle-ee 19.0.0.0.ru.. db-upgrade              next-maintenance prod         erp-team     erp          
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:erp-oracle-prod --apply-action db-upgrade --opt-in-type next-maintenance --region ap-south-1 --profile prod
+         note     : applies as soon as possible - may restart/fail over; check impact first
+CRIT     6      2026-10-19 19:48      111111111111 ap-south-1     instance erp-oracle-prod               oracle-ee 19.0.0.0.ru.. db-upgrade              next-maintenance prod         erp-team     erp          
+         version  : 19.0.0.0.ru-2024-07.rur-2024-07.r1 -> next 19.0.0.0.ru-2024-10.rur-2024-10.r1, latest 19.0.0.0.ru-2025-01.rur-2025-01.r1 (available: 19.0.0.0.ru-2024-10.rur-2024-10.r1, 19.0.0.0.ru-2025-01.rur-2025-01.r1) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:erp-oracle-prod --apply-action db-upgrade --opt-in-type immediate --region ap-south-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier erp-oracle-prod --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region ap-south-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:erp-oracle-prod --output table --region ap-south-1 --profile prod
-         note     : already opted in (next-maintenance); command not needed
-CRIT     6.7    2026-10-20 02:00      111111111111 ap-south-1     cluster  payments-ams                  aurora-mysql 8.0.mysq.. db-upgrade              next-maintenance prod         payments-t.. payments     
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:payments-ams --apply-action db-upgrade --opt-in-type next-maintenance --region ap-south-1 --profile prod
+         minor upg: aws rds modify-db-instance --db-instance-identifier erp-oracle-prod --engine-version 19.0.0.0.ru-2025-01.rur-2025-01.r1 --region ap-south-1 --profile prod   # next maintenance window
+         note     : already scheduled for the next window; immediate applies it now - may restart/fail over
+CRIT     6.3    2026-10-20 02:00      111111111111 ap-south-1     cluster  payments-ams                  aurora-mysql 8.0.mysq.. db-upgrade              next-maintenance prod         payments-t.. payments     
+         version  : 8.0.mysql_aurora.3.05.2 -> next 8.0.mysql_aurora.3.06.1, latest 8.0.mysql_aurora.3.08.0 (available: 8.0.mysql_aurora.3.06.1, 8.0.mysql_aurora.3.08.0) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:payments-ams --apply-action db-upgrade --opt-in-type immediate --region ap-south-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-clusters --db-cluster-identifier payments-ams --query 'DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}' --output table --region ap-south-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:payments-ams --output table --region ap-south-1 --profile prod
-         note     : already opted in (next-maintenance); command not needed
-WARN     8      2026-10-21 10:20      222222222222 us-east-1      instance old-replica-2023              unknown                 system-update           -                                                       
-         apply    : -
+         minor upg: aws rds modify-db-cluster --db-cluster-identifier payments-ams --engine-version 8.0.mysql_aurora.3.08.0 --region ap-south-1 --profile prod   # next maintenance window
+         note     : already scheduled for the next window; immediate applies it now - may restart/fail over
+WARN     8      2026-10-21 19:48      222222222222 us-east-1      instance old-replica-2023              unknown                 system-update           -                                                       
+         version  : - (resource not found)
+         immediate: -
          status   : aws rds describe-db-instances --db-instance-identifier old-replica-2023 --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile nonprod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:222222222222:db:old-replica-2023 --output table --region us-east-1 --profile nonprod
          note     : resource not found by describe-db-instances/clusters (deleted or renamed?) - verify before applying
-WARN     10     2026-10-23 10:20      111111111111 ap-south-1     instance reporting-pg                  postgres 15.7           hardware-maintenance    -                prod         bi-team      reporting    
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:reporting-pg --apply-action hardware-maintenance --opt-in-type next-maintenance --region ap-south-1 --profile prod
+WARN     10     2026-10-23 19:48      111111111111 ap-south-1     instance reporting-pg                  postgres 15.7           hardware-maintenance    -                prod         bi-team      reporting    
+         version  : 15.7 -> next 15.8, latest 15.16 (available: 15.8, 15.10, 15.12, ..., 15.15, 15.16 (7 versions)) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:reporting-pg --apply-action hardware-maintenance --opt-in-type immediate --region ap-south-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier reporting-pg --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region ap-south-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:ap-south-1:111111111111:db:reporting-pg --output table --region ap-south-1 --profile prod
-WARN     12     2026-10-25 10:20      111111111111 us-east-1      instance catalog-docdb-1 (catalog-do.. docdb 5.0.0             db-upgrade              -                prod         catalog-team catalog      
-         apply    : aws docdb apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:catalog-docdb-1 --apply-action db-upgrade --opt-in-type next-maintenance --region us-east-1 --profile prod
+         minor upg: aws rds modify-db-instance --db-instance-identifier reporting-pg --engine-version 15.16 --region ap-south-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+WARN     12     2026-10-25 19:48      111111111111 us-east-1      instance catalog-docdb-1 (catalog-do.. docdb 5.0.0             db-upgrade              -                prod         catalog-team catalog      
+         version  : 5.0.0 (up to date) | auto minor upgrade: true
          immediate: aws docdb apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:catalog-docdb-1 --apply-action db-upgrade --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws docdb describe-db-instances --db-instance-identifier catalog-docdb-1 --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile prod
          pending  : aws docdb describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:catalog-docdb-1 --output table --region us-east-1 --profile prod
-WARN     20     2026-11-02 10:20      111111111111 us-east-1      cluster  orders-prod                   aurora-postgresql 16.8  db-upgrade              pending          prod         payments-t.. orders       
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --apply-action db-upgrade --opt-in-type next-maintenance --region us-east-1 --profile prod
+         note     : applies as soon as possible - may restart/fail over; check impact first
+WARN     20     2026-11-02 19:48      111111111111 us-east-1      cluster  orders-prod                   aurora-postgresql 16.8  db-upgrade              pending          prod         payments-t.. orders       
+         version  : 16.8 -> next 16.9, latest 16.10 (available: 16.9, 16.10) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --apply-action db-upgrade --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-clusters --db-cluster-identifier orders-prod --query 'DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}' --output table --region us-east-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --output table --region us-east-1 --profile prod
-WARN     25     2026-11-07 10:20      111111111111 eu-west-1      instance cms-mariadb                   mariadb 10.11.8         os-upgrade              -                staging      web-team     cms          
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:eu-west-1:111111111111:db:cms-mariadb --apply-action os-upgrade --opt-in-type next-maintenance --region eu-west-1 --profile prod
+         minor upg: aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 --region us-east-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+WARN     25     2026-11-07 19:48      111111111111 eu-west-1      instance cms-mariadb                   mariadb 10.11.8         os-upgrade              -                staging      web-team     cms          
+         version  : 10.11.8 -> next 10.11.9, latest 10.11.10 (available: 10.11.9, 10.11.10) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:eu-west-1:111111111111:db:cms-mariadb --apply-action os-upgrade --opt-in-type immediate --region eu-west-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier cms-mariadb --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region eu-west-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:eu-west-1:111111111111:db:cms-mariadb --output table --region eu-west-1 --profile prod
-INFO     33     2026-11-15 10:20      222222222222 us-east-1      instance dev-pg-01                     postgres 16.4           db-upgrade              -                dev          platform-t.. sandbox      
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:222222222222:db:dev-pg-01 --apply-action db-upgrade --opt-in-type next-maintenance --region us-east-1 --profile nonprod
+         minor upg: aws rds modify-db-instance --db-instance-identifier cms-mariadb --engine-version 10.11.10 --region eu-west-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+INFO     33     2026-11-15 19:48      222222222222 us-east-1      instance dev-pg-01                     postgres 16.4           db-upgrade              -                dev          platform-t.. sandbox      
+         version  : 16.4 -> next 16.6, latest 16.8 (available: 16.6, 16.8) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:222222222222:db:dev-pg-01 --apply-action db-upgrade --opt-in-type immediate --region us-east-1 --profile nonprod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier dev-pg-01 --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile nonprod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:222222222222:db:dev-pg-01 --output table --region us-east-1 --profile nonprod
-INFO     55     2026-12-07 10:20      111111111111 us-east-1      instance crm-sql-prod                  sqlserver-se 15.00.44.. os-upgrade              -                prod         crm-team     crm          
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action os-upgrade --opt-in-type next-maintenance --region us-east-1 --profile prod
+         minor upg: aws rds modify-db-instance --db-instance-identifier dev-pg-01 --engine-version 16.8 --region us-east-1 --profile nonprod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+INFO     55     2026-12-07 19:48      111111111111 us-east-1      instance crm-sql-prod                  sqlserver-se 15.00.44.. os-upgrade              -                prod         crm-team     crm          
+         version  : 15.00.4415.2.v1 -> next 15.00.4420.2.v1, latest 15.00.4430.1.v1 (available: 15.00.4420.2.v1, 15.00.4430.1.v1) | auto minor upgrade: false
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action os-upgrade --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier crm-sql-prod --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --output table --region us-east-1 --profile prod
-INFO     90     2027-01-11 10:20      222222222222 ap-south-1     cluster  dev-apg                       aurora-postgresql 15.8  ca-certificate-rotation -                dev          platform-t..              
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:222222222222:cluster:dev-apg --apply-action ca-certificate-rotation --opt-in-type next-maintenance --region ap-south-1 --profile nonprod
+         minor upg: aws rds modify-db-instance --db-instance-identifier crm-sql-prod --engine-version 15.00.4430.1.v1 --region us-east-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
+INFO     90     2027-01-11 19:48      222222222222 ap-south-1     cluster  dev-apg                       aurora-postgresql 15.8  ca-certificate-rotation -                dev          platform-t..              
+         version  : 15.8 -> next 15.10, latest 15.13 (available: 15.10, 15.12, 15.13) | auto minor upgrade: false
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:222222222222:cluster:dev-apg --apply-action ca-certificate-rotation --opt-in-type immediate --region ap-south-1 --profile nonprod   # may restart/fail over NOW
          status   : aws rds describe-db-clusters --db-cluster-identifier dev-apg --query 'DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}' --output table --region ap-south-1 --profile nonprod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:ap-south-1:222222222222:cluster:dev-apg --output table --region ap-south-1 --profile nonprod
+         minor upg: aws rds modify-db-cluster --db-cluster-identifier dev-apg --engine-version 15.13 --region ap-south-1 --profile nonprod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
 OPTIONAL -      -                     111111111111 ap-south-1     cluster  graph-neptune                 neptune 1.3.2.1         system-update           -                prod         data-team    graph        
-         apply    : aws neptune apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:graph-neptune --apply-action system-update --opt-in-type next-maintenance --region ap-south-1 --profile prod
+         version  : 1.3.2.1 -> next 1.3.3.0, latest 1.3.4.0 (available: 1.3.3.0, 1.3.4.0) | auto minor upgrade: true
          immediate: aws neptune apply-pending-maintenance-action --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:graph-neptune --apply-action system-update --opt-in-type immediate --region ap-south-1 --profile prod   # may restart/fail over NOW
          status   : aws neptune describe-db-clusters --db-cluster-identifier graph-neptune --query 'DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}' --output table --region ap-south-1 --profile prod
          pending  : aws neptune describe-pending-maintenance-actions --resource-identifier arn:aws:rds:ap-south-1:111111111111:cluster:graph-neptune --output table --region ap-south-1 --profile prod
+         minor upg: aws neptune modify-db-cluster --db-cluster-identifier graph-neptune --engine-version 1.3.4.0 --region ap-south-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
 OPTIONAL -      -                     111111111111 us-east-1      instance web-mysql-prod                mysql 8.0.39            ca-certificate-rotation -                prod         web-team     storefront   
-         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:web-mysql-prod --apply-action ca-certificate-rotation --opt-in-type next-maintenance --region us-east-1 --profile prod
+         version  : 8.0.39 -> next 8.0.40, latest 8.0.42 (available: 8.0.40, 8.0.41, 8.0.42) | auto minor upgrade: true
          immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:web-mysql-prod --apply-action ca-certificate-rotation --opt-in-type immediate --region us-east-1 --profile prod   # may restart/fail over NOW
          status   : aws rds describe-db-instances --db-instance-identifier web-mysql-prod --query 'DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}' --output table --region us-east-1 --profile prod
          pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:web-mysql-prod --output table --region us-east-1 --profile prod
+         minor upg: aws rds modify-db-instance --db-instance-identifier web-mysql-prod --engine-version 8.0.42 --region us-east-1 --profile prod   # next maintenance window
+         note     : applies as soon as possible - may restart/fail over; check impact first
 
-Commands are printed only (never run). apply uses --opt-in-type next-maintenance; immediate starts maintenance now and may restart/fail over the DB; status/pending are read-only lookups. Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command).
+Commands are printed only (never run). immediate (--opt-in-type immediate) starts the maintenance now and may restart/fail over the DB; status/pending are read-only lookups; minor upg (modify ... --engine-version) applies in the next maintenance window unless --apply-immediately is added.
 
 SUMMARY: 16 pending action(s) on 15 resource(s)
   by urgency : OVERDUE=1, CRIT=5, WARN=5, INFO=3, OPTIONAL=2
@@ -96,5 +122,6 @@ SUMMARY: 16 pending action(s) on 15 resource(s)
   by engine  : aurora-postgresql=3, docdb=2, postgres=2, sqlserver-se=2, aurora-mysql=1, mariadb=1, mysql=1, neptune=1, oracle-ee=1, sqlserver-ex=1, unknown=1
   by region  : us-east-1=10, ap-south-1=5, eu-west-1=1
   by account : 111111111111=12, 222222222222=4
+  minor ver. : 10 server(s) behind the latest minor version: cms-mariadb (10.11.8 -> 10.11.10), crm-sql-prod (15.00.4415.2.v1 -> 15.00.4430.1.v1), dev-apg (15.8 -> 15.13), dev-pg-01 (16.4 -> 16.8), erp-oracle-prod (19.0.0.0.ru-2024-07.rur-2024-07.r1 -> 19.0.0.0.ru-2025-01.rur-2025-01.r1), graph-neptune (1.3.2.1 -> 1.3.4.0), orders-prod (16.8 -> 16.10), payments-ams (8.0.mysql_aurora.3.05.2 -> 8.0.mysql_aurora.3.08.0), reporting-pg (15.7 -> 15.16), web-mysql-prod (8.0.39 -> 8.0.42)
 
 Overall: CRIT (exit 11)

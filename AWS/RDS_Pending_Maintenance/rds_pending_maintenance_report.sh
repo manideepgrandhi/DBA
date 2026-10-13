@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="1.3.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -40,7 +40,7 @@ PREFIX="rds_pending_maintenance"
 DISPLAY_TZ="Asia/Kolkata"
 CRIT_DAYS=7
 WARN_DAYS=30
-APPLY_OPT_IN="next-maintenance"
+VERSION_CHECK=1
 readonly SLACK_MAX_CHARS=35000
 LOG_FILE=""
 CONFIG_FILE=""
@@ -107,10 +107,11 @@ Report:
       --tz ZONE             Second time zone shown next to UTC (default: Asia/Kolkata)
       --crit-days N         Apply date within N days = CRIT (default: 7; past date = OVERDUE)
       --warn-days N         Apply date within N days = WARN (default: 30; later = INFO, no date = OPTIONAL)
-      --apply-opt-in TYPE   Opt-in type used in the printed apply_command column: next-maintenance | immediate
-                            (default: next-maintenance; immediate may restart / fail over the DB).
-                            Commands are only PRINTED, never run. undo_command always uses undo-opt-in.
-                            Also printed: apply_immediate_command, status_command, pending_actions_command
+      --no-version-check    Skip the minor-version lookup (describe-db-engine-versions); the columns
+                            auto_minor_upgrade stays, next/latest_minor_version show 'not checked'
+                            Printed per row (NEVER run): apply_immediate_command (--opt-in-type immediate,
+                            may restart / fail over the DB), status_command, pending_actions_command,
+                            minor_upgrade_command (--engine-version upgrade, in the next window)
   -l, --log-file FILE       Append log lines to FILE
 
 Alerts:
@@ -185,7 +186,8 @@ load_config() {
             tz)                     DISPLAY_TZ="$val" ;;
             crit_days)              CRIT_DAYS="$val" ;;
             warn_days)              WARN_DAYS="$val" ;;
-            apply_opt_in)           APPLY_OPT_IN="$val" ;;
+            apply_opt_in)           log_warn "Config $file:$lineno: apply_opt_in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored" ;;
+            version_check)          if is_true "$val"; then VERSION_CHECK=1; else VERSION_CHECK=0; fi ;;
             log_file)               LOG_FILE="$val" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
             max_attempts)           MAX_ATTEMPTS="$val" ;;
@@ -234,7 +236,8 @@ parse_args() {
             --tz)               need_arg "$opt" $#; DISPLAY_TZ="$2"; shift 2 ;;
             --crit-days)        need_arg "$opt" $#; CRIT_DAYS="$2"; shift 2 ;;
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
-            --apply-opt-in)     need_arg "$opt" $#; APPLY_OPT_IN="$2"; shift 2 ;;
+            --apply-opt-in)     need_arg "$opt" $#; log_warn "--apply-opt-in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored"; shift 2 ;;
+            --no-version-check) VERSION_CHECK=0; shift ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --config)           shift 2 ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
@@ -272,8 +275,6 @@ validate() {
     for x in "${TAG_FILTERS[@]}"; do [[ "$x" =~ ^[^=]+=.*$ ]] || die 1 "--tag must be KEY=VALUE (got '$x')"; done
     for x in "${URGENCY[@]}"; do case "${x^^}" in OVERDUE|CRIT|WARN|INFO|OPTIONAL) ;; *) die 1 "Unknown urgency '$x'" ;; esac; done
     mapfile -t URGENCY < <(for x in "${URGENCY[@]}"; do echo "${x^^}"; done)
-    case "${APPLY_OPT_IN,,}" in immediate|next-maintenance) APPLY_OPT_IN="${APPLY_OPT_IN,,}" ;;
-        *) die 1 "--apply-opt-in must be next-maintenance or immediate (undo-opt-in is always in undo_command)" ;; esac
     [[ "$CRIT_DAYS" =~ ^[0-9]+$ && "$WARN_DAYS" =~ ^[0-9]+$ ]] || die 1 "--crit-days/--warn-days must be whole numbers"
     (( CRIT_DAYS <= WARN_DAYS )) || die 1 "--crit-days must be <= --warn-days"
     [[ -e "/usr/share/zoneinfo/$DISPLAY_TZ" || "$DISPLAY_TZ" == UTC ]] || die 1 "Unknown time zone: $DISPLAY_TZ"
@@ -314,7 +315,7 @@ filters_text() {
 rjq() {   # rjq <mode> [extra jq args...]
     local mode="$1"; shift
     TZ="$DISPLAY_TZ" jq --arg mode "$mode" --argjson now "$NOW" --argjson crit_days "$CRIT_DAYS" --argjson warn_days "$WARN_DAYS" \
-        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" --arg apply_opt "$APPLY_OPT_IN" -f "$LIB" "$@"
+        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" -f "$LIB" "$@"
 }
 
 # ----------------------------------------------------------------------------
@@ -412,9 +413,42 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
                 >"$d/${kind/db/instance}s.json" || die 4 "Merging $op output failed for ${profile:-default}/$region"
         fi
     done
+    printf '[]' >"$d/versions.json"
+    (( VERSION_CHECK )) && collect_versions "$profile" "$region" "$d"
     rjq rows -n --arg profile "${profile:-default}" --arg account "$account" --arg region "$region" \
         --slurpfile pma "$d/pma.json" --slurpfile instances "$d/instances.json" --slurpfile clusters "$d/clusters.json" \
+        --slurpfile versions "$d/versions.json" --argjson vc "$VERSION_CHECK" \
         >"$d/rows.json" || die 4 "Building rows failed for ${profile:-default}/$region"
+}
+
+# Engine versions of the resources found: one describe-db-engine-versions per (service, engine, version),
+# cached per region in $WORK/ev/<region>/ (engine versions do not differ between accounts / profiles).
+# A failed lookup is logged and shown as 'lookup failed' in the row; it does not make the report incomplete.
+collect_versions() {   # collect_versions <profile> <region> <dir>
+    local profile="$1" region="$2" d="$3" svc engine ver key cache
+    local -a got=()
+    mkdir -p "$WORK/ev/$region"
+    while IFS=$'\t' read -r svc engine ver; do
+        key="$(printf '%s_%s_%s' "$svc" "$engine" "$ver" | tr -c 'A-Za-z0-9._-' '_')"
+        cache="$WORK/ev/$region/$key.json"
+        if [[ ! -s "$cache" ]]; then
+            if aws_call "$cache.raw" "$profile" "$region" "$svc" describe-db-engine-versions --engine "$engine" --engine-version "$ver"; then
+                jq -c --arg s "$svc" --arg e "$engine" --arg v "$ver" \
+                    '{svc: $s, engine: $e, version: $v, error: null, targets: [.DBEngineVersions[]? | .ValidUpgradeTarget[]?]}' \
+                    "$cache.raw" >"$cache" || die 4 "Parsing describe-db-engine-versions failed for $engine $ver"
+            else
+                AWS_FAILS=$(( AWS_FAILS - 1 ))   # supplementary lookup: warn only
+                log_warn "[${profile:-default}/$region] engine-version lookup for $engine $ver failed; minor-version columns show 'lookup failed'"
+                jq -cn --arg s "$svc" --arg e "$engine" --arg v "$ver" --arg m "$LAST_ERR" \
+                    '{svc: $s, engine: $e, version: $v, error: $m, targets: []}' >"$cache"
+            fi
+        fi
+        got+=("$cache")
+    done < <(jq -r -s '[.[0][], .[1][]] | map(select((.Engine // "") != "" and (.EngineVersion // "") != ""))
+                       | map([(if .Engine == "docdb" then "docdb" elif .Engine == "neptune" then "neptune" else "rds" end), .Engine, .EngineVersion])
+                       | unique[] | @tsv' "$d/instances.json" "$d/clusters.json")
+    if (( ${#got[@]} )); then jq -cs . -- "${got[@]}" >"$d/versions.json" || die 4 "Merging engine versions failed for $region"; fi
+    return 0
 }
 
 collect_profile() {   # collect_profile <index> <profile>
@@ -466,10 +500,10 @@ build_report() {
         --arg tz "$DISPLAY_TZ" --arg tza "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Z')" --arg host "$(hostname 2>/dev/null || echo unknown)" \
         --slurpfile accounts "$WORK/accounts.jsonl" \
         --argjson regions "$(json_array "${ALL_REGIONS_SEEN[@]}" | jq -c 'unique')" --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" \
-        --argjson crit "$CRIT_DAYS" --argjson warn "$WARN_DAYS" --arg ao "$APPLY_OPT_IN" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
+        --argjson crit "$CRIT_DAYS" --argjson warn "$WARN_DAYS" --argjson vc "$VERSION_CHECK" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
         --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" \
         '{script: $script, version: $version, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tza, host: $host,
-          accounts: $accounts, regions: $regions, tag_columns: $tagcols, crit_days: $crit, warn_days: $warn, apply_opt_in: $ao,
+          accounts: $accounts, regions: $regions, tag_columns: $tagcols, crit_days: $crit, warn_days: $warn, version_check: ($vc == 1),
           filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     REPORT="$WORK/report.json"
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile rows "$WORK/all_rows.json" --slurpfile errors "$WORK/all_errors.json" \
@@ -570,7 +604,7 @@ dry_run_plan() {
     echo "  profiles : $(for p in "${PROFILES[@]}"; do printf '%s ' "${p:-default}"; done)"
     echo "  regions  : $( (( ALL_REGIONS )) && echo "all enabled per account" || echo "${REGIONS[*]:-profile default}")"
     echo "  filters  : $(filters_text)"
-    echo "  formats  : ${FORMATS[*]} -> ${OUTPUT_DIR:-stdout}   tz: $DISPLAY_TZ   crit<=${CRIT_DAYS}d warn<=${WARN_DAYS}d"
+    echo "  formats  : ${FORMATS[*]} -> ${OUTPUT_DIR:-stdout}   tz: $DISPLAY_TZ   crit<=${CRIT_DAYS}d warn<=${WARN_DAYS}d   version check: $( (( VERSION_CHECK )) && echo on || echo off)"
     for p in "${PROFILES[@]}"; do
         r="${REGIONS[0]:-<region>}"
         echo "Profile ${p:-default}:"
@@ -582,6 +616,7 @@ dry_run_plan() {
             (( INCLUDE_DOCDB )) && printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" docdb describe-pending-maintenance-actions)"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-instances --filters "Name=db-instance-id,Values=<pending-instance-arns>")"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-clusters --filters "Name=db-cluster-id,Values=<pending-cluster-arns>")"
+            (( VERSION_CHECK )) && printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-engine-versions --engine "<engine>" --engine-version "<version>") (once per engine+version; docdb/neptune for those engines)"
         done
     done
 }
@@ -626,7 +661,7 @@ main() {
     build_report
     write_outputs
     local rc; rc="$(jq -r '.summary.exit_code' "$REPORT")"
-    log_info "$(jq -r '"Result: \(.summary.overall) - \(.summary.total) pending action(s) on \(.summary.resources) resource(s); urgency \(.summary.by_urgency | to_entries | map("\(.key)=\(.value)") | join(" ") | if . == "" then "none" else . end); \(.summary.errors) error(s)"' "$REPORT"); $AWS_CALLS AWS call(s); exit $rc"
+    log_info "$(jq -r '"Result: \(.summary.overall) - \(.summary.total) pending action(s) on \(.summary.resources) resource(s); \(.summary.behind_latest_minor) behind latest minor; urgency \(.summary.by_urgency | to_entries | map("\(.key)=\(.value)") | join(" ") | if . == "" then "none" else . end); \(.summary.errors) error(s)"' "$REPORT"); $AWS_CALLS AWS call(s); exit $rc"
     send_alerts "$rc"
     exit "$rc"
 }

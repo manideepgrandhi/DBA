@@ -61,8 +61,8 @@ for _ in $(seq 50); do [[ -s "$PORT_FILE" ]] && break; sleep 0.1; done
 HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
-t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'apply-pending-maintenance-action|read-only|READ-ONLY'
-t version 0 fleet --version;           has version out '1\.2\.0'
+t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'read-only'; has help out '--no-version-check'; hasnt help out 'apply-opt-in'
+t version 0 fleet --version;           has version out '1\.3\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -123,42 +123,80 @@ jqt fleet_json '[.rows[] | select(.identifier == "crm-sql-prod")] | length == 2'
 jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "os-upgrade") | .urgency == "INFO"'
 jqt fleet_json '.rows[] | select(.identifier == "cms-mariadb") | .tag_columns == {"Environment":"staging","Owner":"web-team","Application":"cms"}'
 
-echo "== apply / undo commands (printed only)"
-jqt fleet_json '.meta.apply_opt_in == "next-maintenance"'
-jqt fleet_json 'all(.rows[] | select(.apply_command != ""); .apply_command | test("^aws (rds|docdb|neptune) apply-pending-maintenance-action --resource-identifier arn:aws:rds:[a-z0-9-]+:[0-9]{12}:(db|cluster):[a-z0-9-]+ --apply-action [a-z-]+ --opt-in-type next-maintenance --region [a-z0-9-]+ --profile (prod|nonprod)$"))'
-jqt fleet_json 'all(.rows[] | select(.undo_command != ""); .undo_command | test("--opt-in-type undo-opt-in "))'
-jqt fleet_json '[.rows[] | select(.apply_command != "")] | length == 13'
-jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "system-update") | .apply_command == "aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod"'
-jqt fleet_json '.rows[] | select(.identifier == "old-replica-2023") | .apply_command == "" and .undo_command == "" and (.apply_note | test("not found"))'
-jqt fleet_json '.rows[] | select(.identifier == "qa-sql") | .apply_command == "" and (.apply_note | test("immediate"))'
-jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | (.apply_command | length > 0) and (.apply_note | test("already opted in"))'
-jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | .apply_command | startswith("aws neptune ")'
-jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "system-update") | .apply_immediate_command == "aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod"'
+echo "== printed commands (never run): immediate / status / pending / minor upgrade"
+jqt fleet_json '.meta.version_check == true and (.meta | has("apply_opt_in") | not)'
+jqt fleet_json 'all(.rows[]; (has("apply_command") or has("undo_command")) | not)'
+jqt fleet_json 'all(.rows[] | select(.apply_immediate_command != ""); .apply_immediate_command | test("^aws (rds|docdb|neptune) apply-pending-maintenance-action --resource-identifier arn:aws:rds:[a-z0-9-]+:[0-9]{12}:(db|cluster):[a-z0-9-]+ --apply-action [a-z-]+ --opt-in-type immediate --region [a-z0-9-]+ --profile (prod|nonprod)$"))'
+jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "system-update") | .apply_immediate_command == "aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod" and (.apply_note | test("restart/fail over"))'
 jqt fleet_json '.rows[] | select(.identifier == "crm-sql-prod" and .action == "system-update") | .status_command | startswith("aws rds describe-db-instances --db-instance-identifier crm-sql-prod --query '"'"'DBInstances[0].{Status:DBInstanceStatus,") and endswith("--output table --region us-east-1 --profile prod")'
 jqt fleet_json '.rows[] | select(.identifier == "orders-prod") | (.status_command | startswith("aws rds describe-db-clusters --db-cluster-identifier orders-prod --query '"'"'DBClusters[0].{Status:Status,")) and (.status_command | contains("Members:DBClusterMembers[]"))'
 jqt fleet_json '.rows[] | select(.identifier == "orders-prod") | .pending_actions_command == "aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:cluster:orders-prod --output table --region us-east-1 --profile prod"'
 jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | (.status_command | startswith("aws neptune describe-db-clusters ")) and (.pending_actions_command | startswith("aws neptune describe-pending-maintenance-actions ")) and (.apply_immediate_command | startswith("aws neptune "))'
 jqt fleet_json '.rows[] | select(.identifier == "old-replica-2023") | .apply_immediate_command == "" and (.status_command | startswith("aws rds describe-db-instances --db-instance-identifier old-replica-2023 ")) and (.pending_actions_command | length > 0) and (.apply_note | test("not found"))'
-jqt fleet_json '.rows[] | select(.identifier == "qa-sql") | .apply_immediate_command == "" and (.status_command | length > 0) and (.apply_note | test("immediate"))'
-jqt fleet_json '[.rows[] | select(.apply_immediate_command != "")] | length == 13 and all(.apply_immediate_command | test("--opt-in-type immediate "))'
+jqt fleet_json '.rows[] | select(.identifier == "qa-sql") | .apply_immediate_command == "" and (.status_command | length > 0) and (.apply_note | test("already opted in \\(immediate\\)"))'
+jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | (.apply_immediate_command | length > 0) and (.apply_note | test("already scheduled"))'
+jqt fleet_json '[.rows[] | select(.apply_immediate_command != "")] | length == 13'
 jqt fleet_json 'all(.rows[]; (.status_command | length > 0) and (.pending_actions_command | length > 0))'
-t imm 11 fleet -P prod -r us-east-1 --include-docdb --apply-opt-in Immediate -F json
-jqt imm '.meta.apply_opt_in == "immediate" and all(.rows[] | select(.apply_command != ""); .apply_command | test("--opt-in-type immediate "))'
-jqt imm '.rows[] | select(.identifier == "catalog-docdb") | (.apply_command | startswith("aws docdb ")) and (.apply_note | test("restart"))'
-jqt imm '[.rows[] | select(.identifier == "catalog-docdb-1")][0].apply_command | startswith("aws docdb ")'
+t imm 11 fleet -P prod -r us-east-1 --include-docdb -F json
+jqt imm '.rows[] | select(.identifier == "catalog-docdb") | (.apply_immediate_command | startswith("aws docdb ")) and (.apply_note | test("restart"))'
 jqt imm '.rows[] | select(.identifier == "catalog-docdb-1") | (.status_command | startswith("aws docdb describe-db-instances --db-instance-identifier catalog-docdb-1 ")) and (.pending_actions_command | startswith("aws docdb describe-pending-maintenance-actions "))'
 jqt imm '.rows[] | select(.identifier == "catalog-docdb") | .status_command | startswith("aws docdb describe-db-clusters --db-cluster-identifier catalog-docdb ")'
-t badapplyopt 1 fleet -r us-east-1 --apply-opt-in undo-opt-in
+t depapply 11 fleet -P prod -r us-east-1 --apply-opt-in immediate -F json
+has depapply err 'WARN.*--apply-opt-in is no longer used'; jqt depapply 'all(.rows[]; has("apply_command") | not)'
 MOCK_DEFAULT_REGION=us-east-1 t defprofile 11 fleet -F json
-jqt defprofile 'all(.rows[] | select(.apply_command != ""); (.apply_command | test("--profile") | not) and (.apply_command | endswith("--region us-east-1")))'
+jqt defprofile 'all(.rows[] | select(.apply_immediate_command != ""); (.apply_immediate_command | test("--profile") | not) and (.apply_immediate_command | endswith("--region us-east-1")))'
+jqt defprofile 'all(.rows[] | select(.minor_upgrade_command != ""); (.minor_upgrade_command | test("--profile") | not) and (.minor_upgrade_command | endswith("--region us-east-1")))'
 t textcmd 11 fleet -P prod -r us-east-1
-has textcmd out '^         apply    : aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 '
 has textcmd out 'printed only \(never run\)'
-has textcmd out '^         immediate: aws rds apply-pending-maintenance-action .* --opt-in-type immediate .*# may restart/fail over NOW$'
+hasnt textcmd out 'apply    :|undo|next-maintenance --region'
+has textcmd out '^         immediate: aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 .* --opt-in-type immediate .*# may restart/fail over NOW$'
 has textcmd out '^         status   : aws rds describe-db-instances --db-instance-identifier orders-prod-2 '
 has textcmd out '^         pending  : aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 '
+has textcmd out '^         version  : 16.8 -> next 16.9, latest 16.10 \(available: 16.9, 16.10\) \| auto minor upgrade: true$'
+has textcmd out '^         minor upg: aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 --region us-east-1 --profile prod   # next maintenance window$'
+has textcmd out '^         version  : 16.00.4135.4.v1|^         version  : 15.00.4415.2.v1 -> next 15.00.4420.2.v1'
+has textcmd out '^  minor ver. : 3 server\(s\) behind the latest minor version: crm-sql-prod'
 printf 'region = us-east-1\nprofiles = prod\napply_opt_in = immediate\n' >"$OUT/ao.conf"
-t confapply 11 fleet --config "$OUT/ao.conf" -F csv;  has confapply out 'opt-in-type immediate --region us-east-1 --profile prod"'
+t confapply 11 fleet --config "$OUT/ao.conf" -F csv;  has confapply err 'apply_opt_in is no longer used'; has confapply out 'opt-in-type immediate --region us-east-1 --profile prod"'
+
+echo "== minor version patch details"
+jqt fleet_json '.summary.behind_latest_minor == 10'
+jqt fleet_json '.rows[] | select(.identifier == "orders-prod") | .auto_minor_upgrade == "true" and .next_minor_version == "16.9" and .latest_minor_version == "16.10" and .minor_versions_available == "16.9, 16.10" and .minor_upgrade_command == "aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 --region us-east-1 --profile prod" and (.minor_upgrade_note | test("next maintenance window unless --apply-immediately"))'
+jqt fleet_json '.rows[] | select(.identifier == "orders-prod-2") | .minor_upgrade_command == "aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 --region us-east-1 --profile prod"'
+jqt fleet_json '[.rows[] | select(.identifier == "crm-sql-prod")][0] | .auto_minor_upgrade == "false" and .latest_minor_version == "15.00.4430.1.v1" and (.minor_upgrade_command | startswith("aws rds modify-db-instance --db-instance-identifier crm-sql-prod --engine-version 15.00.4430.1.v1 "))'
+jqt fleet_json '.rows[] | select(.identifier == "web-mysql-prod") | .latest_minor_version == "8.0.42" and (.minor_targets | index("8.4.5") | not)'
+jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | .next_minor_version == "8.0.mysql_aurora.3.06.1" and .latest_minor_version == "8.0.mysql_aurora.3.08.0"'
+jqt fleet_json '.rows[] | select(.identifier == "reporting-pg") | .latest_minor_version == "15.16" and .minor_versions_available == "15.8, 15.10, 15.12, ..., 15.15, 15.16 (7 versions)"'
+jqt fleet_json '.rows[] | select(.identifier == "dev-apg") | .auto_minor_upgrade == "false" and .next_minor_version == "15.10" and .latest_minor_version == "15.13" and (.minor_upgrade_command | startswith("aws rds modify-db-cluster --db-cluster-identifier dev-apg "))'
+jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | .minor_upgrade_command == "aws neptune modify-db-cluster --db-cluster-identifier graph-neptune --engine-version 1.3.4.0 --region ap-south-1 --profile prod"'
+jqt fleet_json '.rows[] | select(.identifier == "qa-sql") | .next_minor_version == "up to date" and .latest_minor_version == "" and .minor_upgrade_command == "" and .minor_behind == false'
+jqt fleet_json '.rows[] | select(.identifier == "old-replica-2023") | .next_minor_version == "resource not found" and .minor_upgrade_command == "" and .auto_minor_upgrade == ""'
+jqt fleet_json 'all(.rows[] | select(.minor_upgrade_command != ""); .minor_upgrade_command | test("--apply-immediately") | not)'
+: >"$MOCK_LOG"
+t evcache 11 fleet "${ALL3[@]}" --include-docdb -F json
+grep '"describe-db-engine-versions"' "$MOCK_LOG" >"$OUT/ev_calls.txt"
+chk "engine-version lookups cached per engine+version+region ($(wc -l <"$OUT/ev_calls.txt") calls, no repeats across profiles)" python3 - "$OUT/ev_calls.txt" <<'PY2'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+keys = [(r[r.index("--region") + 1], r[r.index("--engine") + 1], r[r.index("--engine-version") + 1]) for r in rows]
+sys.exit(not (len(keys) == 12 and len(set(keys)) == len(keys)))
+PY2
+t docv 11 fleet -P prod -r us-east-1 --include-docdb -F json
+jqt docv '.rows[] | select(.identifier == "catalog-docdb") | .next_minor_version == "up to date" and .minor_upgrade_command == ""'
+grep -q '"docdb", "describe-db-engine-versions", "--engine", "docdb"' "$MOCK_LOG" && ok "docdb engine versions via aws docdb" || bad "docdb engine versions not via aws docdb"
+grep -q '"neptune", "describe-db-engine-versions", "--engine", "neptune"' "$MOCK_LOG" && ok "neptune engine versions via aws neptune" || bad "neptune engine versions not via aws neptune"
+: >"$MOCK_LOG"
+t novc 11 fleet "${ALL3[@]}" --no-version-check -F json
+jqt novc '.meta.version_check == false and all(.rows[] | select(.resolved); .next_minor_version == "not checked" and .minor_upgrade_command == "" and .latest_minor_version == "") and .summary.behind_latest_minor == 0'
+jqt novc '.rows[] | select(.identifier == "dev-apg") | .auto_minor_upgrade == "false"'
+chk "--no-version-check: no describe-db-engine-versions calls" bash -c "! grep -q describe-db-engine-versions '$MOCK_LOG'"
+t novctext 11 fleet -P prod -r us-east-1 --no-version-check;  has novctext out 'minor ver. : not checked'
+printf 'region = us-east-1\nprofiles = prod\nversion_check = no\n' >"$OUT/vc.conf"
+t confvc 11 fleet --config "$OUT/vc.conf" -F json;  jqt confvc '.meta.version_check == false'
+t evfail 11 evfail -P prod -r us-east-1 -F json
+has evfail err 'WARN.*engine-version lookup for mysql 8.0.39 failed'
+jqt evfail '.summary.errors == 0 and .meta.aws_failures == 0 and (.rows[] | select(.identifier == "web-mysql-prod") | .next_minor_version == "lookup failed" and (.minor_lookup_error | test("AccessDenied")))'
+jqt evfail '.rows[] | select(.identifier == "orders-prod") | .latest_minor_version == "16.10"'
 chk "sq quoting round-trips through the shell" bash -c '
   for x in "plain" "it'"'"'s" "a b\$c\`d" "x;rm -rf /tmp/zz" "*"; do
     q="$(jq -rn --arg x "$x" -f <(sed -n "/^def sq:/p" "'"$HERE"'/../lib/report.jq"; echo "\$x | sq"))"
@@ -224,13 +262,14 @@ t files 11 fleet "${ALL3[@]}" -F csv,html,json,text -o "$OUT/rep" --prefix pm
 n="$(find "$OUT/rep" -name 'pm_[0-9]*_[0-9]*.*' | wc -l)"; chk "4 timestamped files ($n)" test "$n" -eq 4
 f="$(find "$OUT/rep" -name 'pm_*.csv')"
 chk "file mode 0640" test "$(stat -c %a "$f")" = 640
-chk "csv parses: 16 lines, 33 columns" python3 -c "
-import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==33 for x in r)))"
-chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn","apply_command","undo_command","apply_note","apply_immediate_command","status_command","pending_actions_command"$' "$f"
+chk "csv parses: 16 lines, 37 columns" python3 -c "
+import csv,sys; r=list(csv.reader(open('$f'))); sys.exit(not (len(r)==16 and all(len(x)==37 for x in r)))"
+chk "csv header" grep -q '^"account_id","profile","region","resource_type","identifier","cluster","engine","engine_version","instance_class","tag:Environment","tag:Owner","tag:Application","action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc","effective_apply_utc","effective_apply_ist","days_until","urgency","maint_window_utc","maint_window_ist","next_window_ist","source","arn","apply_immediate_command","apply_note","status_command","pending_actions_command","auto_minor_upgrade","next_minor_version","latest_minor_version","minor_versions_available","minor_upgrade_command","minor_upgrade_note"$' "$f"
 h="$(find "$OUT/rep" -name 'pm_*.html')"
 chk "html: cards + sortable table + IST + UTC" bash -c "grep -q 'OVERDUE' '$h' && grep -q 'data-s=' '$h' && grep -q 'IST' '$h' && grep -q 'UTC' '$h' && grep -q '<script>' '$h'"
 chk "html: no external resources" bash -c "! grep -Eq '(src|href)=\"https?://' '$h'"
-chk "html: apply command cell with copy button" bash -c "grep -q '<button class=\"cp\"' '$h' && grep -q 'navigator.clipboard' '$h' && grep -q 'undo opt-in' '$h' && grep -q 'apply immediately' '$h' && grep -q 'may restart / fail over now' '$h' && grep -q 'check status' '$h' && grep -q '<code>aws rds describe-pending-maintenance-actions' '$h' && grep -q '<code>aws rds apply-pending-maintenance-action' '$h'"
+chk "html: apply command cell with copy button" bash -c "grep -q '<button class=\"cp\"' '$h' && grep -q 'navigator.clipboard' '$h' && ! grep -q 'undo opt-in' '$h' && ! grep -q 'next-maintenance --region' '$h' && grep -q 'apply immediately' '$h' && grep -q 'may restart / fail over now' '$h' && grep -q 'check status' '$h' && grep -q '<code>aws rds describe-pending-maintenance-actions' '$h' && grep -q '<code>aws rds apply-pending-maintenance-action' '$h'"
+chk "html: minor version cell + minor upgrade command with copy button" bash -c "grep -q '<th>Minor version</th>' '$h' && grep -q 'up to date' '$h' && grep -q 'auto minor upgrade: off' '$h' && grep -q 'behind latest minor' '$h' && grep -q 'minor version upgrade &rarr; 16.10</div><div class=\"cmd\"><code>aws rds modify-db-cluster --db-cluster-identifier orders-prod --engine-version 16.10 ' '$h' && grep -q 'unless --apply-immediately is added' '$h'"
 chk "html parses" python3 -c "import html.parser,sys; html.parser.HTMLParser().feed(open('$h').read())"
 chk "json file valid" jq -e '.summary.total == 15' "$(find "$OUT/rep" -name 'pm_*.json')"
 t stdout_csv 11 fleet -P prod -r us-east-1 -F csv;  has stdout_csv out '^"account_id"'
@@ -328,6 +367,7 @@ PY
 )"
 chk "no mutating operation in mock log (${bad_ops:-none})" test -z "$bad_ops"
 chk "script has no mutating aws subcommand" bash -c "! grep -Eq 'apply-pending|modify-|delete-|create-|reboot-|start-db|stop-db' <(grep -v '^ *#' '$SCRIPT' | grep -vi 'help\|README\|echo\|cat <<')"
+chk "printed commands live only in lib/report.jq (string data, never executed)" bash -c "! grep -Eq 'eval|bash -c|sh -c' <(grep -v '^ *#' '$SCRIPT')"
 chk "no leftover temp dirs" bash -c "! ls -d /tmp/rds_pending_maintenance.* 2>/dev/null | grep -q ."
 chk "shellcheck clean" shellcheck "$SCRIPT"
 

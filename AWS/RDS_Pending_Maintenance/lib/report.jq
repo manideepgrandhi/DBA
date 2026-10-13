@@ -1,6 +1,6 @@
 # lib/report.jq - row building, filtering, summary and rendering for rds_pending_maintenance_report.sh
 # Modes ($mode):
-#   rows     : one (profile, region) collection dir -> array of rows      (slurpfiles pma/instances/clusters)
+#   rows     : one (profile, region) collection dir -> array of rows      (slurpfiles pma/instances/clusters/versions)
 #   finalize : {meta, rows, errors} -> filtered, sorted, summarised report (--argjson f FILTERS)
 #   text|csv|html|alert : render a finalized report
 # Run with TZ set to the display time zone (default Asia/Kolkata): "local" times use strflocaltime.
@@ -32,9 +32,39 @@ def next_window($now):
   | (($now / 60 | floor) * 60 + $delta * 60) as $s
   | {start: $s, end: ($s + $len * 60)};
 
+# ------------------------------------------------------------------ engine versions
+# "8.0.mysql_aurora.3.05.2" -> [8,0,"mysql","aurora",3,5,2]; numbers compare numerically (16.10 > 16.9)
+def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)];
+def vsvc($engine): if $engine == "docdb" then "docdb" elif $engine == "neptune" then "neptune" else "rds" end;
+# minor-version info for one resource; $V = {"svc|engine|version": {error, targets}} or null when the check is off
+def minor_info($res; $V):
+  ($res.Engine // "") as $e | ($res.EngineVersion // "") as $v
+  | (if $res == null then {status: "resource not found"}
+     elif $V == null then {status: "not checked"}
+     elif $e == "" or $v == "" then {status: "unknown version"}
+     else ($V["\(vsvc($e))|\($e)|\($v)"]) as $x
+       | if $x == null then {status: "not checked"}
+         elif $x.error != null then {status: "lookup failed", error: $x.error}
+         else {status: "checked",
+               targets: ([$x.targets[] | select((.IsMajorVersionUpgrade // false) == false and ((.Engine // $e) == $e)
+                                               and ((.EngineVersion // "") != "") and ((.EngineVersion | vkey) > ($v | vkey)))
+                          | .EngineVersion] | unique_by(vkey))} end end) as $m
+  | ($m.targets // []) as $t
+  | { auto_minor_upgrade: (if $res == null or $res.AutoMinorVersionUpgrade == null then "" else ($res.AutoMinorVersionUpgrade | tostring) end),
+      minor_version_status: (if $m.status != "checked" then $m.status elif ($t | length) == 0 then "up to date" else "behind" end),
+      minor_targets: $t, minor_behind: (($t | length) > 0),
+      next_minor_version: (if $m.status != "checked" then $m.status elif ($t | length) == 0 then "up to date" else $t[0] end),
+      latest_minor_version: (if ($t | length) > 0 then $t[-1] else "" end),
+      minor_versions_available: (if ($t | length) == 0 then ""
+                                 elif ($t | length) <= 6 then ($t | join(", "))
+                                 else ($t[0:3] + ["...", $t[-2], $t[-1]] | join(", ")) + " (\($t | length) versions)" end),
+      minor_lookup_error: ($m.error // "") };
+
 # ------------------------------------------------------------------ mode: rows
 def rows:
   $ARGS.named as $A
+  | (if $A.versions == null then null
+     else (($A.versions[0] // []) | map({key: "\(.svc)|\(.engine)|\(.version)", value: .}) | from_entries) end) as $V
   | (($A.instances[0] // []) | map({key: .DBInstanceArn, value: .}) | from_entries) as $I
   | (($A.clusters[0] // []) | map({key: .DBClusterArn, value: .}) | from_entries) as $C
   | [ ($A.pma[0] // [])[] as $r
@@ -70,9 +100,9 @@ def rows:
           effective_apply: $eff.e, effective_basis: $eff.basis,
           days_until: (if $days == null then null else ($days | r1) end), urgency: $urg, severity: ($urg | urg_sev),
           maint_window_utc: ($mw // ""), next_window_start: ($nw.start // null), next_window_end: ($nw.end // null),
-          arn: $r.ResourceIdentifier } ];
+          arn: $r.ResourceIdentifier } + minor_info($res; (if ($A.vc // 0) == 1 then $V else null end)) ];
 
-# ------------------------------------------------------------------ apply / undo commands (printed only, never run)
+# ------------------------------------------------------------------ printed commands (never run by the report)
 # POSIX shell quoting: plain if only safe characters, else single-quoted with ' -> '\''
 def sq: tostring | if test("^[A-Za-z0-9_./:=@,+%-]+$") then . else "'" + gsub("'"; "'\\''") + "'" end;
 def cli_service: if .source == "docdb" or .engine == "docdb" then "docdb" elif .engine == "neptune" then "neptune" else "rds" end;
@@ -81,8 +111,8 @@ def mk_cmd($words):
   ($words + (if (.region // "") != "" then ["--region", .region] else [] end)
           + (if (.profile // "") != "" and .profile != "default" then ["--profile", .profile] else [] end))
   | map(sq) | join(" ");
-def pma_cmd($type):
-  mk_cmd(["aws", cli_service, "apply-pending-maintenance-action", "--resource-identifier", .arn, "--apply-action", .action, "--opt-in-type", $type]);
+def immediate_cmd:
+  mk_cmd(["aws", cli_service, "apply-pending-maintenance-action", "--resource-identifier", .arn, "--apply-action", .action, "--opt-in-type", "immediate"]);
 # status: current state incl. maintenance in progress (Status upgrading / maintenance / rebooting / modifying ...)
 def status_query_instance: "DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}";
 def status_query_cluster: "DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}";
@@ -93,21 +123,33 @@ def status_cmd:
     mk_cmd(["aws", cli_service, "describe-db-instances", "--db-instance-identifier", .identifier, "--query", status_query_instance, "--output", "table"])
   end;
 def pending_cmd: mk_cmd(["aws", cli_service, "describe-pending-maintenance-actions", "--resource-identifier", .arn, "--output", "table"]);
+# minor upgrade: the engine version belongs to the cluster for Aurora / DocumentDB / Neptune / Multi-AZ DB clusters
+def upgrade_target: if .resource_type == "cluster" then {kind: "cluster", id: .identifier}
+                    elif (.cluster // "") != "" then {kind: "cluster", id: .cluster} else {kind: "instance", id: .identifier} end;
+def minor_cmd:
+  upgrade_target as $u
+  | if $u.kind == "cluster" then mk_cmd(["aws", cli_service, "modify-db-cluster", "--db-cluster-identifier", $u.id, "--engine-version", .latest_minor_version])
+    else mk_cmd(["aws", cli_service, "modify-db-instance", "--db-instance-identifier", $u.id, "--engine-version", .latest_minor_version]) end;
+def minor_commands:
+  if .minor_behind then
+    {minor_upgrade_command: minor_cmd,
+     minor_upgrade_note: ("upgrades \(upgrade_target | "\(.kind) \(.id)") \(.engine_version) -> \(.latest_minor_version); applies in the next maintenance window unless --apply-immediately is added (restart / failover)")}
+  else {minor_upgrade_command: "", minor_upgrade_note: ""} end;
 def apply_commands:
-  if .resolved | not then {apply_command: "", undo_command: "", apply_immediate_command: "",
+  if .resolved | not then {apply_immediate_command: "",
        apply_note: "resource not found by describe-db-instances/clusters (deleted or renamed?) - verify before applying"}
-  elif (.action // "") == "" or (.arn // "") == "" then {apply_command: "", undo_command: "", apply_immediate_command: "", apply_note: "no action/ARN reported"}
-  elif .opt_in_status == "immediate" then {apply_command: "", undo_command: "", apply_immediate_command: "",
-       apply_note: "already opted in (immediate): being applied now, cannot be changed or undone"}
-  else {apply_command: pma_cmd($apply_opt), undo_command: pma_cmd("undo-opt-in"), apply_immediate_command: pma_cmd("immediate"),
-        apply_note: ( if .opt_in_status == $apply_opt then "already opted in (\(.opt_in_status)); command not needed"
-                      elif $apply_opt == "immediate" then "applies as soon as possible - may restart/fail over; check impact first"
-                      else "" end )} end;
+  elif (.action // "") == "" or (.arn // "") == "" then {apply_immediate_command: "", apply_note: "no action/ARN reported"}
+  elif .opt_in_status == "immediate" then {apply_immediate_command: "",
+       apply_note: "already opted in (immediate): being applied now, cannot be changed"}
+  else {apply_immediate_command: immediate_cmd,
+        apply_note: ( if .opt_in_status == "next-maintenance" then "already scheduled for the next window; immediate applies it now - may restart/fail over"
+                      else "applies as soon as possible - may restart/fail over; check impact first" end )} end;
 # status / pending-actions commands are read-only lookups: shown even for unresolved ARNs
 def commands:
   apply_commands
   + {status_command: (if (.identifier // "") != "" then status_cmd else "" end),
-     pending_actions_command: (if (.arn // "") != "" then pending_cmd else "" end)};
+     pending_actions_command: (if (.arn // "") != "" then pending_cmd else "" end)}
+  + minor_commands;
 
 # ------------------------------------------------------------------ mode: finalize
 def decorate:
@@ -134,7 +176,10 @@ def finalize:
                       unfiltered_total: ($r.rows | length),
                       by_urgency: (($rows | counts(.urgency)) | to_entries | sort_by(.key | urg_rank) | from_entries), by_action: ($rows | counts(.action)),
                       by_engine: ($rows | counts(.engine)), by_region: ($rows | counts(.region)),
-                      by_account: ($rows | counts(.account)), errors: ($r.errors | length) } };
+                      by_account: ($rows | counts(.account)), errors: ($r.errors | length),
+                      # servers = upgrade targets (cluster, or standalone instance) behind their latest minor version
+                      behind_latest_minor: ($rows | map(select(.minor_behind)) | map([.account, .region, (upgrade_target | .kind, .id)]) | unique | length),
+                      behind_latest_minor_servers: ($rows | map(select(.minor_behind)) | map(upgrade_target.id + " (" + .engine_version + " -> " + .latest_minor_version + ")") | unique) } };
 
 # ------------------------------------------------------------------ renderers
 def pad($n): tostring | if length >= $n then .[0:$n] else . + (" " * ($n - length)) end;
@@ -157,13 +202,16 @@ def text:
                  + ((.identifier + (if .cluster != "" then " (\(.cluster))" else "" end)) | cut(29) | pad(30))
                  + ("\(.engine) \(.engine_version)" | cut(23) | pad(24)) + (.action | pad(24)) + ((.opt_in_status | if . == "" then "-" else . end) | pad(17))
                  + ([.tag_columns[]] | map(cut(12) | pad(13)) | join(""))
-                 + "\n         apply    : " + (if .apply_command != "" then .apply_command else "-" end)
-                 + (if .apply_immediate_command != "" and .apply_immediate_command != .apply_command
-                    then "\n         immediate: " + .apply_immediate_command + "   # may restart/fail over NOW" else "" end)
+                 + "\n         version  : " + (if .engine_version == "" then "-" else .engine_version end)
+                   + (if .minor_behind then " -> next \(.next_minor_version), latest \(.latest_minor_version) (available: \(.minor_versions_available))"
+                      else " (\(.next_minor_version))" end)
+                   + (if .auto_minor_upgrade != "" then " | auto minor upgrade: \(.auto_minor_upgrade)" else "" end)
+                 + "\n         immediate: " + (if .apply_immediate_command != "" then .apply_immediate_command + "   # may restart/fail over NOW" else "-" end)
                  + (if .status_command != "" then "\n         status   : " + .status_command else "" end)
                  + (if .pending_actions_command != "" then "\n         pending  : " + .pending_actions_command else "" end)
+                 + (if .minor_upgrade_command != "" then "\n         minor upg: " + .minor_upgrade_command + "   # next maintenance window" else "" end)
                  + (if .apply_note != "" then "\n         note     : " + .apply_note else "" end) ) ) end ),
-      (if ($r.rows | length) > 0 then "", "Commands are printed only (never run). apply uses --opt-in-type \($r.meta.apply_opt_in); immediate starts maintenance now and may restart/fail over the DB; status/pending are read-only lookups. Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command)." else empty end),
+      (if ($r.rows | length) > 0 then "", "Commands are printed only (never run). immediate (--opt-in-type immediate) starts the maintenance now and may restart/fail over the DB; status/pending are read-only lookups; minor upg (modify ... --engine-version) applies in the next maintenance window unless --apply-immediately is added." else empty end),
       "",
       "SUMMARY: \($r.summary.total) pending action(s) on \($r.summary.resources) resource(s)"
         + (if $r.summary.unfiltered_total != $r.summary.total then " (\($r.summary.unfiltered_total) before filters)" else "" end),
@@ -172,6 +220,9 @@ def text:
       "  by engine  : \($r.summary.by_engine | kv)",
       "  by region  : \($r.summary.by_region | kv)",
       "  by account : \($r.summary.by_account | kv)",
+      "  minor ver. : " + (if $r.meta.version_check == false then "not checked (--no-version-check)"
+                           else "\($r.summary.behind_latest_minor) server(s) behind the latest minor version"
+                                + (if $r.summary.behind_latest_minor > 0 then ": " + ($r.summary.behind_latest_minor_servers | join(", ")) else "" end) end),
       ( if ($r.errors | length) > 0 then "", "ERRORS (report incomplete):",
           ($r.errors[] | "  \(.account) \(.profile) \(.region) \(.call): \(.message)") else empty end ),
       "",
@@ -183,13 +234,15 @@ def csv:
    + (.meta.tag_columns | map("tag:" + .))
    + ["action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc",
       "effective_apply_utc","effective_apply_\(.meta.tz_abbr | ascii_downcase)","days_until","urgency",
-      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn","apply_command","undo_command","apply_note","apply_immediate_command","status_command","pending_actions_command"]) as $h
+      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn","apply_immediate_command","apply_note","status_command","pending_actions_command",
+      "auto_minor_upgrade","next_minor_version","latest_minor_version","minor_versions_available","minor_upgrade_command","minor_upgrade_note"]) as $h
   | ($h | @csv),
     (.rows[] | ([.account, .profile, .region, .resource_type, .identifier, .cluster, .engine, .engine_version, .instance_class]
                + [.tag_columns[]]
                + [.action, .description, .opt_in_status, .auto_applied_after_utc, .forced_apply_utc, .current_apply_utc,
                   .effective_apply_utc, .effective_apply_local, .days_until, .urgency, .maint_window_utc, .maint_window_local,
-                  .next_window_local, .source, .arn, .apply_command, .undo_command, .apply_note, .apply_immediate_command, .status_command, .pending_actions_command]) | @csv);
+                  .next_window_local, .source, .arn, .apply_immediate_command, .apply_note, .status_command, .pending_actions_command,
+                  .auto_minor_upgrade, .next_minor_version, .latest_minor_version, .minor_versions_available, .minor_upgrade_command, .minor_upgrade_note]) | @csv);
 
 def h: tostring | @html;
 def two($e): if $e == null then "<span class=\"muted\">-</span>" else "\($e | fu | h)<br><span class=\"muted\">\($e | fl | h)</span>" end;
@@ -219,6 +272,8 @@ def html:
   + "tr.r-OVERDUE td:first-child{border-left:4px solid #7b1fa2}tr.r-CRIT td:first-child{border-left:4px solid #d32f2f}tr.r-WARN td:first-child{border-left:4px solid #f57c00}"
   + ".errors{background:#fff3e0;border:1px solid #ffb74d;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px}"
   + ".cmd{display:flex;gap:6px;align-items:flex-start;min-width:420px}.cmd code{font-family:SFMono-Regular,Consolas,Menlo,monospace;font-size:11.5px;background:#f1f3f6;border:1px solid #dde2e8;border-radius:4px;padding:4px 6px;white-space:pre-wrap;word-break:break-all;flex:1}"
+  + ".ver b{font-family:SFMono-Regular,Consolas,Menlo,monospace}.ok-v{color:#2e7d32;font-weight:600}.behind{color:#e65100;font-weight:600}.pill{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:8px;background:#e9edf2;color:#334e68;margin-top:2px}"
+  + ".csec{border-top:1px dashed #dde2e8;padding-top:5px;margin-top:5px}.csec:first-child{border-top:0;margin-top:0;padding-top:0}"
   + ".cp{font-size:11px;padding:3px 8px;border:1px solid #8792a2;border-radius:4px;background:#fff;cursor:pointer;white-space:nowrap}.cp:hover{background:#e9edf2}.cp.ok{background:#2e7d32;color:#fff;border-color:#2e7d32}"
   + "details{margin-top:4px}details summary{cursor:pointer;color:#52606d;font-size:11.5px}.lbl{font-size:11px;color:#52606d;margin-bottom:2px;font-weight:600}.warn{color:#c62828;font-weight:600}.note{color:#8d6e63;font-size:11.5px;margin-top:3px}"
   + "footer{padding:14px 28px;color:#7b8794;font-size:12px}</style></head><body>\n"
@@ -228,14 +283,15 @@ def html:
   + "<div class=\"cards\">" + card("pending actions"; $r.summary.total; "c-total") + card("resources"; $r.summary.resources; "c-total")
   + card("overdue"; ($u.OVERDUE // 0); "c-overdue") + card("critical (<= \($r.meta.crit_days)d)"; ($u.CRIT // 0); "c-crit")
   + card("warning (<= \($r.meta.warn_days)d)"; ($u.WARN // 0); "c-warn") + card("later"; ($u.INFO // 0); "c-info")
-  + card("optional (no date)"; ($u.OPTIONAL // 0); "c-opt") + (if $r.summary.errors > 0 then card("errors"; $r.summary.errors; "c-err") else "" end) + "</div>\n"
+  + card("optional (no date)"; ($u.OPTIONAL // 0); "c-opt")
+  + (if $r.meta.version_check != false then card("behind latest minor"; $r.summary.behind_latest_minor; "c-warn") else "" end) + (if $r.summary.errors > 0 then card("errors"; $r.summary.errors; "c-err") else "" end) + "</div>\n"
   + (if ($r.errors | length) > 0 then "<div class=\"errors\"><b>Report incomplete - AWS errors:</b><ul>"
        + ($r.errors | map("<li>\(.account | h) \(.profile | h) \(.region | h) <code>\(.call | h)</code>: \(.message | h)</li>") | join("")) + "</ul></div>\n" else "" end)
   + "<div class=\"minis\">" + minitable("By action"; $r.summary.by_action) + minitable("By engine"; $r.summary.by_engine)
   + minitable("By region"; $r.summary.by_region) + minitable("By account"; $r.summary.by_account) + "</div>\n"
   + "<input id=\"q\" type=\"search\" placeholder=\"Filter rows (any text)...\">\n<table class=\"main\" id=\"t\"><thead><tr>"
-  + (["Urgency", "Days", "Apply (UTC / \($r.meta.tz_abbr))", "Account", "Region", "Type", "Identifier", "Cluster", "Engine", "Class"]
-     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))", "Commands (apply: \($r.meta.apply_opt_in))"]
+  + (["Urgency", "Days", "Apply (UTC / \($r.meta.tz_abbr))", "Account", "Region", "Type", "Identifier", "Cluster", "Engine", "Minor version", "Class"]
+     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))", "Commands (printed only)"]
      | map("<th>\(h)</th>") | join(""))
   + "</tr></thead><tbody>\n"
   + ( $r.rows | map(
@@ -244,23 +300,31 @@ def html:
         + "<td data-s=\"\(.effective_apply // 9999999999)\">\(two(.effective_apply))<br><span class=\"muted\">\(.effective_basis | h)</span></td>"
         + "<td>\(.account | h)<br><span class=\"muted\">\(.profile | h)</span></td><td>\(.region | h)</td><td>\(.resource_type | h)</td>"
         + "<td><b>\(.identifier | h)</b>\(if .resolved then "" else "<br><span class=\"muted\">not found by describe-db-*</span>" end)</td>"
-        + "<td>\(.cluster | h)</td><td>\(.engine | h)<br><span class=\"muted\">\(.engine_version | h)</span></td><td>\(.instance_class | h)</td>"
+        + "<td>\(.cluster | h)</td><td>\(.engine | h)<br><span class=\"muted\">\(.engine_version | h)</span></td>"
+        + "<td class=\"ver\" data-s=\"\(if .minor_behind then 0 else 1 end)\">"
+        + (if .minor_behind then "<span class=\"behind\">&#8593; \(.minor_targets | length) newer minor</span><br>next <b>\(.next_minor_version | h)</b><br>latest <b>\(.latest_minor_version | h)</b>"
+             + "<br><span class=\"muted\">\(.minor_versions_available | h)</span>"
+           elif .minor_version_status == "up to date" then "<span class=\"ok-v\">&#10003; up to date</span>"
+           else "<span class=\"muted\">\(.next_minor_version | h)</span>" end)
+        + (if .auto_minor_upgrade != "" then "<br><span class=\"pill\">auto minor upgrade: \(if .auto_minor_upgrade == "true" then "on" else "off" end)</span>" else "" end)
+        + "</td><td>\(.instance_class | h)</td>"
         + ([.tag_columns[]] | map("<td>\(h)</td>") | join(""))
         + "<td><b>\(.action | h)</b></td><td>\(.description | h)</td><td>\(.opt_in_status | h)</td>"
         + "<td data-s=\"\(.auto_applied_after // 9999999999)\">\(two(.auto_applied_after))</td>"
         + "<td data-s=\"\(.forced_apply // 9999999999)\">\(two(.forced_apply))</td>"
         + "<td>\(.maint_window_utc | h)<br><span class=\"muted\">\(.maint_window_local | h)</span></td>"
-        + "<td>" + (if .apply_command == "" then "<div class=\"lbl\">apply</div><span class=\"muted\">-</span>"
-                    else "<div class=\"lbl\">apply (\($r.meta.apply_opt_in | h))</div>" + cmdbox(.apply_command) end)
-        + (if .apply_note != "" then "<div class=\"note\">\(.apply_note | h)</div>" else "" end)
-        + (if .apply_immediate_command != "" and .apply_immediate_command != .apply_command
-           then "<details><summary>apply immediately <span class=\"warn\">&#9888; may restart / fail over now</span></summary>" + cmdbox(.apply_immediate_command) + "</details>" else "" end)
-        + (if .undo_command != "" then "<details><summary>undo opt-in</summary>" + cmdbox(.undo_command) + "</details>" else "" end)
-        + (if .status_command != "" then "<details><summary>check status (maintenance in progress?)</summary>" + cmdbox(.status_command) + "</details>" else "" end)
-        + (if .pending_actions_command != "" then "<details><summary>pending actions (live)</summary>" + cmdbox(.pending_actions_command) + "</details>" else "" end)
+        + "<td><div class=\"csec\">" + (if .apply_immediate_command == "" then "<div class=\"lbl\">apply immediately</div><span class=\"muted\">-</span>"
+                    else "<div class=\"lbl\">apply immediately <span class=\"warn\">&#9888; may restart / fail over now</span></div>" + cmdbox(.apply_immediate_command) end)
+        + (if .apply_note != "" then "<div class=\"note\">\(.apply_note | h)</div>" else "" end) + "</div>"
+        + (if .minor_upgrade_command != "" then "<div class=\"csec\"><div class=\"lbl\">minor version upgrade &rarr; \(.latest_minor_version | h)</div>" + cmdbox(.minor_upgrade_command)
+             + "<div class=\"note\">applies in the next maintenance window unless --apply-immediately is added</div></div>" else "" end)
+        + (if .status_command != "" or .pending_actions_command != "" then "<div class=\"csec\">"
+             + (if .status_command != "" then "<details><summary>check status (maintenance in progress?)</summary>" + cmdbox(.status_command) + "</details>" else "" end)
+             + (if .pending_actions_command != "" then "<details><summary>pending actions (live)</summary>" + cmdbox(.pending_actions_command) + "</details>" else "" end)
+             + "</div>" else "" end)
         + "</td></tr>") | join("\n") )
   + (if ($r.rows | length) == 0 then "<tr><td colspan=\"30\" style=\"padding:18px;text-align:center\">No pending maintenance actions found.</td></tr>" else "" end)
-  + "\n</tbody></table>\n</main>\n<footer>\($r.meta.script | h) v\($r.meta.version | h) on \($r.meta.host | h) &middot; urgency: OVERDUE = apply date passed, CRIT &le; \($r.meta.crit_days)d, WARN &le; \($r.meta.warn_days)d, INFO later, OPTIONAL = no date &middot; read-only report, nothing was changed; apply commands are printed only - check the maintenance window and impact first (immediate may restart / fail over the DB) &middot; exit \($r.summary.exit_code)</footer>\n"
+  + "\n</tbody></table>\n</main>\n<footer>\($r.meta.script | h) v\($r.meta.version | h) on \($r.meta.host | h) &middot; urgency: OVERDUE = apply date passed, CRIT &le; \($r.meta.crit_days)d, WARN &le; \($r.meta.warn_days)d, INFO later, OPTIONAL = no date &middot; read-only report, nothing was changed; commands are printed only - check the maintenance window and impact first (immediate may restart / fail over the DB; minor upgrades apply in the next window) &middot; exit \($r.summary.exit_code)</footer>\n"
   + "<script>(function(){var t=document.getElementById('t'),b=t.tBodies[0],dir={};"
   + "t.tHead.addEventListener('click',function(e){var th=e.target.closest('th');if(!th)return;var i=th.cellIndex;dir[i]=!dir[i];"
   + "var rows=Array.prototype.slice.call(b.rows);rows.sort(function(x,y){var a=x.cells[i],c=y.cells[i];if(!a||!c)return 0;"
@@ -279,7 +343,8 @@ def alert:
   {status: .summary.overall, exit_code: .summary.exit_code, generated_utc: .meta.generated_utc, generated_local: .meta.generated_local,
    accounts: .meta.accounts, regions: .meta.regions, summary: .summary,
    urgent: [.rows[] | select(.severity == "CRIT") | {account, region, resource_type, identifier, cluster, engine, action, urgency,
-            days_until, effective_apply_utc, effective_apply_local, opt_in_status, apply_command, apply_immediate_command, status_command, pending_actions_command, apply_note}],
+            days_until, effective_apply_utc, effective_apply_local, opt_in_status, apply_immediate_command, status_command, pending_actions_command, apply_note,
+            engine_version, next_minor_version, latest_minor_version, auto_minor_upgrade, minor_upgrade_command}],
    errors: .errors};
 
 if $mode == "rows" then rows elif $mode == "finalize" then finalize elif $mode == "text" then text

@@ -7,7 +7,7 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
 ```
 
 * **Engines:** Aurora PostgreSQL/MySQL, RDS PostgreSQL, MySQL, MariaDB, SQL Server (all editions), Oracle and Db2. DocumentDB and Neptune are included when the RDS API returns them. `--include-docdb` also queries `aws docdb describe-pending-maintenance-actions`; results are merged and de-duplicated per resource+action, and the rds entry wins.
-* **Strictly read-only.** The only calls are `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds|docdb describe-pending-maintenance-actions`, `rds describe-db-instances` and `rds describe-db-clusters`. The script never applies, defers or modifies anything. The apply/defer commands below are documentation only.
+* **Strictly read-only.** The only calls are `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds|docdb describe-pending-maintenance-actions`, `rds describe-db-instances`, `rds describe-db-clusters` and `rds|docdb|neptune describe-db-engine-versions` (minor-version check; skip with `--no-version-check`). The script never applies, defers, upgrades or modifies anything. The commands it prints are for you to review and run yourself.
 * **Requirements:** Bash 4.4+, AWS CLI v2, jq 1.6+. curl is needed for webhooks and mail/mailx/sendmail for e-mail. The script consists of the main file plus `lib/report.jq`; keep them together.
 
 ## How it works
@@ -32,7 +32,8 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
    * `OPTIONAL`: no date.
 
    Change the 7 and 30 with `--crit-days` and `--warn-days`.
-5. Filters are applied, rows are sorted by the soonest effective date (undated rows last), and the summary is computed: counts by urgency, action, engine, region and account.
+5. **Minor versions** (v1.3.0): for every engine + version found, one `aws rds|docdb|neptune describe-db-engine-versions --engine <engine> --engine-version <version>` call is made (cached per engine + version + region, so 100 instances on the same version cost one call). From `ValidUpgradeTarget` only targets with `IsMajorVersionUpgrade = false` and a higher version are kept. Versions compare numerically per part, so `16.10` is newer than `16.9`. `--no-version-check` skips these calls. A failed lookup (e.g. missing `rds:DescribeDBEngineVersions`) is logged as a warning and shown as `lookup failed`; it does not make the report incomplete or change the exit code.
+6. Filters are applied, rows are sorted by the soonest effective date (undated rows last), and the summary is computed: counts by urgency, action, engine, region and account, plus the number of servers behind their latest minor version.
 
 ## Report columns (CSV; the same fields are in JSON, HTML and text)
 
@@ -58,14 +59,20 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
 | `next_window_ist` | Start of the next maintenance window |
 | `source` | `rds` or `docdb` (which API reported it) |
 | `arn` | Resource ARN (use it with `apply-pending-maintenance-action`) |
-| `apply_command` | Copy-pasteable `aws rds\|docdb\|neptune apply-pending-maintenance-action ...` for this row, using `--apply-opt-in` (default `next-maintenance`). **Printed only, never run.** Empty when applying makes no sense; see `apply_note` |
-| `undo_command` | The same command with `--opt-in-type undo-opt-in`, which withdraws a `next-maintenance` opt-in |
-| `apply_note` | Why a command is empty, or a caution, e.g. "resource not found ... verify before applying", "already opted in (immediate) ...", "already opted in (next-maintenance); command not needed" |
-| `apply_immediate_command` | The same apply command with `--opt-in-type immediate`. **Warning: immediate may restart or fail over the DB right now.** Empty for not-found rows and rows already opted in `immediate` (see `apply_note`) |
+| `apply_immediate_command` | `aws rds\|docdb\|neptune apply-pending-maintenance-action --resource-identifier <ARN> --apply-action <action> --opt-in-type immediate ...`. **Printed only, never run.** **Warning: immediate may restart or fail over the DB right now.** Empty for not-found rows and rows already opted in `immediate` (see `apply_note`) |
 | `status_command` | Read-only `describe-db-instances` / `describe-db-clusters` (members included) with `--query ... --output table`. Shows `Status` (`available`, `upgrading`, `maintenance`, `rebooting`, `modifying` ... anything other than `available` means work is in progress) and `PendingModified` |
 | `pending_actions_command` | Read-only `aws <svc> describe-pending-maintenance-actions --resource-identifier <ARN> ... --output table`: live view of what is still pending. Shown for every row, including not-found ones |
+| `apply_note` | Caution or why the immediate command is empty: "applies as soon as possible - may restart/fail over ...", "already scheduled for the next window ...", "already opted in (immediate) ...", "resource not found ... verify before applying" |
+| `auto_minor_upgrade` | `AutoMinorVersionUpgrade` of the instance or cluster: `true` / `false` (empty if unknown) |
+| `next_minor_version` | Smallest newer minor version available, or `up to date`, `not checked` (`--no-version-check`), `lookup failed`, `resource not found` |
+| `latest_minor_version` | Highest newer minor version available (empty when up to date) |
+| `minor_versions_available` | All newer minor versions, comma-separated; more than 6 are shortened to `first 3, ..., last 2 (N versions)` (JSON `minor_targets` has the full list) |
+| `minor_upgrade_command` | `aws rds\|docdb\|neptune modify-db-cluster --db-cluster-identifier <cluster> --engine-version <latest minor>` for Aurora / DocumentDB / Neptune / Multi-AZ DB clusters (also on their member-instance rows), or `aws rds modify-db-instance --db-instance-identifier <id> --engine-version <latest minor>` for standalone instances. **Printed only, never run.** No `--apply-immediately`, so it applies in the next maintenance window. Empty when up to date |
+| `minor_upgrade_note` | e.g. `upgrades cluster orders-prod 16.8 -> 16.10; applies in the next maintenance window unless --apply-immediately is added (restart / failover)` |
 
-In the text format, each row is followed by an indented `apply:` line and, when there is one, a `note:` line. In HTML, the command is shown in a monospace cell with a **Copy** button, and the undo command is in a collapsible "undo opt-in" section.
+In the text format, each row is followed by indented `version`, `immediate`, `status`, `pending`, `minor upg` and `note` lines. In HTML, a **Minor version** cell shows next / latest / all available versions and whether auto minor upgrade is on, and one **Commands** cell holds: apply immediately (with the restart / failover warning), the minor version upgrade, and collapsible check-status and pending-actions lookups. Every command has a **Copy** button. A "behind latest minor" card counts the servers that are behind.
+
+Removed in 1.3.0: the `apply_command` (next-maintenance) and `undo_command` (undo-opt-in) columns, and the `--apply-opt-in` option / `apply_opt_in` config key. Passing them still works but only logs a warning and is ignored.
 
 The IST column names follow `--tz`; for example `--tz UTC` gives `effective_apply_utc` twice. The JSON output also has `effective_basis`, epoch values, the full `tags` map, `resolved` and the summary.
 
@@ -103,30 +110,30 @@ The order of precedence is 11 > 3 > 10 > 0. A CRIT finding is never masked by a 
 
 Optional actions (no dates) are applied only when you choose. Required actions are applied automatically in your maintenance window after `AutoAppliedAfterDate`, and unconditionally on `ForcedApplyDate`.
 
-### The `apply_command` column (printed, never executed)
+### Printed commands (never executed)
 
-Every row gets the exact command to apply that action, for example:
+Every row gets copy-pasteable commands, for example:
 
 ```
-aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type next-maintenance --region us-east-1 --profile prod
+aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod
+aws rds describe-db-instances --db-instance-identifier crm-sql-prod --query 'DBInstances[0].{Status:DBInstanceStatus,...}' --output table --region us-east-1 --profile prod
+aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod --output table --region us-east-1 --profile prod
+aws rds modify-db-instance --db-instance-identifier crm-sql-prod --engine-version 15.00.4430.1.v1 --region us-east-1 --profile prod
 ```
 
-* **Opt-in type:** `--apply-opt-in next-maintenance` (default) or `--apply-opt-in immediate`; config key `apply_opt_in`. `next-maintenance` is the default because it keeps the change inside the resource's maintenance window. `undo_command` always uses `undo-opt-in`.
 * **Service:** `aws docdb` for DocumentDB rows (engine `docdb` or rows from `--include-docdb`), `aws neptune` for Neptune, `aws rds` for everything else. All three accept the same RDS ARN.
 * **Region and profile:** `--region` is always included. `--profile` is included only when the report ran with `-P`; with the default credential chain it is left out.
 * **Quoting:** arguments are shell-quoted (single quotes) whenever they contain anything other than `A-Z a-z 0-9 _ . / : = @ , + % -`. Real ARNs and action names never need it.
-* **When the cell is empty:**
-  * the ARN did not resolve, e.g. a deleted or renamed resource ("verify before applying");
-  * the action is already opted in `immediate` (it cannot be changed or undone).
-* **Already opted in:** if the action is already opted in with the same type, the command is still shown, with a note that it is not needed.
+* **Empty immediate command:** the ARN did not resolve (deleted or renamed resource), or the action is already opted in `immediate`.
+* **Minor upgrade:** targets the latest minor version. Aurora / DocumentDB / Neptune versions belong to the cluster, so rows for member instances print the cluster command. Without `--apply-immediately` the change is applied in the next maintenance window; adding it restarts the DB now. Test the new version first and check the engine release notes.
 * The script stays **read-only**. It builds these strings with jq and never executes them. The test suite checks that only `describe-*`/`get-*` operations are ever called.
 
 > **Before running an `immediate` command:**
 > * `immediate` starts the maintenance as soon as possible, outside your maintenance window. It **may restart the instance or fail over** a Multi-AZ instance or cluster. It **cannot be undone**.
 > * Check the maintenance window (`maint_window_*` columns), the impact of the action type (table above) and the application's tolerance for a restart first.
-> * Prefer `next-maintenance` unless you have a change window right now.
+> * Afterwards run `status_command`: a `Status` other than `available` (`upgrading`, `maintenance`, `rebooting`, `modifying`) means the work is in progress. `pending_actions_command` shows what is still pending.
 
-### Apply or defer with the CLI (this script never runs these)
+### Other opt-in types (manual; no longer printed by the report since 1.3.0)
 
 ```bash
 ARN=arn:aws:rds:us-east-1:111111111111:db:crm-sql-prod      # from the report's arn column
@@ -166,6 +173,7 @@ The **Maintenance** column of the Databases list shows `required`, `available` o
         "rds:DescribePendingMaintenanceActions",
         "rds:DescribeDBInstances",
         "rds:DescribeDBClusters",
+        "rds:DescribeDBEngineVersions",
         "ec2:DescribeRegions"
       ],
       "Resource": "*"
@@ -174,7 +182,8 @@ The **Maintenance** column of the Databases list shows `required`, `available` o
 }
 ```
 
-* DocumentDB and Neptune use the same `rds:` IAM actions, so `--include-docdb` needs nothing extra.
+* DocumentDB and Neptune use the same `rds:` IAM actions, so `--include-docdb` and the docdb/neptune engine-version lookups need nothing extra.
+* `rds:DescribeDBEngineVersions` is only used for the minor-version columns (not with `--no-version-check`).
 * `sts:GetCallerIdentity` needs no permission.
 * `ec2:DescribeRegions` is only used with `--all-regions`.
 * Tags come from `TagList` in the describe responses, so no `rds:ListTagsForResource` is needed.
@@ -202,13 +211,14 @@ CRON_TZ=Asia/Kolkata
 
 ## Tests
 
-* `tests/run_tests.sh`: 198 checks (including a large-fleet regression test) against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
-* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`. It also runs every printed `apply_command`/`apply_immediate_command`/`undo_command`/`status_command`/`pending_actions_command` (79 commands; rds, docdb, neptune; instance and cluster, plus an awkward-quoting row) through the real CLI: all five action types × `next-maintenance`/`immediate`/`undo-opt-in` for rds, plus docdb and neptune.
+* `tests/run_tests.sh`: 247 checks (including a large-fleet regression test) against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
+* `tests/validate_cli.sh` replays every AWS command line the script issued (38 distinct, including `rds|docdb|neptune describe-db-engine-versions`) through the real AWS CLI v2 (fake credentials, dead local endpoint), runs negative controls, and checks that the mock's response shapes (9 operations) match `--generate-cli-skeleton output`. It also runs every printed `apply_immediate_command`/`status_command`/`pending_actions_command`/`minor_upgrade_command` (65 commands; rds, docdb, neptune; instance and cluster; `modify-db-instance` and `modify-db-cluster`; plus an awkward-quoting row) through the real CLI, checks that no next-maintenance / undo-opt-in / `--apply-immediately` command is printed, and checks pagination against a local paging endpoint.
 
-Samples from the mock fleet are in `samples/`, with screenshots of the HTML report at `sample_report.png` (full report) and `sample_report_apply_cmd.png` (apply-command column with Copy buttons).
+Samples from the mock fleet are in `samples/`, with screenshots of the HTML report at `sample_report.png` (full report) and `sample_report_apply_cmd.png` (minor-version and Commands cells expanded, with Copy buttons).
 
 ## Changelog
 
+* **1.3.0**: removed `apply_command` (next-maintenance) and `undo_command` (undo-opt-in) and the `--apply-opt-in` option / `apply_opt_in` key (now ignored with a warning). New minor-version patch details: `auto_minor_upgrade`, `next_minor_version`, `latest_minor_version`, `minor_versions_available`, `minor_upgrade_command`, `minor_upgrade_note` (CSV 37 columns), from `describe-db-engine-versions` cached per engine + version + region; `--no-version-check` / `version_check = no` skips it. Summary: servers behind the latest minor version. HTML: Minor version cell, "behind latest minor" card, Commands cell = apply immediately + minor upgrade + status + pending actions, all with Copy. IAM: add `rds:DescribeDBEngineVersions`. Tests: 247/247; CLI validation 38/38 calls and 65/65 printed commands accepted.
 * **1.2.0**: new columns `apply_immediate_command`, `status_command`, `pending_actions_command` in CSV (appended at the end, 33 columns), JSON, text and HTML. HTML groups commands in one cell with Copy buttons and collapsible sections. Tests: 212/212; CLI validation 79/79 accepted.
 
 ## Large fleets and pagination
@@ -234,6 +244,7 @@ Samples from the mock fleet are in `samples/`, with screenshots of the HTML repo
 * Verified against a mock built from CLI skeleton output and the AWS documentation, **not against a live account**. Run it once with `-v --keep-workdir` in a real account to confirm the raw responses look as expected.
 * `AutoAppliedAfterDate` means "applied in the first maintenance window *after* this date". The report uses the date itself as the effective date, which is the earliest possible moment. `next_window_ist` shows the next window to help with planning.
 * Whether `rds describe-pending-maintenance-actions` returns DocumentDB/Neptune resources can vary. `--include-docdb` queries the DocumentDB API explicitly; duplicates are removed.
-* `--opt-in-type` is a free string to the CLI, so the CLI accepts any value; only the service validates it. The printed commands only ever use `immediate`, `next-maintenance` or `undo-opt-in`. The commands were checked for syntax against CLI 2.37.12, but have not been run against AWS.
+* `--opt-in-type` is a free string to the CLI, so the CLI accepts any value; only the service validates it. The printed commands only ever use `immediate`.
+* `ValidUpgradeTarget` lists what AWS allows from the current version in that region; a version can be listed but not yet offered for your instance class. The minor upgrade command upgrades straight to the latest minor; pick `next_minor_version` instead if you prefer smaller steps. The commands were checked for syntax against CLI 2.37.12, but have not been run against AWS.
 * `OptInStatus` values are shown as AWS returns them. Only `immediate` and `next-maintenance` change the effective date.
 * Maintenance windows and dates are UTC in AWS; the second time zone is display only.
