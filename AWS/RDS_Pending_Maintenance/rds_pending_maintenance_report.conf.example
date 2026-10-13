@@ -24,6 +24,7 @@ tz            = Asia/Kolkata
 crit_days     = 7
 warn_days     = 30
 apply_opt_in  = next-maintenance       # opt-in type in the printed apply_command column: next-maintenance | immediate
+                                       # (apply_immediate_command, status_command, pending_actions_command are always printed too)
 log_file      = /var/log/dba/rds_pm.log
 
 # --- AWS CLI behaviour

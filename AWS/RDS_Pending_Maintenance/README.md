@@ -61,6 +61,9 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
 | `apply_command` | Copy-pasteable `aws rds\|docdb\|neptune apply-pending-maintenance-action ...` for this row, using `--apply-opt-in` (default `next-maintenance`). **Printed only, never run.** Empty when applying makes no sense; see `apply_note` |
 | `undo_command` | The same command with `--opt-in-type undo-opt-in`, which withdraws a `next-maintenance` opt-in |
 | `apply_note` | Why a command is empty, or a caution, e.g. "resource not found ... verify before applying", "already opted in (immediate) ...", "already opted in (next-maintenance); command not needed" |
+| `apply_immediate_command` | The same apply command with `--opt-in-type immediate`. **Warning: immediate may restart or fail over the DB right now.** Empty for not-found rows and rows already opted in `immediate` (see `apply_note`) |
+| `status_command` | Read-only `describe-db-instances` / `describe-db-clusters` (members included) with `--query ... --output table`. Shows `Status` (`available`, `upgrading`, `maintenance`, `rebooting`, `modifying` ... anything other than `available` means work is in progress) and `PendingModified` |
+| `pending_actions_command` | Read-only `aws <svc> describe-pending-maintenance-actions --resource-identifier <ARN> ... --output table`: live view of what is still pending. Shown for every row, including not-found ones |
 
 In the text format, each row is followed by an indented `apply:` line and, when there is one, a `note:` line. In HTML, the command is shown in a monospace cell with a **Copy** button, and the undo command is in a collapsible "undo opt-in" section.
 
@@ -200,9 +203,13 @@ CRON_TZ=Asia/Kolkata
 ## Tests
 
 * `tests/run_tests.sh`: 198 checks (including a large-fleet regression test) against a mock AWS CLI (`tests/mock/aws`). They use local stub mail and a webhook listener on 127.0.0.1, and include a read-only check of every AWS operation called.
-* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`. It also runs every printed `apply_command`/`undo_command` through the real CLI: all five action types × `next-maintenance`/`immediate`/`undo-opt-in` for rds, plus docdb and neptune.
+* `tests/validate_cli.sh` replays every AWS command line the script issued through the real AWS CLI v2 (fake credentials, dead local endpoint), runs a negative control, and checks that the mock's response shapes match `--generate-cli-skeleton output`. It also runs every printed `apply_command`/`apply_immediate_command`/`undo_command`/`status_command`/`pending_actions_command` (79 commands; rds, docdb, neptune; instance and cluster, plus an awkward-quoting row) through the real CLI: all five action types × `next-maintenance`/`immediate`/`undo-opt-in` for rds, plus docdb and neptune.
 
 Samples from the mock fleet are in `samples/`, with screenshots of the HTML report at `sample_report.png` (full report) and `sample_report_apply_cmd.png` (apply-command column with Copy buttons).
+
+## Changelog
+
+* **1.2.0**: new columns `apply_immediate_command`, `status_command`, `pending_actions_command` in CSV (appended at the end, 33 columns), JSON, text and HTML. HTML groups commands in one cell with Copy buttons and collapsible sections. Tests: 212/212; CLI validation 79/79 accepted.
 
 ## Large fleets and pagination
 

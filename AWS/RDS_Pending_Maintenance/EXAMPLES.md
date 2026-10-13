@@ -171,6 +171,17 @@ WARN     20     2026-10-31 09:04      111111111111 us-east-1      cluster  order
 * `undo_command` holds the matching `--opt-in-type undo-opt-in` command.
 * In the HTML report, each command has a **Copy** button (see `sample_report_apply_cmd.png`).
 
+## 11b. Immediate, status and pending-actions commands (v1.2.0)
+
+```bash
+jq -r '.rows[] | select(.identifier=="orders-prod-2") | .apply_immediate_command, .status_command, .pending_actions_command' report.json
+# aws rds apply-pending-maintenance-action --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --apply-action system-update --opt-in-type immediate --region us-east-1 --profile prod
+# aws rds describe-db-instances --db-instance-identifier orders-prod-2 --query 'DBInstances[0].{Status:DBInstanceStatus,...}' --output table --region us-east-1 --profile prod
+# aws rds describe-pending-maintenance-actions --resource-identifier arn:aws:rds:us-east-1:111111111111:db:orders-prod-2 --output table --region us-east-1 --profile prod
+```
+
+`apply_immediate_command` may restart / fail over the DB now. Run `status_command` afterwards: `Status` other than `available` (e.g. `upgrading`, `maintenance`, `rebooting`) means maintenance is in progress. Clusters use `describe-db-clusters` and list members; DocumentDB/Neptune rows use `aws docdb` / `aws neptune`.
+
 ## 12. From a report row to action (manual; the script never does this)
 
 ```bash

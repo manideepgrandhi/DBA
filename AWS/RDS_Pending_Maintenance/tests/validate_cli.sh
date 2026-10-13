@@ -75,7 +75,7 @@ for spec in "rds describe-pending-maintenance-actions" "docdb describe-pending-m
         echo '{"UserId": "", "Account": "", "Arn": ""}' >"$OUT/skel.json"
     else
         # shellcheck disable=SC2086
-        "$REAL_AWS" $cmd --generate-cli-skeleton output >"$OUT/skel.json" 2>"$OUT/skel.err" || { echo "skeleton failed: $cmd"; fail=$((fail + 1)); continue; }
+        "$REAL_AWS" $cmd --region us-east-1 --generate-cli-skeleton output >"$OUT/skel.json" 2>"$OUT/skel.err" || { echo "skeleton failed: $cmd"; fail=$((fail + 1)); continue; }
     fi
     # shellcheck disable=SC2086
     MOCK_SCENARIO=fleet PATH="$HERE/mock:$PATH" aws --output json --no-cli-pager --profile prod --region us-east-1 $cmd $extra >"$OUT/mock.json" 2>/dev/null
@@ -88,28 +88,65 @@ for spec in "rds describe-pending-maintenance-actions" "docdb describe-pending-m
 done
 echo "mock response shapes matching CLI skeleton: $shape_ok/6"
 
-# 4. the printed apply_command / undo_command strings (never run by the report) must be accepted by
-#    the real CLI: every action type x both --apply-opt-in values, rds + docdb + neptune
+# 4. every printed command (apply_command, undo_command, apply_immediate_command, status_command,
+#    pending_actions_command; never run by the report) must be accepted by the real CLI:
+#    every action type x opt-in type, rds + docdb + neptune, instance + cluster
 : >"$OUT/cmds.txt"
 for ao in next-maintenance immediate; do
     MOCK_SCENARIO=fleet PATH="$HERE/mock:$PATH" "$S" -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1 --include-docdb \
-        --apply-opt-in "$ao" -F json 2>/dev/null | jq -r '.rows[] | .apply_command, .undo_command | select(. != "")' >>"$OUT/cmds.txt"
+        --apply-opt-in "$ao" -F json 2>/dev/null \
+        | jq -r '.rows[] | .apply_command, .undo_command, .apply_immediate_command, .status_command, .pending_actions_command | select(. != "")' >>"$OUT/cmds.txt"
 done
+# synthetic rows through the real finalize step: a neptune instance (not in the mock fleet) and awkward
+# values that need shell quoting; eval must give back exactly the original words
+# shellcheck disable=SC2016  # literal $ and backtick in test data are intentional
+SYN='[{"account":"123456789012","profile":"default","region":"us-east-1","source":"rds","resource_type":"instance",
+  "identifier":"nep-1","cluster":"nep-cl","engine":"neptune","engine_version":"1.3","instance_class":"db.r6g.large","resolved":true,
+  "tags":{},"tag_columns":{},"action":"system-update","description":"x","opt_in_status":"","effective_apply":null,
+  "urgency":"OPTIONAL","severity":"INFO","arn":"arn:aws:rds:us-east-1:123456789012:db:nep-1"},
+ {"account":"123456789012","profile":"default","region":"us-east-1","source":"rds","resource_type":"instance",
+  "identifier":"it'"'"'s a b$c`d;rm -rf x","cluster":"","engine":"postgres","engine_version":"16","instance_class":"db.t4g.micro","resolved":false,
+  "tags":{},"tag_columns":{},"action":"system-update","description":"x","opt_in_status":"","effective_apply":null,
+  "urgency":"OPTIONAL","severity":"INFO","arn":"arn:aws:rds:us-east-1:123456789012:db:it'"'"'s a b$c`d;rm -rf x"}]'
+jq -n --argjson rows "$SYN" '{meta: {tz_abbr: "IST", tag_columns: [], apply_opt_in: "next-maintenance"}, rows: $rows, errors: []}' \
+  | TZ=Asia/Kolkata jq --arg mode finalize --argjson now 0 --argjson crit_days 7 --argjson warn_days 30 --argjson tagcols '[]' \
+      --argjson f '{"engines":[],"actions":[],"identifiers":[],"urgency":[],"tags":[]}' --arg apply_opt next-maintenance \
+      -f "$HERE/../lib/report.jq" >"$OUT/syn.json"
+jq -r '.rows[] | .apply_command, .undo_command, .apply_immediate_command, .status_command, .pending_actions_command | select(. != "")' \
+    "$OUT/syn.json" >>"$OUT/cmds.txt"
+qok=0
+awk_id="it's a b\$c\`d;rm -rf x"
+for field in status_command pending_actions_command; do
+    c="$(jq -r --arg f "$field" '.rows[] | select(.engine == "postgres") | .[$f]' "$OUT/syn.json")"
+    eval "set -- $c"
+    want="$awk_id"; [[ "$field" == pending_actions_command ]] && want="arn:aws:rds:us-east-1:123456789012:db:$awk_id"
+    [[ "$5" == "$want" ]] && qok=$((qok + 1)) || echo "QUOTING FAIL $field: got [$5]"
+done
+[[ "$(jq -r '.rows[] | select(.engine == "postgres") | .apply_immediate_command' "$OUT/syn.json")" == "" ]] && qok=$((qok + 1)) || echo "unresolved row has an immediate command"
+echo "quoting of awkward values round-trips through the shell: $qok/3"
+(( qok == 3 )) || fail=$((fail + 1))
 sort -u -o "$OUT/cmds.txt" "$OUT/cmds.txt"
 cpass=0; cfail=0; declare -A combo=()
 while IFS= read -r cmd; do
     eval "set -- $cmd"                       # same word splitting / quote removal as a user's shell
     [[ "$1" == aws ]] || { echo "BAD COMMAND: $cmd"; cfail=$((cfail + 1)); continue; }
     shift
-    svc="$1"; act=""; opt=""; prev=""
+    svc="$1"; op="$2"; act=""; opt=""; prev=""
     for w in "$@"; do
         [[ "$prev" == --apply-action ]] && act="$w"; [[ "$prev" == --opt-in-type ]] && opt="$w"; prev="$w"
     done
-    run_real --output json "$@"
-    if [[ "$OUTP" == *"Could not connect to the endpoint URL"* ]]; then cpass=$((cpass + 1)); combo["$svc $act $opt"]=1
+    run_real "$@"
+    if [[ "$OUTP" == *"Could not connect to the endpoint URL"* ]]; then
+        cpass=$((cpass + 1))
+        if [[ "$op" == apply-pending-maintenance-action ]]; then combo["$svc $act $opt"]=1; else combo["$svc $op"]=1; fi
     else cfail=$((cfail + 1)); echo "FAIL ($RC): $cmd :: ${OUTP:0:300}"; fi
 done <"$OUT/cmds.txt"
-echo "printed apply/undo commands accepted by real CLI: $cpass, rejected: $cfail"
+echo "printed apply/undo/immediate/status/pending commands accepted by real CLI: $cpass, rejected: $cfail"
+for svc in rds docdb neptune; do
+    for op in describe-db-instances describe-db-clusters describe-pending-maintenance-actions; do
+        [[ -n "${combo[$svc $op]:-}" ]] || { echo "MISSING $svc $op"; cfail=$((cfail + 1)); }
+    done
+done
 for act in system-update db-upgrade os-upgrade hardware-maintenance ca-certificate-rotation; do
     for opt in next-maintenance immediate undo-opt-in; do
         printf '%s\n' "${!combo[@]}" | grep -qE "^rds $act $opt$" || { echo "MISSING rds $act $opt"; cfail=$((cfail + 1)); }

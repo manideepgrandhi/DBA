@@ -76,21 +76,38 @@ def rows:
 # POSIX shell quoting: plain if only safe characters, else single-quoted with ' -> '\''
 def sq: tostring | if test("^[A-Za-z0-9_./:=@,+%-]+$") then . else "'" + gsub("'"; "'\\''") + "'" end;
 def cli_service: if .source == "docdb" or .engine == "docdb" then "docdb" elif .engine == "neptune" then "neptune" else "rds" end;
-def pma_cmd($type):
-  (["aws", cli_service, "apply-pending-maintenance-action", "--resource-identifier", .arn, "--apply-action", .action, "--opt-in-type", $type]
-   + (if (.region // "") != "" then ["--region", .region] else [] end)
-   + (if (.profile // "") != "" and .profile != "default" then ["--profile", .profile] else [] end))
+# argv words -> one copy-pasteable command; --region always (known), --profile only when -P was used
+def mk_cmd($words):
+  ($words + (if (.region // "") != "" then ["--region", .region] else [] end)
+          + (if (.profile // "") != "" and .profile != "default" then ["--profile", .profile] else [] end))
   | map(sq) | join(" ");
-def commands:
-  if .resolved | not then {apply_command: "", undo_command: "",
+def pma_cmd($type):
+  mk_cmd(["aws", cli_service, "apply-pending-maintenance-action", "--resource-identifier", .arn, "--apply-action", .action, "--opt-in-type", $type]);
+# status: current state incl. maintenance in progress (Status upgrading / maintenance / rebooting / modifying ...)
+def status_query_instance: "DBInstances[0].{Status:DBInstanceStatus,PendingModified:PendingModifiedValues,MaintWindow:PreferredMaintenanceWindow,Engine:Engine,EngineVersion:EngineVersion,Class:DBInstanceClass,MultiAZ:MultiAZ,AutoMinorUpgrade:AutoMinorVersionUpgrade,CACert:CACertificateIdentifier,Cluster:DBClusterIdentifier}";
+def status_query_cluster: "DBClusters[0].{Status:Status,Engine:Engine,EngineVersion:EngineVersion,MaintWindow:PreferredMaintenanceWindow,PendingModified:PendingModifiedValues,MultiAZ:MultiAZ,Members:DBClusterMembers[].{Instance:DBInstanceIdentifier,Writer:IsClusterWriter}}";
+def status_cmd:
+  if .resource_type == "cluster" then
+    mk_cmd(["aws", cli_service, "describe-db-clusters", "--db-cluster-identifier", .identifier, "--query", status_query_cluster, "--output", "table"])
+  else
+    mk_cmd(["aws", cli_service, "describe-db-instances", "--db-instance-identifier", .identifier, "--query", status_query_instance, "--output", "table"])
+  end;
+def pending_cmd: mk_cmd(["aws", cli_service, "describe-pending-maintenance-actions", "--resource-identifier", .arn, "--output", "table"]);
+def apply_commands:
+  if .resolved | not then {apply_command: "", undo_command: "", apply_immediate_command: "",
        apply_note: "resource not found by describe-db-instances/clusters (deleted or renamed?) - verify before applying"}
-  elif (.action // "") == "" or (.arn // "") == "" then {apply_command: "", undo_command: "", apply_note: "no action/ARN reported"}
-  elif .opt_in_status == "immediate" then {apply_command: "", undo_command: "",
+  elif (.action // "") == "" or (.arn // "") == "" then {apply_command: "", undo_command: "", apply_immediate_command: "", apply_note: "no action/ARN reported"}
+  elif .opt_in_status == "immediate" then {apply_command: "", undo_command: "", apply_immediate_command: "",
        apply_note: "already opted in (immediate): being applied now, cannot be changed or undone"}
-  else {apply_command: pma_cmd($apply_opt), undo_command: pma_cmd("undo-opt-in"),
+  else {apply_command: pma_cmd($apply_opt), undo_command: pma_cmd("undo-opt-in"), apply_immediate_command: pma_cmd("immediate"),
         apply_note: ( if .opt_in_status == $apply_opt then "already opted in (\(.opt_in_status)); command not needed"
                       elif $apply_opt == "immediate" then "applies as soon as possible - may restart/fail over; check impact first"
                       else "" end )} end;
+# status / pending-actions commands are read-only lookups: shown even for unresolved ARNs
+def commands:
+  apply_commands
+  + {status_command: (if (.identifier // "") != "" then status_cmd else "" end),
+     pending_actions_command: (if (.arn // "") != "" then pending_cmd else "" end)};
 
 # ------------------------------------------------------------------ mode: finalize
 def decorate:
@@ -140,9 +157,13 @@ def text:
                  + ((.identifier + (if .cluster != "" then " (\(.cluster))" else "" end)) | cut(29) | pad(30))
                  + ("\(.engine) \(.engine_version)" | cut(23) | pad(24)) + (.action | pad(24)) + ((.opt_in_status | if . == "" then "-" else . end) | pad(17))
                  + ([.tag_columns[]] | map(cut(12) | pad(13)) | join(""))
-                 + "\n         apply: " + (if .apply_command != "" then .apply_command else "-" end)
-                 + (if .apply_note != "" then "\n         note : " + .apply_note else "" end) ) ) end ),
-      (if ($r.rows | length) > 0 then "", "Apply commands use --opt-in-type \($r.meta.apply_opt_in) and are printed only (never run). Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command)." else empty end),
+                 + "\n         apply    : " + (if .apply_command != "" then .apply_command else "-" end)
+                 + (if .apply_immediate_command != "" and .apply_immediate_command != .apply_command
+                    then "\n         immediate: " + .apply_immediate_command + "   # may restart/fail over NOW" else "" end)
+                 + (if .status_command != "" then "\n         status   : " + .status_command else "" end)
+                 + (if .pending_actions_command != "" then "\n         pending  : " + .pending_actions_command else "" end)
+                 + (if .apply_note != "" then "\n         note     : " + .apply_note else "" end) ) ) end ),
+      (if ($r.rows | length) > 0 then "", "Commands are printed only (never run). apply uses --opt-in-type \($r.meta.apply_opt_in); immediate starts maintenance now and may restart/fail over the DB; status/pending are read-only lookups. Undo a next-maintenance opt-in with --opt-in-type undo-opt-in (see CSV/JSON undo_command)." else empty end),
       "",
       "SUMMARY: \($r.summary.total) pending action(s) on \($r.summary.resources) resource(s)"
         + (if $r.summary.unfiltered_total != $r.summary.total then " (\($r.summary.unfiltered_total) before filters)" else "" end),
@@ -162,19 +183,20 @@ def csv:
    + (.meta.tag_columns | map("tag:" + .))
    + ["action","description","opt_in_status","auto_applied_after_utc","forced_apply_utc","current_apply_utc",
       "effective_apply_utc","effective_apply_\(.meta.tz_abbr | ascii_downcase)","days_until","urgency",
-      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn","apply_command","undo_command","apply_note"]) as $h
+      "maint_window_utc","maint_window_\(.meta.tz_abbr | ascii_downcase)","next_window_\(.meta.tz_abbr | ascii_downcase)","source","arn","apply_command","undo_command","apply_note","apply_immediate_command","status_command","pending_actions_command"]) as $h
   | ($h | @csv),
     (.rows[] | ([.account, .profile, .region, .resource_type, .identifier, .cluster, .engine, .engine_version, .instance_class]
                + [.tag_columns[]]
                + [.action, .description, .opt_in_status, .auto_applied_after_utc, .forced_apply_utc, .current_apply_utc,
                   .effective_apply_utc, .effective_apply_local, .days_until, .urgency, .maint_window_utc, .maint_window_local,
-                  .next_window_local, .source, .arn, .apply_command, .undo_command, .apply_note]) | @csv);
+                  .next_window_local, .source, .arn, .apply_command, .undo_command, .apply_note, .apply_immediate_command, .status_command, .pending_actions_command]) | @csv);
 
 def h: tostring | @html;
 def two($e): if $e == null then "<span class=\"muted\">-</span>" else "\($e | fu | h)<br><span class=\"muted\">\($e | fl | h)</span>" end;
 def card($label; $n; $cls): "<div class=\"card \($cls)\"><div class=\"n\">\($n)</div><div class=\"l\">\($label | h)</div></div>";
 def minitable($title; $o): "<div class=\"mini\"><h3>\($title | h)</h3><table>"
   + ($o | to_entries | map("<tr><td>\(.key | h)</td><td class=\"num\">\(.value)</td></tr>") | join("")) + "</table></div>";
+def cmdbox($c): "<div class=\"cmd\"><code>\($c | h)</code><button class=\"cp\" type=\"button\" title=\"Copy to clipboard\">Copy</button></div>";
 def html:
   . as $r | ($r.summary.by_urgency) as $u
   | "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\">"
@@ -198,7 +220,7 @@ def html:
   + ".errors{background:#fff3e0;border:1px solid #ffb74d;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px}"
   + ".cmd{display:flex;gap:6px;align-items:flex-start;min-width:420px}.cmd code{font-family:SFMono-Regular,Consolas,Menlo,monospace;font-size:11.5px;background:#f1f3f6;border:1px solid #dde2e8;border-radius:4px;padding:4px 6px;white-space:pre-wrap;word-break:break-all;flex:1}"
   + ".cp{font-size:11px;padding:3px 8px;border:1px solid #8792a2;border-radius:4px;background:#fff;cursor:pointer;white-space:nowrap}.cp:hover{background:#e9edf2}.cp.ok{background:#2e7d32;color:#fff;border-color:#2e7d32}"
-  + "details{margin-top:4px}details summary{cursor:pointer;color:#52606d;font-size:11.5px}.note{color:#8d6e63;font-size:11.5px;margin-top:3px}"
+  + "details{margin-top:4px}details summary{cursor:pointer;color:#52606d;font-size:11.5px}.lbl{font-size:11px;color:#52606d;margin-bottom:2px;font-weight:600}.warn{color:#c62828;font-weight:600}.note{color:#8d6e63;font-size:11.5px;margin-top:3px}"
   + "footer{padding:14px 28px;color:#7b8794;font-size:12px}</style></head><body>\n"
   + "<header><h1>RDS pending maintenance report</h1><p>Generated \($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts: "
   + ($r.meta.accounts | map("\(.account) (\(.profile))") | join(", ") | h) + " &middot; regions: \($r.meta.regions | join(", ") | h)"
@@ -213,7 +235,7 @@ def html:
   + minitable("By region"; $r.summary.by_region) + minitable("By account"; $r.summary.by_account) + "</div>\n"
   + "<input id=\"q\" type=\"search\" placeholder=\"Filter rows (any text)...\">\n<table class=\"main\" id=\"t\"><thead><tr>"
   + (["Urgency", "Days", "Apply (UTC / \($r.meta.tz_abbr))", "Account", "Region", "Type", "Identifier", "Cluster", "Engine", "Class"]
-     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))", "Apply command (\($r.meta.apply_opt_in))"]
+     + ($r.meta.tag_columns) + ["Action", "Description", "Opt-in", "Auto-applied after", "Forced apply", "Maint. window (UTC / \($r.meta.tz_abbr))", "Commands (apply: \($r.meta.apply_opt_in))"]
      | map("<th>\(h)</th>") | join(""))
   + "</tr></thead><tbody>\n"
   + ( $r.rows | map(
@@ -228,10 +250,15 @@ def html:
         + "<td data-s=\"\(.auto_applied_after // 9999999999)\">\(two(.auto_applied_after))</td>"
         + "<td data-s=\"\(.forced_apply // 9999999999)\">\(two(.forced_apply))</td>"
         + "<td>\(.maint_window_utc | h)<br><span class=\"muted\">\(.maint_window_local | h)</span></td>"
-        + "<td>" + (if .apply_command == "" then "<span class=\"muted\">-</span>"
-                    else "<div class=\"cmd\"><code>\(.apply_command | h)</code><button class=\"cp\" type=\"button\" title=\"Copy to clipboard\">Copy</button></div>"
-                       + "<details><summary>undo opt-in</summary><div class=\"cmd\"><code>\(.undo_command | h)</code><button class=\"cp\" type=\"button\" title=\"Copy to clipboard\">Copy</button></div></details>" end)
-        + (if .apply_note != "" then "<div class=\"note\">\(.apply_note | h)</div>" else "" end) + "</td></tr>") | join("\n") )
+        + "<td>" + (if .apply_command == "" then "<div class=\"lbl\">apply</div><span class=\"muted\">-</span>"
+                    else "<div class=\"lbl\">apply (\($r.meta.apply_opt_in | h))</div>" + cmdbox(.apply_command) end)
+        + (if .apply_note != "" then "<div class=\"note\">\(.apply_note | h)</div>" else "" end)
+        + (if .apply_immediate_command != "" and .apply_immediate_command != .apply_command
+           then "<details><summary>apply immediately <span class=\"warn\">&#9888; may restart / fail over now</span></summary>" + cmdbox(.apply_immediate_command) + "</details>" else "" end)
+        + (if .undo_command != "" then "<details><summary>undo opt-in</summary>" + cmdbox(.undo_command) + "</details>" else "" end)
+        + (if .status_command != "" then "<details><summary>check status (maintenance in progress?)</summary>" + cmdbox(.status_command) + "</details>" else "" end)
+        + (if .pending_actions_command != "" then "<details><summary>pending actions (live)</summary>" + cmdbox(.pending_actions_command) + "</details>" else "" end)
+        + "</td></tr>") | join("\n") )
   + (if ($r.rows | length) == 0 then "<tr><td colspan=\"30\" style=\"padding:18px;text-align:center\">No pending maintenance actions found.</td></tr>" else "" end)
   + "\n</tbody></table>\n</main>\n<footer>\($r.meta.script | h) v\($r.meta.version | h) on \($r.meta.host | h) &middot; urgency: OVERDUE = apply date passed, CRIT &le; \($r.meta.crit_days)d, WARN &le; \($r.meta.warn_days)d, INFO later, OPTIONAL = no date &middot; read-only report, nothing was changed; apply commands are printed only - check the maintenance window and impact first (immediate may restart / fail over the DB) &middot; exit \($r.summary.exit_code)</footer>\n"
   + "<script>(function(){var t=document.getElementById('t'),b=t.tBodies[0],dir={};"
@@ -252,7 +279,7 @@ def alert:
   {status: .summary.overall, exit_code: .summary.exit_code, generated_utc: .meta.generated_utc, generated_local: .meta.generated_local,
    accounts: .meta.accounts, regions: .meta.regions, summary: .summary,
    urgent: [.rows[] | select(.severity == "CRIT") | {account, region, resource_type, identifier, cluster, engine, action, urgency,
-            days_until, effective_apply_utc, effective_apply_local, opt_in_status, apply_command, apply_note}],
+            days_until, effective_apply_utc, effective_apply_local, opt_in_status, apply_command, apply_immediate_command, status_command, pending_actions_command, apply_note}],
    errors: .errors};
 
 if $mode == "rows" then rows elif $mode == "finalize" then finalize elif $mode == "text" then text

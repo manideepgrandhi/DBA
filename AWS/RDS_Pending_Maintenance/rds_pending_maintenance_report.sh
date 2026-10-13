@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.1"
+readonly SCRIPT_VERSION="1.2.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -109,7 +109,8 @@ Report:
       --warn-days N         Apply date within N days = WARN (default: 30; later = INFO, no date = OPTIONAL)
       --apply-opt-in TYPE   Opt-in type used in the printed apply_command column: next-maintenance | immediate
                             (default: next-maintenance; immediate may restart / fail over the DB).
-                            Commands are only PRINTED, never run. undo_command always uses undo-opt-in
+                            Commands are only PRINTED, never run. undo_command always uses undo-opt-in.
+                            Also printed: apply_immediate_command, status_command, pending_actions_command
   -l, --log-file FILE       Append log lines to FILE
 
 Alerts:
