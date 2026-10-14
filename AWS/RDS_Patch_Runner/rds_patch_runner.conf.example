@@ -1,0 +1,35 @@
+# rds_patch_runner.conf.example - key=value, parsed (never sourced). Command-line options override these.
+# --execute and --yes are deliberately NOT accepted here: a real run must always be asked for on the command line.
+# Credentials are refused too: use an AWS CLI profile, SSO or the CloudShell role.
+
+profile = prod
+region  = us-east-1
+# cluster = orders-prod            # usually given with -c
+
+# What to apply: all (default) or a comma list, e.g. system-update,db-upgrade
+action = all
+# minor_upgrade = latest           # or an exact version such as 15.10
+skip_snapshot = false
+
+# Waiting
+timeout_min = 60                   # per step
+poll_sec    = 30
+grace_sec   = 600                  # action still pending + status never changed after this -> step fails
+
+# Output
+output_dir = ./rds_patch_runs
+html = true
+# log_file = ./rds_patch_runs/custom.log
+# lock_dir = /tmp/rds_patch_runner_locks
+
+# AWS CLI
+aws_timeout  = 30
+max_attempts = 5
+
+# Alerts (sent at the end of --execute runs)
+# alert_email = dba-team@example.com
+# alert_webhook = https://hooks.slack.com/services/XXX/YYY/ZZZ
+# alert_webhook_format = slack
+# alert_on = always                 # or failure
+# alert_from = rds-patch@example.com
+verbose = false

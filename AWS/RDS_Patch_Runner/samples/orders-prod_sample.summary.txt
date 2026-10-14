@@ -1,0 +1,24 @@
+RDS patch runner summary - rds_patch_runner.sh v1.0.0
+Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
+Started  : 2026-10-14 17:44:33   Finished: 2026-10-14 17:44:40   Mode: execute
+Result   : ok (exit 0) - Done: orders-prod patched; pre-maintenance snapshot pre-maint-orders-prod-20261014-1744
+Snapshot : pre-maint-orders-prod-20261014-1744
+
+STEP KIND          TARGET                        ACTIONS                       START (UTC)          END (UTC)            DURATION  RESULT    BEFORE -> AFTER                         DETAIL
+1    snapshot      orders-prod                                                 2026-10-14 17:44:33  2026-10-14 17:44:34  0m1s      ok        15.4 -> 15.4                            snapshot pre-maint-orders-prod-20261014-1744 available
+2    reader        orders-prod-2                 system-update                 2026-10-14 17:44:34  2026-10-14 17:44:35  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+3    reader        orders-prod-3                 system-update                 2026-10-14 17:44:35  2026-10-14 17:44:37  0m2s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+4    cluster       orders-prod                   db-upgrade                    2026-10-14 17:44:37  2026-10-14 17:44:38  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+5    writer        orders-prod-1                 system-update                 2026-10-14 17:44:38  2026-10-14 17:44:39  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+6    verify        orders-prod                                                 2026-10-14 17:44:39  2026-10-14 17:44:40  0m1s      ok        15.4 -> 15.4                            nothing selected left pending; cluster and all members available (0 unselected action(s) left)
+
+VERSIONS (before -> after):
+  orders-prod                      15.4 -> 15.4
+  orders-prod-2                    15.4 -> 15.4
+  orders-prod-3                    15.4 -> 15.4
+  orders-prod-1                    15.4 -> 15.4
+
+PENDING ACTIONS LEFT: none
+
+FAILOVERS SEEN:
+  2026-10-14 17:44:39: writer orders-prod-1 -> orders-prod-2

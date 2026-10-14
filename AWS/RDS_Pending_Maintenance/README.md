@@ -9,6 +9,7 @@ A read-only report of every RDS, Aurora, DocumentDB and Neptune resource that ha
 * **Engines:** Aurora PostgreSQL/MySQL, RDS PostgreSQL, MySQL, MariaDB, SQL Server (all editions), Oracle and Db2. DocumentDB and Neptune are included when the RDS API returns them. `--include-docdb` also queries `aws docdb describe-pending-maintenance-actions`; results are merged and de-duplicated per resource+action, and the rds entry wins.
 * **Strictly read-only.** The only calls are `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds|docdb describe-pending-maintenance-actions`, `rds describe-db-instances`, `rds describe-db-clusters` (also for the clusters of pending member instances, to get writer / reader roles) and `rds|docdb|neptune describe-db-engine-versions` (minor-version check; skip with `--no-version-check`). The script never applies, defers, upgrades or modifies anything. The commands it prints are for you to review and run yourself.
 * **Requirements:** Bash 4.4+, AWS CLI v2, jq 1.6+. curl is needed for webhooks and mail/mailx/sendmail for e-mail. The script consists of the main file plus `lib/report.jq`; keep them together.
+* **Next step:** to apply the pending maintenance of one Aurora / DocumentDB / Neptune cluster safely (snapshot, readers first, writer last), use [RDS_Patch_Runner](../RDS_Patch_Runner/README.md).
 
 ## How it works
 

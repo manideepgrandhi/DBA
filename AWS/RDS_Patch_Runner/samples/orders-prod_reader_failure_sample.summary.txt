@@ -1,0 +1,20 @@
+RDS patch runner summary - rds_patch_runner.sh v1.0.0
+Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
+Started  : 2026-10-14 17:44:40   Finished: 2026-10-14 17:44:41   Mode: execute
+Result   : failed (exit 3) - Step failed: stopped here, later steps were NOT run (not patched: orders-prod-2 orders-prod-3 orders-prod-1)
+Snapshot : pre-maint-orders-prod-20261014-1744
+
+STEP KIND          TARGET                        ACTIONS                       START (UTC)          END (UTC)            DURATION  RESULT    BEFORE -> AFTER                         DETAIL
+1    snapshot      orders-prod                                                 2026-10-14 17:44:40  2026-10-14 17:44:40  0m0s      ok        15.4 -> 15.4                            snapshot pre-maint-orders-prod-20261014-1744 available
+2    reader        orders-prod-2                 system-update                 2026-10-14 17:44:40  2026-10-14 17:44:40  0m0s      failed    15.4 -> 15.4                            apply system-update: An error occurred (InvalidDBInstanceState) when calling the apply-pending-maintenance-action operation: Instance orders-prod-2 is not in a valid state for this operation.
+
+VERSIONS (before -> after):
+  orders-prod                      15.4 -> 15.4
+  orders-prod-2                    15.4 -> 15.4
+  orders-prod-3                    15.4 -> 15.4
+  orders-prod-1                    15.4 -> 15.4
+
+PENDING ACTIONS LEFT:
+  orders-prod-1: system-update
+  orders-prod-2: system-update
+  orders-prod-3: system-update

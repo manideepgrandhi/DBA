@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Stateful mock of the AWS CLI v2 for rds_patch_runner tests.  NEVER talks to the network.
+
+State lives in $MOCK_STATE (JSON file, created on first call from $MOCK_SCENARIO).  Statuses advance one "tick" per
+describe call of that resource.  Every call is appended to $MOCK_CALLS (one JSON array of argv per line) so tests
+can check the order and validate_cli.sh can replay them against the real CLI.
+
+Scenarios: ok failover earlyfailover timeout readererror readerfailed notavailable membernotavailable global
+           nothing quick deferred minor docdb neptune waitgiveup snapfail unsupported clusteronly
+"""
+import json, os, sys, fcntl
+
+ACCT = "123456789012"
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("aws-cli/2.37.12 Python/3.13 Linux/6 exe/x86_64 (mock)"); sys.exit(0)
+
+calls = os.environ.get("MOCK_CALLS")
+if calls:
+    with open(calls, "a") as f: f.write(json.dumps(args) + "\n")
+
+# strip global options
+opts, rest, i = {}, [], 0
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout", "--endpoint-url"}
+while i < len(args):
+    a = args[i]
+    if a in GLOBAL_VAL: opts[a] = args[i + 1]; i += 2
+    elif a in ("--no-cli-pager", "--no-paginate", "--debug"): i += 1
+    else: rest.append(a); i += 1
+if "--endpoint-url" in opts:
+    print("mock: unexpected --endpoint-url", file=sys.stderr); sys.exit(252)
+service, op = (rest + ["", ""])[:2]
+params, j = {}, 2
+while j < len(rest):
+    k = rest[j]
+    if k.startswith("--"):
+        if j + 1 < len(rest) and not rest[j + 1].startswith("--"): params[k] = rest[j + 1]; j += 2
+        else: params[k] = True; j += 1
+    else: j += 1
+if op == "wait" and len(rest) > 2:
+    op = "wait " + rest[2]
+    params = {}
+    j = 3
+    while j < len(rest):
+        params[rest[j]] = rest[j + 1] if j + 1 < len(rest) else True; j += 2
+
+region = opts.get("--region", "us-east-1")
+scen = os.environ.get("MOCK_SCENARIO", "ok")
+
+def err(code, msg, rc=254):
+    print(f"\nAn error occurred ({code}) when calling the {op} operation: {msg}", file=sys.stderr); sys.exit(rc)
+
+if service == "configure": print(region); sys.exit(0)
+if service == "sts" and op == "get-caller-identity":
+    print(json.dumps({"UserId": "AIDAMOCK", "Account": ACCT, "Arn": f"arn:aws:iam::{ACCT}:user/manideep"})); sys.exit(0)
+
+def initial():
+    engine = {"docdb": "docdb", "neptune": "neptune", "unsupported": "mysql"}.get(scen, "aurora-postgresql")
+    ver = {"docdb": "5.0.0", "neptune": "1.3.1.0"}.get(scen, "15.4")
+    cid = "orders-prod"
+    ids = ["orders-prod-1", "orders-prod-2", "orders-prod-3"]
+    st = {"cluster": {"id": cid, "engine": engine, "version": ver, "status": "available", "ticks": [], "writer": ids[0],
+                      "global": "pg-global" if scen == "global" else "", "pending": [], "applying": [], "to_version": None},
+          "inst": {}, "snapshots": {}, "n_apply": 0}
+    if scen == "notavailable": st["cluster"]["status"] = "modifying"
+    for k, iid in enumerate(ids):
+        st["inst"][iid] = {"status": "available", "ticks": [], "version": ver, "pending": [], "applying": [], "class": "db.r6g.large",
+                           "az": "us-east-1" + "abc"[k]}
+    if scen == "membernotavailable": st["inst"]["orders-prod-3"]["status"] = "rebooting"
+    if scen not in ("nothing", "minor", "clusteronly"):
+        for iid in ids: st["inst"][iid]["pending"] = ["system-update"]
+    if scen in ("ok", "failover", "earlyfailover", "clusteronly"):
+        st["cluster"]["pending"] = ["db-upgrade"]
+    if scen == "ok": st["inst"]["orders-prod-2"]["pending"].append("os-upgrade")
+    return st
+
+path = os.environ.get("MOCK_STATE")
+if not path: print("mock: MOCK_STATE not set", file=sys.stderr); sys.exit(250)
+fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600); fcntl.flock(fd, fcntl.LOCK_EX)
+try:
+    with open(path) as f: S = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    S = initial()
+C = S["cluster"]
+def save():
+    with open(path, "w") as f: json.dump(S, f)
+def arn(kind, name): return f"arn:aws:rds:{region}:{ACCT}:{kind}:{name}"
+
+def tick_inst(iid):
+    r = S["inst"][iid]
+    if r.get("sticky"):
+        r["status"] = r["sticky"]
+    elif r["ticks"]:
+        r["status"] = r["ticks"].pop(0)
+        if not r["ticks"]:  # finished
+            r["pending"] = [a for a in r["pending"] if a not in r["applying"]]; r["applying"] = []
+    # failover during the writer patch: the writer moves while it is rebooting
+    if scen == "failover" and iid == "orders-prod-1" and r["status"] == "rebooting" and C["writer"] == "orders-prod-1":
+        C["writer"] = "orders-prod-2"
+    if scen == "earlyfailover" and iid == "orders-prod-2" and r["status"] == "rebooting" and C["writer"] == "orders-prod-1":
+        C["writer"] = "orders-prod-3"
+
+def tick_cluster():
+    if C["ticks"]:
+        C["status"] = C["ticks"].pop(0)
+        if C["status"] == "upgrading" and C.get("to_version"):
+            for r in S["inst"].values(): r["status"] = "upgrading"; r["ticks"] = ["upgrading", "available"]
+        if not C["ticks"]:
+            C["pending"] = [a for a in C["pending"] if a not in C["applying"]]; C["applying"] = []
+            if C.get("to_version"):
+                C["version"] = C["to_version"]
+                for r in S["inst"].values(): r["version"] = C["to_version"]
+                C["to_version"] = None
+
+def inst_json(iid):
+    r = S["inst"][iid]
+    return {"DBInstanceIdentifier": iid, "DBInstanceClass": r["class"], "Engine": C["engine"], "DBInstanceStatus": r["status"],
+            "EngineVersion": r["version"], "DBClusterIdentifier": C["id"], "AvailabilityZone": r["az"],
+            "DBInstanceArn": arn("db", iid), "AutoMinorVersionUpgrade": True, "MultiAZ": False}
+
+def cluster_json():
+    d = {"DBClusterIdentifier": C["id"], "Engine": C["engine"], "EngineVersion": C["version"], "Status": C["status"],
+         "DBClusterArn": arn("cluster", C["id"]), "EngineMode": "provisioned", "MultiAZ": True,
+         "PreferredMaintenanceWindow": "sun:04:00-sun:04:30", "AutoMinorVersionUpgrade": True,
+         "DBClusterMembers": [{"DBInstanceIdentifier": iid, "IsClusterWriter": iid == C["writer"], "PromotionTier": 1,
+                               "DBClusterParameterGroupStatus": "in-sync"} for iid in sorted(S["inst"])]}
+    if C["global"]: d["GlobalClusterIdentifier"] = C["global"]
+    return d
+
+def pma_json(res):
+    name = res.split(":")[-1]
+    acts = C["pending"] if ":cluster:" in res else S["inst"].get(name, {}).get("pending", [])
+    if not acts: return {"PendingMaintenanceActions": []}
+    return {"PendingMaintenanceActions": [{"ResourceIdentifier": res, "PendingMaintenanceActionDetails": [
+        {"Action": a, "Description": {"system-update": "New Operating System update is available", "db-upgrade": "Cluster engine patch",
+                                      "os-upgrade": "OS upgrade"}.get(a, a),
+         "AutoAppliedAfterDate": "2026-11-01T04:00:00+00:00", "CurrentApplyDate": "2026-11-01T04:00:00+00:00"} for a in acts]}]}
+
+out = None
+if op == "describe-db-clusters":
+    if params.get("--db-cluster-identifier") != C["id"]:
+        err("DBClusterNotFoundFault", f"DBCluster {params.get('--db-cluster-identifier')} not found.")
+    tick_cluster()
+    out = {"DBClusters": [cluster_json()]}
+elif op == "describe-db-instances":
+    if "--db-instance-identifier" in params:
+        iid = params["--db-instance-identifier"]
+        if iid not in S["inst"]: err("DBInstanceNotFound", f"DBInstance {iid} not found.")
+        tick_inst(iid); out = {"DBInstances": [inst_json(iid)]}
+    else:
+        if params.get("--filters") != f"Name=db-cluster-id,Values={C['id']}": err("InvalidParameterValue", "bad filter")
+        for i in sorted(S["inst"]): tick_inst(i)
+        out = {"DBInstances": [inst_json(i) for i in sorted(S["inst"])]}
+elif op == "describe-pending-maintenance-actions":
+    out = pma_json(params["--resource-identifier"])
+elif op == "apply-pending-maintenance-action":
+    res, act = params["--resource-identifier"], params["--apply-action"]
+    if params.get("--opt-in-type") != "immediate": err("InvalidParameterValue", "opt-in-type")
+    S["n_apply"] += 1
+    name = res.split(":")[-1]
+    if ":cluster:" in res:
+        if act not in C["pending"]: err("InvalidParameterValue", f"no pending {act}")
+        C["applying"].append(act); C["ticks"] = ["available", "upgrading", "upgrading", "available"]
+    else:
+        r = S["inst"][name]
+        if act not in r["pending"]: err("InvalidParameterValue", f"no pending {act}")
+        if scen == "readererror" and name == "orders-prod-2":
+            err("InvalidDBInstanceState", "Instance orders-prod-2 is not in a valid state for this operation.")
+        r["applying"].append(act)
+        if scen == "timeout" and name == "orders-prod-2": r["sticky"] = "upgrading"
+        elif scen == "readerfailed" and name == "orders-prod-2": r["ticks"] = ["upgrading", "failed", "failed"]
+        elif scen == "quick": r["ticks"] = ["available"]
+        elif scen == "deferred": r["sticky"] = "available"
+        else: r["ticks"] = ["available", "upgrading", "rebooting", "available"]
+    out = {"ResourcePendingMaintenanceActions": pma_json(res)["PendingMaintenanceActions"][0] if pma_json(res)["PendingMaintenanceActions"] else {}}
+elif op == "create-db-cluster-snapshot":
+    sid = params["--db-cluster-snapshot-identifier"]
+    if scen == "snapfail": err("SnapshotQuotaExceeded", "Cannot create more than 100 manual snapshots")
+    S["snapshots"][sid] = ["creating", "creating", "creating", "available"]
+    out = {"DBClusterSnapshot": {"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": C["id"], "Status": "creating",
+                                 "SnapshotType": "manual", "Engine": C["engine"]}}
+elif op == "wait db-cluster-snapshot-available":
+    sid = params.get("--db-cluster-snapshot-identifier")
+    if scen == "waitgiveup":
+        save(); print("\nWaiter DBClusterSnapshotAvailable failed: Max attempts exceeded", file=sys.stderr); sys.exit(255)
+    S["snapshots"][sid] = ["available"]; save(); sys.exit(0)
+elif op == "describe-db-cluster-snapshots":
+    sid = params["--db-cluster-snapshot-identifier"]
+    if sid not in S["snapshots"]: err("DBClusterSnapshotNotFoundFault", "not found")
+    t = S["snapshots"][sid]
+    stt = t.pop(0) if len(t) > 1 else t[0]
+    out = {"DBClusterSnapshots": [{"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": C["id"], "Status": stt}]}
+elif op == "describe-db-engine-versions":
+    tg = [{"Engine": C["engine"], "EngineVersion": v, "IsMajorVersionUpgrade": False, "AutoUpgrade": False} for v in ("15.5", "15.6", "15.10")]
+    tg.append({"Engine": C["engine"], "EngineVersion": "16.4", "IsMajorVersionUpgrade": True})
+    out = {"DBEngineVersions": [{"Engine": C["engine"], "EngineVersion": params.get("--engine-version"), "ValidUpgradeTarget": tg}]}
+elif op == "modify-db-cluster":
+    C["to_version"] = params["--engine-version"]; C["ticks"] = ["upgrading", "upgrading", "upgrading", "available"]
+    out = {"DBCluster": cluster_json()}
+else:
+    err("MockUnsupported", f"mock does not implement {service} {op}", 252)
+save()
+if os.environ.get("MOCK_OUTPUTS"):
+    with open(os.environ["MOCK_OUTPUTS"], "a") as f: f.write(json.dumps({"service": service, "op": op, "out": out}) + "\n")
+print(json.dumps(out))

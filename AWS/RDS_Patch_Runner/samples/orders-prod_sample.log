@@ -1,0 +1,55 @@
+2026-10-14 23:14:33 [INFO] rds_patch_runner.sh v1.0.0 EXECUTE run for cluster orders-prod (log ./rds_patch_runs/orders-prod_20261014_174433.log)
+2026-10-14 23:14:33 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster orders-prod
+Cluster   : orders-prod (aurora-postgresql 15.4, status available, window sun:04:00-sun:04:30 UTC)
+Account   : 123456789012   profile: prod   region: us-east-1
+Writer    : orders-prod-1
+
+MEMBERS   ROLE    INSTANCE                        STATUS      CLASS             VERSION                   PENDING
+          reader  orders-prod-2                   available   db.r6g.large      15.4                      system-update
+          reader  orders-prod-3                   available   db.r6g.large      15.4                      system-update
+          writer  orders-prod-1                   available   db.r6g.large      15.4                      system-update
+          cluster orders-prod                     available   -                 15.4                      db-upgrade
+
+PLAN (in this order; one step at a time, stop on the first failure):
+  1. snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM>, wait until available
+  2. reader     : orders-prod-2 <- system-update (--opt-in-type immediate), wait until available and nothing pending
+  3. reader     : orders-prod-3 <- system-update (--opt-in-type immediate), wait until available and nothing pending
+  4. cluster    : orders-prod <- db-upgrade (cluster-level, --opt-in-type immediate), wait for cluster + members
+  5. writer     : orders-prod-1 <- system-update (--opt-in-type immediate), wait until available and nothing pending
+  6. verify     : no pending actions left, all available, versions
+2026-10-14 23:14:33 [INFO] Starting (confirmed by --yes)
+2026-10-14 23:14:33 [INFO] === step 1: snapshot orders-prod - start
+2026-10-14 23:14:33 [INFO]     snapshot pre-maint-orders-prod-20261014-1744 requested; waiting (aws rds wait, then polling)
+2026-10-14 23:14:34 [INFO] === step 1: snapshot orders-prod - ok after 1s: snapshot pre-maint-orders-prod-20261014-1744 available
+2026-10-14 23:14:34 [INFO] === step 2: reader orders-prod-2 (system-update) - start
+2026-10-14 23:14:34 [INFO]     apply-pending-maintenance-action system-update --opt-in-type immediate on orders-prod-2
+2026-10-14 23:14:34 [INFO]     orders-prod-2: status available, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:34 [INFO]     orders-prod-2: status upgrading, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:35 [INFO]     orders-prod-2: status rebooting, 1 selected action(s) still pending (1s)
+2026-10-14 23:14:35 [INFO]     orders-prod-2: status available, 0 selected action(s) still pending (1s)
+2026-10-14 23:14:35 [INFO] === step 2: reader orders-prod-2 (system-update) - ok after 1s: status went through maintenance and is available again
+2026-10-14 23:14:35 [INFO] === step 3: reader orders-prod-3 (system-update) - start
+2026-10-14 23:14:35 [INFO]     apply-pending-maintenance-action system-update --opt-in-type immediate on orders-prod-3
+2026-10-14 23:14:36 [INFO]     orders-prod-3: status available, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:36 [INFO]     orders-prod-3: status upgrading, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:36 [INFO]     orders-prod-3: status rebooting, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:37 [INFO]     orders-prod-3: status available, 0 selected action(s) still pending (1s)
+2026-10-14 23:14:37 [INFO] === step 3: reader orders-prod-3 (system-update) - ok after 2s: status went through maintenance and is available again
+2026-10-14 23:14:37 [INFO] === step 4: cluster orders-prod (db-upgrade) - start
+2026-10-14 23:14:37 [INFO]     apply-pending-maintenance-action db-upgrade --opt-in-type immediate on orders-prod
+2026-10-14 23:14:37 [INFO]     orders-prod: status available, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:37 [INFO]     orders-prod: status upgrading, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:38 [INFO]     orders-prod: status available, 0 selected action(s) still pending (1s)
+2026-10-14 23:14:38 [INFO] === step 4: cluster orders-prod (db-upgrade) - ok after 1s: status went through maintenance and is available again
+2026-10-14 23:14:38 [INFO] === step 5: writer orders-prod-1 (system-update) - start
+2026-10-14 23:14:38 [INFO]     apply-pending-maintenance-action system-update --opt-in-type immediate on orders-prod-1
+2026-10-14 23:14:38 [INFO]     orders-prod-1: status available, 1 selected action(s) still pending (0s)
+2026-10-14 23:14:39 [INFO]     orders-prod-1: status upgrading, 1 selected action(s) still pending (1s)
+2026-10-14 23:14:39 [INFO]     orders-prod-1: status rebooting, 1 selected action(s) still pending (1s)
+2026-10-14 23:14:39 [INFO]     orders-prod-1: status available, 0 selected action(s) still pending (1s)
+2026-10-14 23:14:39 [INFO] === step 5: writer orders-prod-1 (system-update) - ok after 1s: status went through maintenance and is available again
+2026-10-14 23:14:39 [WARN] FAILOVER: writer changed orders-prod-1 -> orders-prod-2
+2026-10-14 23:14:39 [INFO] === step 6: verify orders-prod - start
+2026-10-14 23:14:40 [INFO] === step 6: verify orders-prod - ok after 1s: nothing selected left pending; cluster and all members available (0 unselected action(s) left)
+2026-10-14 23:14:40 [INFO] Done: orders-prod patched; pre-maintenance snapshot pre-maint-orders-prod-20261014-1744
+2026-10-14 23:14:40 [INFO] Summary: ./rds_patch_runs/orders-prod_20261014_174433.summary.txt, ./rds_patch_runs/orders-prod_20261014_174433.summary.csv, ./rds_patch_runs/orders-prod_20261014_174433.summary.html, ./rds_patch_runs/orders-prod_20261014_174433.json; log: ./rds_patch_runs/orders-prod_20261014_174433.log
