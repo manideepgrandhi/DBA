@@ -7,6 +7,12 @@ can check the order and validate_cli.sh can replay them against the real CLI.
 
 Scenarios: ok failover earlyfailover timeout readererror readerfailed notavailable membernotavailable global
            nothing quick deferred minor docdb neptune waitgiveup snapfail unsupported clusteronly
+           ordered (several action types per resource, scrambled) dbtolatest (db-upgrade moves the cluster to the
+           latest minor) uptodate (already on the latest minor) writerfailed newpending (a new action appears
+           during the pass -> verify fails) minorfail (modify-db-cluster rejected)
+Minor targets (describe-db-engine-versions): aurora 15.5, 15.6, 15.10 (+16.4 major); docdb none; neptune 1.3.2.0,
+1.3.2.1 (+1.4.0.0 major).  In 'ok' the cluster db-upgrade moves the version 15.4 -> 15.5.
+An apply on a resource that is not 'available' (or still applying another action) is rejected, like AWS does.
 """
 import json, os, sys, fcntl
 
@@ -56,7 +62,7 @@ if service == "sts" and op == "get-caller-identity":
 
 def initial():
     engine = {"docdb": "docdb", "neptune": "neptune", "unsupported": "mysql"}.get(scen, "aurora-postgresql")
-    ver = {"docdb": "5.0.0", "neptune": "1.3.1.0"}.get(scen, "15.4")
+    ver = {"docdb": "5.0.0", "neptune": "1.3.1.0", "uptodate": "15.10"}.get(scen, "15.4")
     cid = "orders-prod"
     ids = ["orders-prod-1", "orders-prod-2", "orders-prod-3"]
     st = {"cluster": {"id": cid, "engine": engine, "version": ver, "status": "available", "ticks": [], "writer": ids[0],
@@ -67,11 +73,17 @@ def initial():
         st["inst"][iid] = {"status": "available", "ticks": [], "version": ver, "pending": [], "applying": [], "class": "db.r6g.large",
                            "az": "us-east-1" + "abc"[k]}
     if scen == "membernotavailable": st["inst"]["orders-prod-3"]["status"] = "rebooting"
-    if scen not in ("nothing", "minor", "clusteronly"):
+    if scen not in ("nothing", "minor", "clusteronly", "minorfail"):
         for iid in ids: st["inst"][iid]["pending"] = ["system-update"]
-    if scen in ("ok", "failover", "earlyfailover", "clusteronly"):
+    if scen in ("ok", "failover", "earlyfailover", "clusteronly", "dbtolatest"):
         st["cluster"]["pending"] = ["db-upgrade"]
-    if scen == "ok": st["inst"]["orders-prod-2"]["pending"].append("os-upgrade")
+    if scen == "ok": st["inst"]["orders-prod-2"]["pending"] = ["os-upgrade", "system-update"]   # scrambled on purpose
+    if scen == "ordered":
+        st["inst"]["orders-prod-2"]["pending"] = ["ca-certificate-rotation", "os-upgrade", "system-update"]
+        st["inst"]["orders-prod-3"]["pending"] = ["os-upgrade", "system-update"]
+        st["inst"]["orders-prod-1"]["pending"] = ["future-action", "os-upgrade", "system-update"]
+        st["cluster"]["pending"] = ["db-upgrade", "system-update"]
+    st["cluster"]["dbup_version"] = {"ok": "15.5", "dbtolatest": "15.10"}.get(scen)
     return st
 
 path = os.environ.get("MOCK_STATE")
@@ -94,6 +106,8 @@ def tick_inst(iid):
         r["status"] = r["ticks"].pop(0)
         if not r["ticks"]:  # finished
             r["pending"] = [a for a in r["pending"] if a not in r["applying"]]; r["applying"] = []
+            if scen == "newpending" and iid == "orders-prod-1" and not S.get("np"):
+                S["np"] = 1; S["inst"]["orders-prod-2"]["pending"].append("system-update")
     # failover during the writer patch: the writer moves while it is rebooting
     if scen == "failover" and iid == "orders-prod-1" and r["status"] == "rebooting" and C["writer"] == "orders-prod-1":
         C["writer"] = "orders-prod-2"
@@ -106,6 +120,9 @@ def tick_cluster():
         if C["status"] == "upgrading" and C.get("to_version"):
             for r in S["inst"].values(): r["status"] = "upgrading"; r["ticks"] = ["upgrading", "available"]
         if not C["ticks"]:
+            if "db-upgrade" in C["applying"] and C.get("dbup_version"):
+                C["version"] = C["dbup_version"]
+                for r in S["inst"].values(): r["version"] = C["dbup_version"]
             C["pending"] = [a for a in C["pending"] if a not in C["applying"]]; C["applying"] = []
             if C.get("to_version"):
                 C["version"] = C["to_version"]
@@ -134,7 +151,8 @@ def pma_json(res):
     return {"PendingMaintenanceActions": [{"ResourceIdentifier": res, "PendingMaintenanceActionDetails": [
         {"Action": a, "Description": {"system-update": "New Operating System update is available", "db-upgrade": "Cluster engine patch",
                                       "os-upgrade": "OS upgrade"}.get(a, a),
-         "AutoAppliedAfterDate": "2026-11-01T04:00:00+00:00", "CurrentApplyDate": "2026-11-01T04:00:00+00:00"} for a in acts]}]}
+         "AutoAppliedAfterDate": "2026-11-01T04:00:00+00:00", "CurrentApplyDate": "2026-11-01T04:00:00+00:00",
+         **({"ForcedApplyDate": "2026-12-01T04:00:00+00:00"} if a == "os-upgrade" else {})} for a in acts]}]}
 
 out = None
 if op == "describe-db-clusters":
@@ -160,15 +178,18 @@ elif op == "apply-pending-maintenance-action":
     name = res.split(":")[-1]
     if ":cluster:" in res:
         if act not in C["pending"]: err("InvalidParameterValue", f"no pending {act}")
+        if C["status"] != "available" or C["applying"]: err("InvalidDBClusterStateFault", f"cluster busy ({C['status']})")
         C["applying"].append(act); C["ticks"] = ["available", "upgrading", "upgrading", "available"]
     else:
         r = S["inst"][name]
         if act not in r["pending"]: err("InvalidParameterValue", f"no pending {act}")
+        if r["status"] != "available" or r["applying"]: err("InvalidDBInstanceState", f"{name} busy ({r['status']})")
         if scen == "readererror" and name == "orders-prod-2":
             err("InvalidDBInstanceState", "Instance orders-prod-2 is not in a valid state for this operation.")
         r["applying"].append(act)
         if scen == "timeout" and name == "orders-prod-2": r["sticky"] = "upgrading"
         elif scen == "readerfailed" and name == "orders-prod-2": r["ticks"] = ["upgrading", "failed", "failed"]
+        elif scen == "writerfailed" and name == C["writer"]: r["sticky"] = "failed"
         elif scen == "quick": r["ticks"] = ["available"]
         elif scen == "deferred": r["sticky"] = "available"
         else: r["ticks"] = ["available", "upgrading", "rebooting", "available"]
@@ -191,12 +212,21 @@ elif op == "describe-db-cluster-snapshots":
     stt = t.pop(0) if len(t) > 1 else t[0]
     out = {"DBClusterSnapshots": [{"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": C["id"], "Status": stt}]}
 elif op == "describe-db-engine-versions":
-    tg = [{"Engine": C["engine"], "EngineVersion": v, "IsMajorVersionUpgrade": False, "AutoUpgrade": False} for v in ("15.5", "15.6", "15.10")]
-    tg.append({"Engine": C["engine"], "EngineVersion": "16.4", "IsMajorVersionUpgrade": True})
+    if params.get("--engine") != C["engine"]: err("InvalidParameterValue", "engine")
+    vk = lambda v: [int(x) for x in v.split(".")]
+    minors, major = {"docdb": ([], None), "neptune": (["1.3.2.0", "1.3.2.1"], "1.4.0.0")}.get(C["engine"], (["15.5", "15.6", "15.10"], "16.4"))
+    cur = params.get("--engine-version", C["version"])
+    tg = [{"Engine": C["engine"], "EngineVersion": v, "IsMajorVersionUpgrade": False, "AutoUpgrade": False} for v in minors if vk(v) > vk(cur)]
+    if major: tg.append({"Engine": C["engine"], "EngineVersion": major, "IsMajorVersionUpgrade": True})
     out = {"DBEngineVersions": [{"Engine": C["engine"], "EngineVersion": params.get("--engine-version"), "ValidUpgradeTarget": tg}]}
 elif op == "modify-db-cluster":
+    if scen == "minorfail": err("InvalidParameterCombination", "Cannot upgrade aurora-postgresql from 15.4 to 15.10")
+    if C["status"] != "available": err("InvalidDBClusterStateFault", "cluster busy")
     C["to_version"] = params["--engine-version"]; C["ticks"] = ["upgrading", "upgrading", "upgrading", "available"]
-    out = {"DBCluster": cluster_json()}
+    d = cluster_json()
+    if service != "rds":   # docdb / neptune DBCluster shapes have no AutoMinorVersionUpgrade / EngineMode
+        for k in ("AutoMinorVersionUpgrade", "EngineMode"): d.pop(k, None)
+    out = {"DBCluster": d}
 else:
     err("MockUnsupported", f"mock does not implement {service} {op}", 252)
 save()

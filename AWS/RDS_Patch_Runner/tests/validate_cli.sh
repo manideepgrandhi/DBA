@@ -66,6 +66,10 @@ rec clusteronly -P prod -r us-east-1 "${EX[@]}"
 rec readererror -P prod -r us-east-1 "${EX[@]}"
 rec ok -P prod -r us-east-1 --minor-upgrade 15.6
 rec ok -P prod -r us-east-1 "${EX[@]}" --action system-update --skip-snapshot
+rec ordered -P prod -r us-east-1 "${EX[@]}"           # all action types, one rolling pass, minor last
+rec dbtolatest -P prod -r us-east-1 "${EX[@]}"        # minor recompute -> already at latest
+rec ok -P prod -r us-east-1 "${EX[@]}" --minor-upgrade none
+rec neptune -P prod -r us-east-1 "${EX[@]}" --minor-upgrade 1.3.2.0
 # normalise: identical shape -> one replay (values that vary per run are kept; they are real argv)
 jq -c 'select(.[0] != "--version")' "$T/calls" | sort -u >"$T/uniq"
 echo "  recorded $(wc -l <"$T/calls") calls, $(wc -l <"$T/uniq") distinct"

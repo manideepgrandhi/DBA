@@ -6,9 +6,12 @@ profile = prod
 region  = us-east-1
 # cluster = orders-prod            # usually given with -c
 
-# What to apply: all (default) or a comma list, e.g. system-update,db-upgrade
+# What to apply in the ONE rolling pass: all (default) or a comma list, e.g. system-update,db-upgrade.
+# Order per resource is fixed: system-update, os-upgrade, db-upgrade, then other/unknown types.
 action = all
-# minor_upgrade = latest           # or an exact version such as 15.10
+# Minor version upgrade, run LAST after the rolling pass is verified:
+#   latest (default) | an exact minor such as 15.10 | none (skip). Major versions are always refused.
+minor_upgrade = latest
 skip_snapshot = false
 
 # Waiting

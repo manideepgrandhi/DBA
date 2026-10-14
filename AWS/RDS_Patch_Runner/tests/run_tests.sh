@@ -48,7 +48,7 @@ check "jq library compiles" "jq -n --arg mode none -f '$ROOT/lib/runner.jq' >/de
 
 echo "== usage (exit 1)"
 "$RUNNER" -h >/dev/null 2>&1; check "-h exit 0" "[[ $? == 0 ]]"
-"$RUNNER" -V 2>&1 | grep -q '1.0.0'; check "-V shows version" "[[ $? == 0 ]]"
+"$RUNNER" -V 2>&1 | grep -q '1.1.0'; check "-V shows version" "[[ $? == 0 ]]"
 run ok --bogus;               check "unknown option -> 1" "[[ $RC == 1 ]]"
 "$RUNNER" -r us-east-1 >/dev/null 2>&1; check "missing --cluster -> 1" "[[ $? == 1 ]]"
 run ok --timeout-min 0;       check "timeout 0 -> 1" "[[ $RC == 1 ]]"
@@ -57,7 +57,7 @@ run ok --poll-sec -1;         check "poll -1 -> 1" "[[ $RC == 1 ]]"
 run ok --action 'Sys;rm';     check "bad action -> 1" "[[ $RC == 1 ]]"
 run ok --minor-upgrade 'a b'; check "bad version -> 1" "[[ $RC == 1 ]]"
 run ok --alert-webhook ftp://x; check "bad webhook -> 1" "[[ $RC == 1 ]]"
-run ok --config "$ROOT/rds_patch_runner.conf.example"; check "shipped conf example parses (dry run)" "[[ $RC == 0 ]] && has 'PLAN (in this order'"
+run ok --config "$ROOT/rds_patch_runner.conf.example"; check "shipped conf example parses (dry run)" "[[ $RC == 0 ]] && has 'PLAN (exact execution order'"
 printf 'execute=true\n' >"$T/x.conf"; run ok --config "$T/x.conf"; check "execute in config refused -> 1" "[[ $RC == 1 ]] && has 'not accepted in a config file'"
 printf 'aws_secret_access_key=x\n' >"$T/y.conf"; run ok --config "$T/y.conf"; check "credentials in config refused" "[[ $RC == 1 ]]"
 printf 'nonsense\n' >"$T/z.conf"; run ok --config "$T/z.conf"; check "invalid config line -> 1" "[[ $RC == 1 ]]"
@@ -66,7 +66,13 @@ echo "== dry run (default)"
 run ok
 check "dry run exit 0" "[[ $RC == 0 ]]"
 check "dry run made no write calls" "[[ \$(writes) == 0 ]]"
-check "plan lists readers before cluster before writer" "grep -n -E '^  [0-9]\\. (reader|cluster|writer)' '$OUT' | awk -F: '{print \$2}' | tr -s ' ' | cut -d' ' -f3 | paste -sd, | grep -qx 'reader,reader,cluster,writer'"
+plan_kinds() { grep -E '^  [0-9]+\. +[a-z]' "$OUT" | sed -E 's/^  [0-9]+\. +//; s/ +:.*//; s/ upg$//' | paste -sd, ; }
+plan_targets() { grep -E '^  [0-9]+\. +(reader|cluster|writer) ' "$OUT" | sed -E 's/^.*: ([^ ]+) <- ([^ ]+) .*/\1\/\2/' | paste -sd' ' ; }
+check "plan: snapshot, readers, cluster, writer, verify, minor LAST" "[[ \$(plan_kinds) == snapshot,reader,reader,reader,cluster,writer,verify,minor ]]" "got: $(plan_kinds)"
+check "plan: per instance system-update before os-upgrade" "[[ \$(plan_targets) == 'orders-prod-2/system-update orders-prod-2/os-upgrade orders-prod-3/system-update orders-prod/db-upgrade orders-prod-1/system-update' ]]" "got: $(plan_targets)"
+check "preflight shows minor availability" "has 'MINOR VERSION AVAILABILITY' && has 'next minor             : 15.5' && has 'latest minor           : 15.10' && has 'available minors       : 15.5, 15.6, 15.10' && has 'auto minor upgrade     : true'"
+check "preflight shows pending details with dates" "has 'PENDING MAINTENANCE (per resource' && grep -qE 'orders-prod-2 +os-upgrade +OS update +2026-11-01T04:00:00Z +2026-12-01T04:00:00Z +OS upgrade' '$OUT'"
+check "minor default is latest -> 15.10 last" "has 'latest -> 15.10 (runs LAST' && grep -E '^  [0-9]+\. ' '$OUT' | tail -1 | grep -q 'modify-db-cluster --engine-version 15.10 --apply-immediately'"
 check "plan says dry run" "has 'Dry run only - nothing changed'"
 check "no lock taken in dry run" "[[ ! -d '$T/case$N/locks' ]] || [[ -z \$(ls -A '$T/case$N/locks') ]]"
 run ok --dry-run --execute --yes --poll-sec 0 --dry-run
@@ -85,7 +91,7 @@ run global "${EX[@]}"; check "global member -> 2" "[[ $RC == 2 ]] && has 'global
 run unsupported; check "non-Aurora engine -> 2" "[[ $RC == 2 ]] && has 'not supported'"
 MOCK_STATE="$T/nf.json" "$RUNNER" -r us-east-1 -c other-cluster </dev/null >"$T/nf" 2>&1; R=$?
 check "cluster not found -> 2" "[[ $R == 2 ]] && grep -q 'DBClusterNotFoundFault' '$T/nf'" 2>/dev/null
-run ok --minor-upgrade 15.99; check "invalid minor target -> 2" "[[ $RC == 2 ]] && has 'not a valid minor upgrade target' && has '15.5,15.6,15.10'"
+run ok --minor-upgrade 15.99; check "invalid minor target -> 2" "[[ $RC == 2 ]] && has 'not a valid minor (non-major) upgrade target' && has '15.5,15.6,15.10'"
 run ok --minor-upgrade 16.4; check "major version refused -> 2" "[[ $RC == 2 ]]"
 mkdir -p "$T/lk"; (sleep 30 & echo $! >"$T/lk/pid.tmp"); LP="$(cat "$T/lk/pid.tmp")"
 mkdir -p "$T/lk/prod_us-east-1_orders-prod.lock"; echo "$LP" >"$T/lk/prod_us-east-1_orders-prod.lock/pid"
@@ -99,8 +105,8 @@ check "stale lock removed and run continues" "[[ $R == 0 ]] && grep -q 'Removing
 check "lock released at exit" "[[ ! -e '$T/lk/prod_us-east-1_orders-prod.lock' ]]"
 
 echo "== nothing to do"
-run nothing "${EX[@]}"; check "nothing pending -> 0 'nothing to do'" "[[ $RC == 0 ]] && has 'nothing to do' && [[ \$(writes) == 0 ]]"
-run ok --action hardware-maintenance; check "only unselected actions -> nothing to do" "[[ $RC == 0 ]] && has 'nothing to do'"
+run nothing "${EX[@]}" --minor-upgrade none; check "nothing pending -> 0 'nothing to do'" "[[ $RC == 0 ]] && has 'nothing to do' && [[ \$(writes) == 0 ]]"
+run ok --action hardware-maintenance --minor-upgrade none; check "only unselected actions -> nothing to do" "[[ $RC == 0 ]] && has 'nothing to do'"
 run nothing --minor-upgrade latest; check "minor latest gives a plan when nothing pending" "has 'modify-db-cluster --engine-version 15.10'"
 
 echo "== confirmation"
@@ -119,16 +125,19 @@ fi
 echo "== execute: happy path"
 run ok "${EX[@]}" --html
 check "exit 0" "[[ $RC == 0 ]]" "$(tail -5 "$OUT")"
-check "apply order readers -> cluster -> writer" "applies_are 'orders-prod-2/os-upgrade orders-prod-2/system-update orders-prod-3/system-update orders-prod/db-upgrade orders-prod-1/system-update'"
+check "apply order: reader (system-update, os-upgrade) -> reader -> cluster -> writer" "applies_are 'orders-prod-2/system-update orders-prod-2/os-upgrade orders-prod-3/system-update orders-prod/db-upgrade orders-prod-1/system-update'"
+check "minor upgrade is the very last write, after verify" "[[ \$(jq -r '.[]' '$CALLS' | grep -E '^(create-db-cluster-snapshot|apply-pending-maintenance-action|modify-db-cluster)$' | tail -1) == modify-db-cluster ]] && [[ \$(jq -r '.steps[-1].kind + \"/\" + .steps[-2].kind' '$ODIR'/orders-prod_*.json) == minor-upgrade/verify ]]"
+check "db-upgrade moved 15.4 -> 15.5, minor then 15.5 -> 15.10" "jq -e '.steps[] | select(.actions == \"db-upgrade\") | .version_after == \"15.5\"' '$ODIR'/orders-prod_*.json >/dev/null && jq -e '.minor_result.from == \"15.5\" and .minor_result.version_after == \"15.10\" and .minor_result.result == \"ok\"' '$ODIR'/orders-prod_*.json >/dev/null"
+check "summary has before info + minor result" "grep -q 'latest minor           : 15.10' '$ODIR'/orders-prod_*.summary.txt && grep -q 'MINOR UPGRADE (last step): ok - 15.5 -> 15.10' '$ODIR'/orders-prod_*.summary.txt && grep -q 'Minor version (before)' '$ODIR'/orders-prod_*.summary.html"
 check "snapshot created before the first apply" "jq -r '.[]' '$CALLS' | grep -E '^(create-db-cluster-snapshot|apply-pending-maintenance-action)$' | head -1 | grep -qx create-db-cluster-snapshot"
 check "snapshot name format" "jq -r 'select(index(\"create-db-cluster-snapshot\")) | .[index(\"--db-cluster-snapshot-identifier\")+1]' '$CALLS' | grep -Eqx 'pre-maint-orders-prod-[0-9]{8}-[0-9]{4}'"
 check "waiter used" "jq -r '.[]' '$CALLS' | grep -qx db-cluster-snapshot-available"
 check "every apply is --opt-in-type immediate" "[[ \$(jq -r 'select(index(\"apply-pending-maintenance-action\")) | .[index(\"--opt-in-type\")+1]' '$CALLS' | sort -u) == immediate ]]"
 check "every call has --region and --profile" "[[ \$(jq -r 'select(index(\"--version\") == null) | select((index(\"--region\") == null) or (index(\"--profile\") == null)) | 1' '$CALLS' | wc -l) == 0 ]]"
 check "summary files written" "ls '$ODIR'/orders-prod_*.summary.txt '$ODIR'/orders-prod_*.summary.csv '$ODIR'/orders-prod_*.summary.html '$ODIR'/orders-prod_*.json '$ODIR'/orders-prod_*.log >/dev/null"
-check "summary: 6 steps all ok" "[[ \$(jq '[.steps[] | select(.result == \"ok\")] | length' '$ODIR'/orders-prod_*.json) == 6 ]]"
-check "CSV header + 6 rows" "[[ \$(wc -l <'$ODIR'/orders-prod_*.summary.csv) == 7 ]] && head -1 '$ODIR'/orders-prod_*.summary.csv | grep -q '\"step\",\"kind\",\"target\"'"
-check "log file has timestamps + steps" "grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} \\[INFO\\] === step 5: writer' '$ODIR'/orders-prod_*.log"
+check "summary: 8 steps all ok" "[[ \$(jq '[.steps[] | select(.result == \"ok\")] | length' '$ODIR'/orders-prod_*.json) == 8 ]]"
+check "CSV header + 8 rows" "[[ \$(wc -l <'$ODIR'/orders-prod_*.summary.csv) == 9 ]] && head -1 '$ODIR'/orders-prod_*.summary.csv | grep -q '\"step\",\"kind\",\"target\"'"
+check "log file has timestamps + steps" "grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} \\[INFO\\] === step 6: writer' '$ODIR'/orders-prod_*.log"
 check "HTML escapes and renders" "grep -q '<h1>RDS patch runner: orders-prod' '$ODIR'/orders-prod_*.summary.html"
 check "lock released" "[[ -z \$(ls -A '$T/case$N/locks' 2>/dev/null) ]]"
 
@@ -152,7 +161,8 @@ check "exit 3" "[[ $RC == 3 ]]"
 check "writer never touched" "! applies | grep -q 'orders-prod-1/' && ! applies | grep -q 'orders-prod/db-upgrade'" "got: $(applies)"
 check "summary marks failure + not patched list" "has 'later steps were NOT run' && has 'not patched: orders-prod-2 orders-prod-3 orders-prod-1'"
 check "failure summary lists what is still pending" "grep -q 'orders-prod-1: system-update' '$ODIR'/orders-prod_*.summary.txt"
-check "plan is in the log file" "grep -q '^PLAN (in this order' '$ODIR'/orders-prod_*.log"
+check "plan is in the log file" "grep -q '^PLAN (exact execution order' '$ODIR'/orders-prod_*.log"
+check "reader failure: no minor upgrade" "! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster"
 check "summary json result failed" "jq -e '.meta.result == \"failed\" and .meta.exit_code == 3' '$ODIR'/orders-prod_*.json >/dev/null"
 
 echo "== reader goes to 'failed' status"
@@ -182,6 +192,41 @@ run minor "${EX[@]}" --minor-upgrade 15.6
 check "explicit minor version" "[[ $RC == 0 ]] && grep -q '15.4 -> 15.6' '$ODIR'/orders-prod_*.summary.txt"
 run minor --minor-upgrade 15.4
 check "same version -> nothing to do" "[[ $RC == 0 ]] && has 'already on that version' && has 'nothing to do'"
+
+run minor "${EX[@]}" --minor-upgrade none
+check "--minor-upgrade none with nothing pending -> nothing to do" "[[ $RC == 0 ]] && has 'nothing to do' && [[ \$(writes) == 0 ]]"
+run ok "${EX[@]}" --minor-upgrade none
+check "--minor-upgrade none: pass runs, no modify-db-cluster" "[[ $RC == 0 ]] && [[ \$(applies | wc -w) == 5 ]] && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster && has 'no upgrade step (--minor-upgrade none)'"
+run ok --minor-upgrade 16.4; check "major target (dry run) refused -> 2" "[[ $RC == 2 ]] && has 'not a valid minor (non-major)'"
+run minorfail "${EX[@]}"
+check "modify-db-cluster rejected -> 3, result failed" "[[ $RC == 3 ]] && has 'Minor upgrade failed' && jq -e '.minor_result.result == \"failed\"' '$ODIR'/orders-prod_*.json >/dev/null"
+
+echo "== one rolling pass: order of action types"
+run ordered
+check "dry run plan in exact order" "[[ \$(plan_targets) == 'orders-prod-2/system-update orders-prod-2/os-upgrade orders-prod-2/ca-certificate-rotation orders-prod-3/system-update orders-prod-3/os-upgrade orders-prod/system-update orders-prod/db-upgrade orders-prod-1/system-update orders-prod-1/os-upgrade orders-prod-1/future-action' ]]" "got: $(plan_targets)"
+check "unknown action typed as DB update (other)" "grep -qE 'future-action +DB update \(other type\)' '$OUT'"
+run ordered "${EX[@]}"
+check "exit 0" "[[ $RC == 0 ]]" "$(tail -5 "$OUT")"
+check "execute order matches the plan" "applies_are 'orders-prod-2/system-update orders-prod-2/os-upgrade orders-prod-2/ca-certificate-rotation orders-prod-3/system-update orders-prod-3/os-upgrade orders-prod/system-update orders-prod/db-upgrade orders-prod-1/system-update orders-prod-1/os-upgrade orders-prod-1/future-action'"
+check "one step per action (13 steps: snapshot, 10 applies, verify, minor)" "[[ \$(jq '.steps | length' '$ODIR'/orders-prod_*.json) == 13 ]]"
+check "every reader action before any cluster action before any writer action" "applies | tr ' ' '\\n' | cut -d/ -f1 | uniq | paste -sd, | grep -qx 'orders-prod-2,orders-prod-3,orders-prod,orders-prod-1'"
+check "minor upgrade after the last apply" "[[ \$(jq -r '.[]' '$CALLS' | grep -E '^(apply-pending-maintenance-action|modify-db-cluster)$' | tail -1) == modify-db-cluster ]]"
+
+echo "== minor recompute / up to date"
+run dbtolatest "${EX[@]}"
+check "db-upgrade reached latest -> minor skipped 'already at latest', no modify" "[[ $RC == 0 ]] && has 'already at latest minor version 15.10' && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster && jq -e '.minor_result.result == \"skipped\"' '$ODIR'/orders-prod_*.json >/dev/null"
+run uptodate
+check "up to date: preflight says so, no minor step" "[[ $RC == 0 ]] && has 'already on the latest minor' && has 'available minors       : none' && nohas 'minor upg  :'"
+run uptodate "${EX[@]}"
+check "up to date execute: pass only" "[[ $RC == 0 ]] && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster"
+
+echo "== failures in the rolling pass -> no minor upgrade"
+run writerfailed "${EX[@]}"
+check "writer failure -> 3, no minor upgrade" "[[ $RC == 3 ]] && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster"
+run newpending "${EX[@]}"
+check "verify fails (new action appeared) -> 3, no minor upgrade" "[[ $RC == 3 ]] && has 'the minor upgrade was NOT run' && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster"
+run timeout --execute --yes --poll-sec 0.2 --timeout-min 0.02
+check "timeout on a reader -> no minor upgrade, writer untouched" "[[ $RC == 3 ]] && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster && ! applies | grep -q 'orders-prod-1/'"
 
 echo "== snapshot paths"
 run waitgiveup "${EX[@]}"

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # rds_patch_runner.sh - apply pending RDS maintenance to ONE Aurora (PostgreSQL / MySQL), DocumentDB or Neptune
-# cluster in a safe order: preflight -> confirm -> cluster snapshot -> [minor upgrade] -> readers one at a time
-# -> cluster-level actions -> writer last -> verify.
+# cluster in ONE rolling pass, then the minor version upgrade LAST:
+#   preflight -> confirm -> cluster snapshot -> readers one at a time (per instance: system-update, os-upgrade,
+#   db-upgrade, other types) -> cluster-level actions (same order) -> current writer last (same order) -> verify
+#   -> latest minor version upgrade (re-checked after the pass; default --minor-upgrade latest).
 #
 # DRY RUN BY DEFAULT: without --execute it only reads (describe-*) and prints the plan.
 # Exit: 0 ok / nothing to do, 1 usage, 2 preflight abort, 3 step failure or timeout, 4 declined, 130 interrupted.
@@ -12,7 +14,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PR_LIB:-$SCRIPT_DIR/lib}/runner.jq"
@@ -30,7 +32,7 @@ CLUSTER=""
 EXECUTE=0
 ASSUME_YES=0
 ACTIONS=(all)
-MINOR=""
+MINOR="latest"
 SKIP_SNAPSHOT=0
 TIMEOUT_MIN=60
 POLL_SEC=30
@@ -97,8 +99,10 @@ Target:
 What to apply:
   -a, --action LIST         all (default) | system-update | db-upgrade | os-upgrade | hardware-maintenance |
                             ca-certificate-rotation ... (comma-separated; others stay pending)
-      --minor-upgrade V     Also upgrade the cluster to minor version V, or 'latest' (newest minor target):
-                            modify-db-cluster --engine-version V --apply-immediately, right after the snapshot
+      --minor-upgrade V     latest (default) | <version> | none. The LAST step, only after the rolling pass is
+                            verified: modify-db-cluster --engine-version V --apply-immediately. 'latest' is
+                            re-checked after the pass (a db-upgrade may already have moved the version) and is
+                            skipped when already there. Major versions are always refused.
       --skip-snapshot       Do not take the pre-maintenance cluster snapshot (not recommended)
 
 Run control:
@@ -128,8 +132,10 @@ Behaviour:
   -v, --verbose             Debug logging
   -h, --help / -V, --version
 
-Order: snapshot -> minor upgrade (if asked) -> readers one at a time -> cluster-level actions -> current writer
-last -> verify. Stops at the first failure (the writer is never touched after a reader failed).
+Order (ONE rolling pass, one failover): snapshot -> each reader, one at a time, its actions back to back in the
+order system-update, os-upgrade, db-upgrade, other/unknown types (waiting for 'available' + action gone after
+each) -> cluster-level actions (same order) -> current writer last (same order) -> verify -> minor upgrade LAST.
+Stops at the first failure: after a reader fails the writer is never touched and there is no minor upgrade.
 Exit codes: 0 ok / nothing to do, 1 usage, 2 preflight abort (cluster/member not available, global cluster,
 unsupported engine, lock held, AWS read error), 3 step failure / timeout, 4 declined, 130 interrupted.
 USAGE
@@ -255,7 +261,9 @@ validate() {
     [[ -z "$PROFILE" || "$PROFILE" =~ ^[A-Za-z0-9_.+@-]+$ ]] || die 1 "Invalid profile name: $PROFILE"
     (( ${#ACTIONS[@]} )) || ACTIONS=(all)
     for x in "${ACTIONS[@]}"; do [[ "$x" =~ ^[a-z][a-z-]*$ ]] || die 1 "Invalid --action: $x"; done
-    [[ -z "$MINOR" || "$MINOR" =~ ^[A-Za-z0-9._-]+$ ]] || die 1 "Invalid --minor-upgrade version: $MINOR"
+    [[ -n "$MINOR" ]] || MINOR=latest
+    [[ "$MINOR" =~ ^[A-Za-z0-9._-]+$ ]] || die 1 "Invalid --minor-upgrade version: $MINOR (latest | <version> | none)"
+    [[ "$MINOR" == latest || "$MINOR" == none || "$MINOR" =~ ^[0-9] ]] || die 1 "Invalid --minor-upgrade: $MINOR (latest | <version> | none)"
     if ! { is_num "$TIMEOUT_MIN" && awk -v v="$TIMEOUT_MIN" 'BEGIN{exit !(v > 0)}'; }; then die 1 "--timeout-min must be a positive number"; fi
     is_num "$POLL_SEC" || die 1 "--poll-sec must be a number"
     is_num "$GRACE_SEC" || die 1 "--grace-sec must be a number"
@@ -396,29 +404,36 @@ preflight() {
         i=$(( i + 1 ))
     done < <(jq -r '.DBClusters[0].DBClusterArn' "$WORK/cluster.json"; jq -r '.DBInstances[].DBInstanceArn' "$WORK/members.json")
     jq -cs . "$WORK/pma_all.jsonl" >"$WORK/pma.json"
-    # --minor-upgrade latest|V -> concrete target (minor targets only)
-    local target=""
-    if [[ -n "$MINOR" ]]; then
-        local cur; cur="$(cluster_field EngineVersion)"
-        aws_call "$WORK/ev.json" "$SVC" describe-db-engine-versions --engine "$engine" --engine-version "$cur" \
-            || die 2 "describe-db-engine-versions $engine $cur failed: $LAST_ERR"
-        jq -r --arg cur "$cur" -f <(cat <<'J'
-def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)];
-[.DBEngineVersions[]?.ValidUpgradeTarget[]? | select((.IsMajorVersionUpgrade // false) == false) | .EngineVersion
- | select(vkey > ($cur | vkey))] | unique_by(vkey) | .[]
-J
-) "$WORK/ev.json" >"$WORK/minor_targets.txt"
-        if [[ "$MINOR" == latest ]]; then
-            target="$(tail -n 1 "$WORK/minor_targets.txt")"
-            if [[ -z "$target" ]]; then log_info "--minor-upgrade latest: $CLUSTER is already on the latest minor version ($cur); no upgrade step"
-            else log_info "--minor-upgrade latest -> $target (current $cur)"; fi
-        elif [[ "$MINOR" == "$cur" ]]; then log_info "--minor-upgrade $MINOR: already on that version; no upgrade step"
-        elif grep -qxF -- "$MINOR" "$WORK/minor_targets.txt"; then target="$MINOR"
-        else die 2 "--minor-upgrade $MINOR is not a valid minor upgrade target from $cur (valid: $(paste -sd, "$WORK/minor_targets.txt" | sed 's/^$/none/'))"
-        fi
+    # minor version availability (always shown) + --minor-upgrade latest|V|none -> concrete target
+    local cur ev_ok=1; cur="$(cluster_field EngineVersion)"
+    ENGINE="$engine"
+    if ! get_minor_targets "$cur" "$WORK/minor_targets.txt"; then
+        ev_ok=0; echo '{}' >"$WORK/ev.json"
+        [[ "$MINOR" == none ]] || die 2 "describe-db-engine-versions $engine $cur failed: $LAST_ERR (use --minor-upgrade none to patch without it)"
+        log_warn "describe-db-engine-versions failed ($LAST_ERR); minor availability unknown"
     fi
+    MINOR_TARGET=""; MINOR_NOTE=""
+    case "$MINOR" in
+        none)   MINOR_NOTE="--minor-upgrade none" ;;
+        latest) MINOR_TARGET="$(tail -n 1 "$WORK/minor_targets.txt")"
+                if [[ -z "$MINOR_TARGET" ]]; then MINOR_NOTE="already on the latest minor version $cur"; log_info "Minor: $CLUSTER is already on the latest minor version ($cur)"
+                else log_info "Minor: latest is $MINOR_TARGET (current $cur); planned as the LAST step"; fi ;;
+        *)      if [[ "$MINOR" == "$cur" ]]; then MINOR_NOTE="already on $MINOR"; log_info "--minor-upgrade $MINOR: already on that version; no upgrade step"
+                elif grep -qxF -- "$MINOR" "$WORK/minor_targets.txt"; then MINOR_TARGET="$MINOR"
+                else die 2 "--minor-upgrade $MINOR is not a valid minor (non-major) upgrade target from $cur (valid: $(paste -sd, "$WORK/minor_targets.txt" | sed 's/^$/none/'))"
+                fi ;;
+    esac
     rjq plan -n --slurpfile cluster "$WORK/cluster.json" --slurpfile members "$WORK/members.json" --slurpfile pma "$WORK/pma.json" \
-        --argjson actions "$(json_array "${ACTIONS[@]}")" --arg minor "$target" >"$WORK/plan.json" || die 2 "Building the plan failed"
+        --slurpfile ev "$WORK/ev.json" --arg ev_ok "$ev_ok" --arg minor_mode "$MINOR" --arg minor_target "$MINOR_TARGET" --arg minor_note "$MINOR_NOTE" \
+        --argjson actions "$(json_array "${ACTIONS[@]}")" >"$WORK/plan.json" || die 2 "Building the plan failed"
+}
+
+# get_minor_targets <current version> <outfile>: non-major upgrade targets newer than current, oldest first
+# (describe-db-engine-versions, read-only; the response also stays in $WORK/ev.json)
+ENGINE=""; MINOR_TARGET=""; MINOR_NOTE=""
+get_minor_targets() {
+    aws_call "$WORK/ev.json" "$SVC" describe-db-engine-versions --engine "$ENGINE" --engine-version "$1" || return 1
+    rjq minor_targets -r --arg cur "$1" "$WORK/ev.json" >"$2"
 }
 
 print_plan() {   # stdout, and into the log file on execute runs
@@ -514,52 +529,101 @@ step_snapshot() {
     step_end ok "snapshot $SNAP_NAME available" "$(cluster_field EngineVersion)"
 }
 
-step_minor() {   # step_minor <version>
-    local to="$1" from rc=0
-    get_cluster || true
+# minor upgrade, LAST: recompute the target from the version the cluster has NOW (a db-upgrade in the rolling
+# pass may already have moved it), then modify-db-cluster --apply-immediately and wait for cluster + all members
+MINOR_RESULT='{}'
+minor_result() { MINOR_RESULT="$(jq -cn --arg r "$1" --arg d "$2" --arg f "$3" --arg t "$4" --arg a "$5" '{result: $r, detail: $d, from: $f, to: $t, version_after: $a}')"; }
+step_minor() {
+    local planned="$1" from to rc=0
+    get_cluster || { step_begin minor-upgrade "$CLUSTER" "" ""; step_end failed "describe-db-clusters: $LAST_ERR" ""; minor_result failed "$LAST_ERR" "" "$planned" ""; return 3; }
     from="$(cluster_field EngineVersion)"
+    if ! get_minor_targets "$from" "$WORK/minor_now.txt"; then
+        step_begin minor-upgrade "$CLUSTER" "" "$from"; step_end failed "describe-db-engine-versions: $LAST_ERR" "$from"; minor_result failed "$LAST_ERR" "$from" "$planned" "$from"; return 3
+    fi
+    if [[ "$MINOR" == latest ]]; then
+        to="$(tail -n 1 "$WORK/minor_now.txt")"
+        if [[ -z "$to" ]]; then
+            step_begin minor-upgrade "$CLUSTER" "engine-version latest" "$from"
+            step_end skipped "already at latest minor version $from (the rolling pass got there)" "$from"
+            minor_result skipped "already at latest ($from)" "$from" "" "$from"; return 0
+        fi
+        [[ "$to" != "$planned" ]] && log_info "    latest minor is now $to (planned $planned; current $from)"
+    else
+        to="$MINOR"
+        if [[ "$from" == "$to" ]] || jq -en --arg a "$from" --arg b "$to" 'def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)]; ($a | vkey) >= ($b | vkey)' >/dev/null; then
+            step_begin minor-upgrade "$CLUSTER" "engine-version $to" "$from"
+            step_end skipped "already at $from (target $to)" "$from"; minor_result skipped "already at $from" "$from" "$to" "$from"; return 0
+        fi
+        if ! grep -qxF -- "$to" "$WORK/minor_now.txt"; then
+            step_begin minor-upgrade "$CLUSTER" "engine-version $to" "$from"
+            step_end failed "$to is no longer a valid minor target from $from" "$from"; minor_result failed "not a valid target from $from" "$from" "$to" "$from"; return 3
+        fi
+    fi
     step_begin minor-upgrade "$CLUSTER" "engine-version $to" "$from"
+    log_info "    modify-db-cluster --engine-version $to --apply-immediately (all instances restart together)"
     IN_FLIGHT="modify-db-cluster --engine-version $to --apply-immediately was accepted; the upgrade continues in AWS"
     if ! aws_call "$WORK/mod.json" "$SVC" modify-db-cluster --db-cluster-identifier "$CLUSTER" --engine-version "$to" --apply-immediately; then
-        IN_FLIGHT=""; step_end failed "modify-db-cluster: $LAST_ERR" "$from"; return 3
+        IN_FLIGHT=""; step_end failed "modify-db-cluster: $LAST_ERR" "$from"; minor_result failed "$LAST_ERR" "$from" "$to" "$from"; return 3
     fi
     wait_resource cluster "$CLUSTER" "" "" "$to" || rc=$?
+    local va; va="$(cluster_field EngineVersion)"
     case "$rc" in
-        0) step_end ok "$WAIT_DETAIL" "$(cluster_field EngineVersion)" ;;
-        2) step_end timeout "$WAIT_DETAIL" "$(cluster_field EngineVersion)"; return 3 ;;
-        *) step_end failed "$WAIT_DETAIL" "$(cluster_field EngineVersion)"; return 3 ;;
+        0) step_end ok "$WAIT_DETAIL" "$va"; minor_result ok "$from -> $va" "$from" "$to" "$va" ;;
+        2) step_end timeout "$WAIT_DETAIL" "$va"; minor_result timeout "$WAIT_DETAIL" "$from" "$to" "$va"; return 3 ;;
+        *) step_end failed "$WAIT_DETAIL" "$va"; minor_result failed "$WAIT_DETAIL" "$from" "$to" "$va"; return 3 ;;
     esac
 }
 
-# apply all selected pending actions on one resource (instance or the cluster), then wait
+# rank used for the order of actions on ONE resource (same mapping as act_rank in lib/runner.jq)
+ORDER_JQ='def r: if . == "system-update" then 0 elif . == "os-upgrade" then 1 elif . == "db-upgrade" then 2 else 3 end;'
+selected_pending() {   # selected_pending <pma file>: selected actions, in apply order, one per line
+    jq -r --argjson sel "$(json_array "${ACTIONS[@]}")" "$ORDER_JQ"' [.PendingMaintenanceActions[]?.PendingMaintenanceActionDetails[] | .Action
+         | select(. as $x | ($sel | index("all")) != null or ($sel | index($x)) != null)] | unique | sort_by([r, .]) | .[]' "$1"
+}
+res_version() {   # res_version <instance|cluster> <id>
+    if [[ "$1" == instance ]]; then
+        aws_call "$WORK/vb.json" rds describe-db-instances --db-instance-identifier "$2" || return 0
+        jq -r '.DBInstances[0].EngineVersion // ""' "$WORK/vb.json" 2>/dev/null || true
+    else cluster_field EngineVersion; fi
+}
+
+# patch ONE resource: its selected pending actions back to back (system-update, os-upgrade, db-upgrade, others),
+# one apply + wait per action; the pending list is re-read before each action
 step_apply() {   # step_apply <instance|cluster> <id> <arn> <role>
-    local kind="$1" id="$2" arn="$3" role="$4" acts a rc=0 vb
-    get_pending "$arn" "$WORK/sp.json" || { log_error "describe-pending-maintenance-actions $arn: $LAST_ERR"; step_begin "$role" "$id" "" ""; step_end failed "describe-pending-maintenance-actions: $LAST_ERR" ""; return 3; }
-    acts="$(jq -r --argjson sel "$(json_array "${ACTIONS[@]}")" '[.PendingMaintenanceActions[]?.PendingMaintenanceActionDetails[] | .Action
-             | select(. as $x | ($sel | index("all")) != null or ($sel | index($x)) != null)] | unique | join(",")' "$WORK/sp.json")"
-    if [[ "$kind" == instance ]]; then
-        aws_call "$WORK/vb.json" rds describe-db-instances --db-instance-identifier "$id" || true
-        vb="$(jq -r '.DBInstances[0].EngineVersion // ""' "$WORK/vb.json" 2>/dev/null || true)"
-    else vb="$(cluster_field EngineVersion)"; fi
-    step_begin "$role" "$id" "$acts" "$vb"
-    if [[ -z "$acts" ]]; then step_end skipped "no selected action pending any more (already applied, e.g. by an earlier step)" "$vb"; return 0; fi
-    local -a list; IFS=',' read -r -a list <<<"$acts"
+    local kind="$1" id="$2" arn="$3" role="$4" a rc vb va n=0
+    local -a list=()
+    get_pending "$arn" "$WORK/sp.json" || { step_begin "$role" "$id" "" ""; step_end failed "describe-pending-maintenance-actions: $LAST_ERR" ""; return 3; }
+    mapfile -t list < <(selected_pending "$WORK/sp.json")
+    if (( ${#list[@]} == 0 )); then
+        vb="$(res_version "$kind" "$id")"
+        step_begin "$role" "$id" "" "$vb"; step_end skipped "no selected action pending any more (already applied, e.g. by an earlier step)" "$vb"; return 0
+    fi
+    log_info "--- $role $id: ${#list[@]} action(s) back to back: ${list[*]}"
     for a in "${list[@]}"; do
+        n=$(( n + 1 ))
+        if (( n > 1 )); then   # an earlier action may have cleared this one too
+            get_pending "$arn" "$WORK/sp.json" || { step_begin "$role" "$id" "$a" ""; step_end failed "describe-pending-maintenance-actions: $LAST_ERR" ""; return 3; }
+            if ! selected_pending "$WORK/sp.json" | grep -qxF -- "$a"; then
+                vb="$(res_version "$kind" "$id")"; step_begin "$role" "$id" "$a" "$vb"; step_end skipped "$a no longer pending (cleared by an earlier action)" "$vb"; continue
+            fi
+        fi
+        vb="$(res_version "$kind" "$id")"
+        step_begin "$role" "$id" "$a" "$vb"
         log_info "    apply-pending-maintenance-action $a --opt-in-type immediate on $id"
         if ! aws_call "$WORK/apply.json" "$SVC" apply-pending-maintenance-action --resource-identifier "$arn" --apply-action "$a" --opt-in-type immediate; then
             step_end failed "apply $a: $LAST_ERR" "$vb"; return 3
         fi
         IN_FLIGHT="$a on $id was opted in 'immediate' and continues in AWS even if this run stops"
+        rc=0; wait_resource "$kind" "$id" "$arn" "$a" || rc=$?
+        if [[ "$kind" == instance ]]; then va="$(jq -r '.DBInstances[0].EngineVersion // ""' "$WORK/w.json" 2>/dev/null || echo "$vb")"
+        else va="$(cluster_field EngineVersion)"; fi
+        case "$rc" in
+            0) step_end ok "$WAIT_DETAIL" "$va" ;;
+            2) step_end timeout "$WAIT_DETAIL" "$va"; return 3 ;;
+            *) step_end failed "$WAIT_DETAIL" "$va"; return 3 ;;
+        esac
     done
-    wait_resource "$kind" "$id" "$arn" "$acts" || rc=$?
-    local va="$vb"
-    if [[ "$kind" == instance ]]; then va="$(jq -r '.DBInstances[0].EngineVersion // ""' "$WORK/w.json" 2>/dev/null || echo "$vb")"
-    else va="$(cluster_field EngineVersion)"; fi
-    case "$rc" in
-        0) step_end ok "$WAIT_DETAIL" "$va" ;;
-        2) step_end timeout "$WAIT_DETAIL" "$va"; return 3 ;;
-        *) step_end failed "$WAIT_DETAIL" "$va"; return 3 ;;
-    esac
+    return 0
 }
 
 LAST_WRITER=""
@@ -572,14 +636,12 @@ check_writer() {   # refresh the cluster, log a failover if the writer changed
 }
 
 run_steps() {
-    local plan="$WORK/plan.json" minor has_cluster cl_done=0 id next w x
-    minor="$(jq -r '.minor_to' "$plan")"
+    local plan="$WORK/plan.json" has_cluster cl_done=0 id next w x
     has_cluster="$(jq -r '[.steps[] | select(.kind == "cluster")] | length' "$plan")"
     LAST_WRITER="$(jq -r '.writer' "$plan")"
     mapfile -t TODO < <(jq -r '.steps[] | select(.kind == "instance") | .target' "$plan")
     if (( SKIP_SNAPSHOT )); then log_warn "--skip-snapshot: NO pre-maintenance snapshot is taken"
     else step_snapshot || return 3; fi
-    if [[ -n "$minor" ]]; then step_minor "$minor" || return 3; check_writer; fi
     # readers first, one at a time; the CURRENT writer is always last (re-read after every step)
     while (( ${#TODO[@]} )); do
         check_writer; w="$LAST_WRITER"; next=""
@@ -649,12 +711,12 @@ write_summary() {   # write_summary <result> <exit> <message>
         --slurpfile fo <(jq -cs . "$WORK/failovers.jsonl") \
         --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" --arg account "$ACCOUNT" --arg region "$REGION" --arg profile "${PROFILE:-default}" \
         --arg started "$RUN_STARTED" --arg finished "$(utc)" --arg result "$1" --argjson exit "$2" --arg msg "$3" --arg snap "$SNAP_NAME" \
-        --arg mode "$( (( EXECUTE )) && echo execute || echo dry-run)" '
+        --arg mode "$( (( EXECUTE )) && echo execute || echo dry-run)" --argjson minor_result "$MINOR_RESULT" '
         ($plan[0]) as $p
         | {meta: {script: $script, version: $version, cluster: $p.cluster.id, engine: $p.cluster.engine, account: $account, region: $region,
                   profile: $profile, started_utc: $started, finished_utc: $finished, result: $result, exit_code: $exit, message: $msg,
                   snapshot: $snap, mode: $mode},
-           plan: $p, steps: $steps[0], failovers: $fo[0], remaining: $v[0].remaining, state_unknown: ($v[0].unknown // false),
+           plan: $p, minor_result: $minor_result, steps: $steps[0], failovers: $fo[0], remaining: $v[0].remaining, state_unknown: ($v[0].unknown // false),
            versions: ([{resource: $p.cluster.id, before: $p.cluster.version}] + [$p.members[] | {resource: .id, before: .version}]
                       | map(. as $b | $b + {after: ([$v[0].versions_after[] | select(.resource == $b.resource) | .after] | .[0] // "")}))}' \
         >"$base.json" || { log_warn "Writing the summary failed"; return 0; }
@@ -771,7 +833,15 @@ main() {
     if ! run_steps; then
         finish 3 failed "Step failed: stopped here, later steps were NOT run$( [[ ${#TODO[@]} -gt 0 ]] && echo " (not patched: ${TODO[*]})")"
     fi
-    if ! verify; then finish 3 failed "Verification failed: see the remaining actions / statuses"; fi
+    if ! verify; then finish 3 failed "Verification of the rolling pass failed: see the remaining actions / statuses; the minor upgrade was NOT run"; fi
+    local minor; minor="$(jq -r '.minor_to' "$WORK/plan.json")"
+    if [[ -n "$minor" ]]; then
+        if [[ "$(jq '[.remaining[] | select(.selected | not)] | length' "$WORK/verify.json")" != 0 ]]; then
+            log_warn "Unselected actions are still pending (--action filter); the minor upgrade runs anyway: $(jq -r '[.remaining[] | "\(.resource):\(.action)"] | join(", ")' "$WORK/verify.json")"
+        fi
+        if ! step_minor "$minor"; then rm -f "$WORK/verify.json"; finish 3 failed "Minor upgrade failed (the rolling pass itself completed)"; fi
+        rm -f "$WORK/verify.json"
+    fi
     finish 0 ok "Done: $CLUSTER patched$( [[ -n "$SNAP_NAME" ]] && echo "; pre-maintenance snapshot $SNAP_NAME")"
 }
 

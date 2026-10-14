@@ -1,8 +1,9 @@
 # lib/runner.jq - plan building and rendering for rds_patch_runner.sh
-# Modes ($mode): plan | plan_text | summary_text | summary_csv | summary_html | alert
+# Modes ($mode): plan | plan_text | minor_targets | summary_text | summary_csv | summary_html
 # plan inputs (--slurpfile): cluster (describe-db-clusters), members (describe-db-instances), pma (array of
-# {ResourceIdentifier, PendingMaintenanceActionDetails}); --argjson actions ["all"] | [..]; --arg minor "<version>|"
-
+# {ResourceIdentifier, PendingMaintenanceActionDetails}), ev (describe-db-engine-versions or {});
+# --argjson actions ["all"] | [..]; --arg ev_ok 1|0; --arg minor_mode latest|<version>|none; --arg minor_target
+# "<version>|"; --arg minor_note "<why there is no target>"
 def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)];
 def selected($acts): . as $a | ($acts | index("all")) != null or ($acts | index($a)) != null;
 def ts: if . == null or . == "" then "" else sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") end;
@@ -11,6 +12,25 @@ def act_rows($arn; $pma; $acts):
     | {action: .Action, description: (.Description // ""), opt_in_status: (.OptInStatus // ""),
        auto_applied_after: (.AutoAppliedAfterDate // "" | ts), forced_apply: (.ForcedApplyDate // "" | ts),
        current_apply: (.CurrentApplyDate // "" | ts), selected: (.Action | selected($acts))} ];
+
+# ---- action order inside the ONE rolling pass ----------------------------------------------------------------
+# 0 system-update (system patches) -> 1 os-upgrade (OS updates) -> 2 db-upgrade (DB updates) -> 3 every other or
+# unknown action type (ca-certificate-rotation, hardware-maintenance, future types: treated as DB updates, applied
+# last, alphabetically)
+def act_rank: if . == "system-update" then 0 elif . == "os-upgrade" then 1 elif . == "db-upgrade" then 2 else 3 end;
+def act_phase: ["system patch", "OS update", "DB update", "DB update (other type)"][act_rank];
+def order_acts: sort_by([(.action | act_rank), .action]);
+# non-major upgrade targets newer than $cur, oldest first
+def minor_targets($cur):
+  [ .DBEngineVersions[]?.ValidUpgradeTarget[]? | select((.IsMajorVersionUpgrade // false) == false) | .EngineVersion
+    | select(vkey > ($cur | vkey)) ] | unique_by(vkey);
+def auto_minor($c; $inst):
+  ([$inst[] | .AutoMinorVersionUpgrade | select(. != null)] | unique) as $u
+  | if ($u | length) == 1 then ($u[0] | tostring) elif ($u | length) > 1 then "mixed (" + ([$inst[] | "\(.DBInstanceIdentifier)=\(.AutoMinorVersionUpgrade)"] | join(", ")) + ")"
+    elif ($c.AutoMinorVersionUpgrade // null) != null then ($c.AutoMinorVersionUpgrade | tostring) else "unknown" end;
+def act_steps($kind; $role; $id; $arn; $acts):
+  [$acts[] | select(.selected)] | order_acts
+  | map({kind: $kind, role: $role, target: $id, arn: $arn, action: .action, phase: (.action | act_phase)});
 
 def plan:
   $ARGS.named as $A
@@ -21,31 +41,55 @@ def plan:
   | ([$c.DBClusterMembers[]? | select(.IsClusterWriter) | .DBInstanceIdentifier] | .[0] // "") as $writer
   | [ $inst[] | . as $i | {id: .DBInstanceIdentifier, arn: .DBInstanceArn, status: .DBInstanceStatus, class: .DBInstanceClass,
                  version: .EngineVersion, az: (.AvailabilityZone // ""), writer: (.DBInstanceIdentifier == $writer),
+                 auto_minor_upgrade: (.AutoMinorVersionUpgrade // null),
                  promotion_tier: ([$c.DBClusterMembers[]? | select(.DBInstanceIdentifier == $i.DBInstanceIdentifier) | .PromotionTier] | .[0] // null)} ] as $m0
-  | ($m0 | map(. + {actions: act_rows(.arn; $pma; $acts)})
+  | ($m0 | map(. + {actions: (act_rows(.arn; $pma; $acts) | order_acts)})
         | sort_by([(if .writer then 1 else 0 end), (.id | ascii_downcase)])) as $members
-  | act_rows($c.DBClusterArn; $pma; $acts) as $cacts
-  | ($members | map(select(.writer | not) | select(any(.actions[]; .selected)))) as $readers
-  | ($members | map(select(.writer) | select(any(.actions[]; .selected)))) as $wr
-  | ([$cacts[] | select(.selected)] | length > 0) as $has_cluster
+  | (act_rows($c.DBClusterArn; $pma; $acts) | order_acts) as $cacts
+  | (if $A.ev_ok == "1" then ($A.ev[0] // {} | minor_targets($c.EngineVersion)) else null end) as $mt
   | ( [ {kind: "snapshot", target: $c.DBClusterIdentifier} ]
-      + (if $A.minor != "" then [{kind: "minor-upgrade", target: $c.DBClusterIdentifier, to: $A.minor, from: $c.EngineVersion}] else [] end)
-      + ($readers | map({kind: "instance", role: "reader", target: .id, arn: .arn, actions: [.actions[] | select(.selected) | .action]}))
-      + (if $has_cluster then [{kind: "cluster", target: $c.DBClusterIdentifier, arn: $c.DBClusterArn, actions: [$cacts[] | select(.selected) | .action]}] else [] end)
-      + ($wr | map({kind: "instance", role: "writer", target: .id, arn: .arn, actions: [.actions[] | select(.selected) | .action]}))
-      + [ {kind: "verify", target: $c.DBClusterIdentifier} ] ) as $steps
+      + ([$members[] | select(.writer | not) | act_steps("instance"; "reader"; .id; .arn; .actions)] | add // [])
+      + act_steps("cluster"; "cluster"; $c.DBClusterIdentifier; $c.DBClusterArn; $cacts)
+      + ([$members[] | select(.writer) | act_steps("instance"; "writer"; .id; .arn; .actions)] | add // []) ) as $pass
+  | ([$pass[] | select(.kind != "snapshot")] | length) as $n_apply
+  | ( $pass
+      + (if $n_apply > 0 or $A.minor_target != "" then [ {kind: "verify", target: $c.DBClusterIdentifier} ] else [] end)
+      + (if $A.minor_target != "" then [{kind: "minor-upgrade", target: $c.DBClusterIdentifier, to: $A.minor_target, from: $c.EngineVersion, mode: $A.minor_mode}] else [] end)
+    ) as $steps
   | { cluster: {id: $c.DBClusterIdentifier, arn: $c.DBClusterArn, engine: $c.Engine, version: $c.EngineVersion, status: $c.Status,
                 global: ($c.GlobalClusterIdentifier // ""), multi_az: ($c.MultiAZ // false), window: ($c.PreferredMaintenanceWindow // ""),
                 engine_mode: ($c.EngineMode // "provisioned")},
       writer: $writer, members: $members, cluster_actions: $cacts,
+      minor: {current: $c.EngineVersion, auto_minor_upgrade: auto_minor($c; $inst),
+              lookup_ok: ($A.ev_ok == "1"), available: ($mt // []), next: (($mt // [])[0] // null), latest: (($mt // [])[-1] // null),
+              up_to_date: ($A.ev_ok == "1" and (($mt // []) | length) == 0),
+              mode: $A.minor_mode, target: (if $A.minor_target == "" then null else $A.minor_target end), note: ($A.minor_note // "")},
       not_selected: ([$cacts[], $members[].actions[] | select(.selected | not) | .action] | unique),
-      minor_to: $A.minor,
-      nothing_to_do: (($readers | length) == 0 and ($wr | length) == 0 and ($has_cluster | not) and $A.minor == ""),
+      minor_to: $A.minor_target,
+      nothing_to_do: ($n_apply == 0 and $A.minor_target == ""),
       steps: ($steps | to_entries | map(.value + {n: (.key + 1)})) };
 
 def pad($n): tostring | if length >= $n then .[0:$n] else . + (" " * ($n - length)) end;
 def acts_txt: if length == 0 then "-" else map(.action + (if .selected then "" else " (not selected)" end)
                                                 + (if .opt_in_status != "" then " [opt-in: " + .opt_in_status + "]" else "" end)) | join(", ") end;
+def dash: if . == null or . == "" then "-" else tostring end;
+def minor_lines($m):
+  "MINOR VERSION AVAILABILITY (describe-db-engine-versions, non-major targets only)",
+  "  current engine version : \($m.current)",
+  "  auto minor upgrade     : \($m.auto_minor_upgrade)",
+  (if $m.lookup_ok | not then "  available minors       : unknown (lookup failed)"
+   else "  next minor             : \(if $m.up_to_date then "- (up to date)" else $m.next end)",
+        "  latest minor           : \(if $m.up_to_date then "- (already on the latest minor)" else $m.latest end)",
+        "  available minors       : \(if $m.up_to_date then "none" else ($m.available | join(", ")) end)" end),
+  "  --minor-upgrade        : \($m.mode) -> \(if $m.target != null then $m.target + " (runs LAST, after the rolling pass is verified)" else "no upgrade step (" + ($m.note | if . == "" then "none" else . end) + ")" end)";
+def pending_lines($p):
+  ([ ($p.members[] | . as $m | .actions[] | {role: (if $m.writer then "writer" else "reader" end), res: $m.id} + .),
+     ($p.cluster_actions[] | {role: "cluster", res: $p.cluster.id} + .) ]) as $rows
+  | "PENDING MAINTENANCE (per resource, in apply order)",
+    (if ($rows | length) == 0 then "  none"
+     else ("  " + ("ROLE" | pad(8)) + ("RESOURCE" | pad(30)) + ("ACTION" | pad(26)) + ("TYPE" | pad(24)) + ("AUTO-APPLIED AFTER" | pad(22)) + ("FORCED APPLY" | pad(22)) + "DESCRIPTION"),
+          ($rows[] | "  " + (.role | pad(8)) + (.res | pad(30)) + ((.action + (if .selected then "" else " (not sel.)" end)) | pad(26))
+                     + (.action | act_phase | pad(24)) + (.auto_applied_after | dash | pad(22)) + (.forced_apply | dash | pad(22)) + (.description | dash)) end);
 
 def plan_text:
   . as $p
@@ -53,20 +97,24 @@ def plan_text:
     "Account   : \($ARGS.named.account // "-")   profile: \($ARGS.named.profile // "default")   region: \($ARGS.named.region // "-")",
     "Writer    : \($p.writer)",
     "",
-    "MEMBERS   " + ("ROLE" | pad(8)) + ("INSTANCE" | pad(32)) + ("STATUS" | pad(12)) + ("CLASS" | pad(18)) + ("VERSION" | pad(26)) + "PENDING",
-    ($p.members[] | "          " + ((if .writer then "writer" else "reader" end) | pad(8)) + (.id | pad(32)) + (.status | pad(12))
-                    + (.class | pad(18)) + (.version | pad(26)) + (.actions | acts_txt)),
-    "          " + ("cluster" | pad(8)) + ($p.cluster.id | pad(32)) + ($p.cluster.status | pad(12)) + ("-" | pad(18)) + ($p.cluster.version | pad(26)) + ($p.cluster_actions | acts_txt),
+    minor_lines($p.minor),
     "",
-    (if $p.nothing_to_do then "PLAN      : nothing to do (no selected pending action and no --minor-upgrade)"
-     else "PLAN (in this order; one step at a time, stop on the first failure):",
-       ($p.steps[] | "  \(.n). " + (
+    "MEMBERS   " + ("ROLE" | pad(8)) + ("INSTANCE" | pad(32)) + ("STATUS" | pad(12)) + ("CLASS" | pad(18)) + ("VERSION" | pad(14)) + "PENDING",
+    ($p.members[] | "          " + ((if .writer then "writer" else "reader" end) | pad(8)) + (.id | pad(32)) + (.status | pad(12))
+                    + (.class | pad(18)) + (.version | pad(14)) + (.actions | acts_txt)),
+    "          " + ("cluster" | pad(8)) + ($p.cluster.id | pad(32)) + ($p.cluster.status | pad(12)) + ("-" | pad(18)) + ($p.cluster.version | pad(14)) + ($p.cluster_actions | acts_txt),
+    "",
+    pending_lines($p),
+    "",
+    (if $p.nothing_to_do then "PLAN      : nothing to do (no selected pending action, and no minor upgrade: \($p.minor.note | if . == "" then "none" else . end))"
+     else "PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):",
+       ($p.steps[] | "  " + ("\(.n)." | pad(4)) + (
           if .kind == "snapshot" then (if $ARGS.named.skip_snapshot == "1" then "snapshot   : SKIPPED (--skip-snapshot)"
                                        else "snapshot   : create-db-cluster-snapshot pre-maint-\(.target)-<UTC YYYYMMDD-HHMM>, wait until available" end)
-          elif .kind == "minor-upgrade" then "minor upg  : modify-db-cluster --engine-version \(.to) --apply-immediately (from \(.from); whole cluster, all members restart)"
-          elif .kind == "instance" then "\(.role | pad(10)) : \(.target) <- \(.actions | join(", ")) (--opt-in-type immediate), wait until available and nothing pending"
-          elif .kind == "cluster" then "cluster    : \(.target) <- \(.actions | join(", ")) (cluster-level, --opt-in-type immediate), wait for cluster + members"
-          else "verify     : no pending actions left, all available, versions" end)) end),
+          elif .kind == "instance" then "\(.role | pad(10)) : \(.target) <- \(.action) [\(.phase)] (--opt-in-type immediate), wait until available and \(.action) gone"
+          elif .kind == "cluster" then "cluster    : \(.target) <- \(.action) [\(.phase), cluster-level] (--opt-in-type immediate), wait for cluster + members"
+          elif .kind == "verify" then "verify     : rolling pass done? cluster + all members available, selected actions gone (else STOP, no minor upgrade)"
+          else "minor upg  : re-check the \(if .mode == "latest" then "latest minor" else "target" end) (skip if a DB update already got there), then modify-db-cluster --engine-version \(.to) --apply-immediately (from \(.from); ALL instances restart together), wait until cluster + members available on \(.to)" end)) end),
     (if ($p.not_selected | length) > 0 then "", "Not selected by --action (left pending): \($p.not_selected | join(", "))" else empty end);
 
 def dur: if . == null then "-" else (. as $s | "\(($s / 60) | floor)m\($s % 60)s") end;
@@ -77,6 +125,13 @@ def summary_text:
     "Started  : \($s.meta.started_utc)   Finished: \($s.meta.finished_utc)   Mode: \($s.meta.mode)",
     "Result   : \($s.meta.result) (exit \($s.meta.exit_code))\(if ($s.meta.message // "") != "" then " - " + $s.meta.message else "" end)",
     "Snapshot : \(if ($s.meta.snapshot // "") == "" then "-" else $s.meta.snapshot end)",
+    "",
+    "BEFORE:",
+    (minor_lines($s.plan.minor) | "  " + .),
+    "",
+    (pending_lines($s.plan) | "  " + .),
+    "",
+    "MINOR UPGRADE (last step): \($s.minor_result.result // "not run") - \($s.minor_result.detail // "")\(if ($s.minor_result.to // "") != "" then " (target " + $s.minor_result.to + ")" else "" end)",
     "",
     ("STEP" | pad(5)) + ("KIND" | pad(14)) + ("TARGET" | pad(30)) + ("ACTIONS" | pad(30)) + ("START (UTC)" | pad(21)) + ("END (UTC)" | pad(21)) + ("DURATION" | pad(10)) + ("RESULT" | pad(10)) + ("BEFORE -> AFTER" | pad(40)) + "DETAIL",
     ($s.steps[] | (.n | tostring | pad(5)) + (.kind | pad(14)) + (.target | pad(30)) + ((.actions // "") | pad(30)) + ((.start_utc // "-") | pad(21))
@@ -107,6 +162,12 @@ def summary_html:
   + ($s.steps | map("<tr><td>\(.n)</td><td>\(.kind | h)</td><td>\(.target | h)</td><td>\(.actions // "" | h)</td><td>\(.start_utc // "-" | h)</td><td>\(.end_utc // "-" | h)</td><td>\(.duration_s | dur)</td>"
        + "<td class=\"\(if .result == "ok" then "ok" elif .result == "failed" or .result == "timeout" then "fail" else "other" end)\">\(.result | h)</td>"
        + "<td>\(.version_before // "" | h) &rarr; \(.version_after // "" | h)</td><td>\(.detail // "" | h)</td></tr>") | join(""))
+  + "</table><h2>Minor version (before)</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th><th>Minor upgrade result</th></tr>"
+  + ($s.plan.minor | "<tr><td>\(.current | h)</td><td>\(.auto_minor_upgrade | h)</td><td>\(.next | dash | h)</td><td>\(.latest | dash | h)</td><td>\(if .lookup_ok then (.available | join(", ") | if . == "" then "none (up to date)" else . end) else "unknown" end | h)</td><td>\(.mode | h) &rarr; \(.target | dash | h)</td>")
+  + "<td>\($s.minor_result.result // "not run" | h): \($s.minor_result.detail // "" | h)</td></tr></table>"
+  + "<h2>Pending maintenance (before)</h2><table><tr><th>Resource</th><th>Action</th><th>Type</th><th>Description</th><th>Auto-applied after</th><th>Forced apply</th></tr>"
+  + ([($s.plan.members[] | .id as $r | .actions[] | {r: $r} + .), ($s.plan.cluster_actions[] | {r: $s.plan.cluster.id} + .)]
+     | map("<tr><td>\(.r | h)</td><td>\(.action | h)</td><td>\(.action | act_phase | h)</td><td>\(.description | dash | h)</td><td>\(.auto_applied_after | dash | h)</td><td>\(.forced_apply | dash | h)</td></tr>") | join(""))
   + "</table><h2>Versions</h2><table><tr><th>Resource</th><th>Before</th><th>After</th></tr>"
   + ($s.versions | map("<tr><td>\(.resource | h)</td><td>\(.before // "-" | h)</td><td>\(.after // "-" | h)</td></tr>") | join("")) + "</table>"
   + "<h2>Pending actions left</h2>" + (if ($s.remaining | length) == 0 then "<p>none</p>" else "<table><tr><th>Resource</th><th>Action</th><th>Opt-in</th></tr>"
@@ -114,5 +175,5 @@ def summary_html:
   + (if ($s.failovers | length) > 0 then "<h2>Failovers seen</h2><ul>" + ($s.failovers | map("<li>\(.at_utc | h): writer \(.from | h) &rarr; \(.to | h)</li>") | join("")) + "</ul>" else "" end)
   + "</main></body></html>";
 
-if $mode == "plan" then plan elif $mode == "plan_text" then plan_text elif $mode == "summary_text" then summary_text
+if $mode == "plan" then plan elif $mode == "minor_targets" then minor_targets($ARGS.named.cur)[] elif $mode == "plan_text" then plan_text elif $mode == "summary_text" then summary_text
 elif $mode == "summary_csv" then summary_csv elif $mode == "summary_html" then summary_html else . end

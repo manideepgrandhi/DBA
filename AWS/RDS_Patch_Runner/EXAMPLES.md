@@ -7,17 +7,43 @@ All examples assume AWS CloudShell or a shell with AWS CLI v2 and jq, run from t
 ```
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod
 ```
-This makes describe calls only. It prints the members, their roles and pending actions, then the plan in execution order ([sample](samples/dry_run_plan.txt)):
+This makes describe calls only. It prints the minor version availability, the members with role, status, version and pending actions, each pending action with its type, description and dates, and then the plan numbered in the exact execution order ([sample](samples/dry_run_plan.txt)):
 
 ```
-PLAN (in this order; one step at a time, stop on the first failure):
-  1. snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM>, wait until available
-  2. reader     : orders-prod-2 <- system-update, os-upgrade (--opt-in-type immediate), wait until available and nothing pending
-  3. reader     : orders-prod-3 <- system-update (--opt-in-type immediate), wait until available and nothing pending
-  4. cluster    : orders-prod <- db-upgrade (cluster-level, --opt-in-type immediate), wait for cluster + members
-  5. writer     : orders-prod-1 <- system-update (--opt-in-type immediate), wait until available and nothing pending
-  6. verify     : no pending actions left, all available, versions
+MINOR VERSION AVAILABILITY (describe-db-engine-versions, non-major targets only)
+  current engine version : 15.4
+  auto minor upgrade     : true
+  next minor             : 15.5
+  latest minor           : 15.10
+  available minors       : 15.5, 15.6, 15.10
+  --minor-upgrade        : latest -> 15.10 (runs LAST, after the rolling pass is verified)
+
+MEMBERS   ROLE    INSTANCE                        STATUS      CLASS             VERSION       PENDING
+          reader  orders-prod-2                   available   db.r6g.large      15.4          system-update, os-upgrade
+          reader  orders-prod-3                   available   db.r6g.large      15.4          system-update
+          writer  orders-prod-1                   available   db.r6g.large      15.4          system-update
+          cluster orders-prod                     available   -                 15.4          db-upgrade
+
+PENDING MAINTENANCE (per resource, in apply order)
+  ROLE    RESOURCE                      ACTION                    TYPE                    AUTO-APPLIED AFTER    FORCED APPLY          DESCRIPTION
+  reader  orders-prod-2                 system-update             system patch            2026-11-01T04:00:00Z  -                     New Operating System update is available
+  reader  orders-prod-2                 os-upgrade                OS update               2026-11-01T04:00:00Z  2026-12-01T04:00:00Z  OS upgrade
+  reader  orders-prod-3                 system-update             system patch            2026-11-01T04:00:00Z  -                     New Operating System update is available
+  writer  orders-prod-1                 system-update             system patch            2026-11-01T04:00:00Z  -                     New Operating System update is available
+  cluster orders-prod                   db-upgrade                DB update               2026-11-01T04:00:00Z  -                     Cluster engine patch
+
+PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):
+  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM>, wait until available
+  2.  reader     : orders-prod-2 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
+  3.  reader     : orders-prod-2 <- os-upgrade [OS update] (--opt-in-type immediate), wait until available and os-upgrade gone
+  4.  reader     : orders-prod-3 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
+  5.  cluster    : orders-prod <- db-upgrade [DB update, cluster-level] (--opt-in-type immediate), wait for cluster + members
+  6.  writer     : orders-prod-1 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
+  7.  verify     : rolling pass done? cluster + all members available, selected actions gone (else STOP, no minor upgrade)
+  8.  minor upg  : re-check the latest minor (skip if a DB update already got there), then modify-db-cluster --engine-version 15.10 --apply-immediately (from 15.4; ALL instances restart together), wait until cluster + members available on 15.10
 ```
+
+One rolling pass: each reader gets its actions back to back (`system-update`, then `os-upgrade`, then `db-upgrade`, then any other type), then the cluster-level actions, then the writer. The minor upgrade comes last.
 
 ## 2. Patch (interactive)
 
@@ -42,17 +68,19 @@ Without `--yes`, a run with no terminal aborts with exit 4 and changes nothing.
 ```
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --action system-update --execute
 ```
-Other actions (for example `db-upgrade`) stay pending. They are shown as "not selected" in the plan and listed under "PENDING ACTIONS LEFT" in the summary.
+Other actions (for example `db-upgrade`) stay pending. They are shown as "not selected" in the plan and listed under "PENDING ACTIONS LEFT" in the summary. The minor upgrade still runs at the end unless you add `--minor-upgrade none` (the log warns when unselected actions are still pending).
 
-## 5. Minor version upgrade together with the maintenance
+## 5. Minor version upgrade (last step)
 
 ```
-# newest minor target of the current version (e.g. 15.4 -> 15.10); no step if already latest
-./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --minor-upgrade latest
-# an exact version (must be a valid non-major upgrade target, else exit 2)
+# default: patch everything, then the latest minor (e.g. 15.4 -> 15.10); skipped if already latest
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --execute
+# an exact minor (must be a valid non-major upgrade target, else exit 2)
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --minor-upgrade 15.6 --execute
+# maintenance only, no engine version change
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --minor-upgrade none --execute
 ```
-The upgrade runs right after the snapshot (`modify-db-cluster --engine-version V --apply-immediately`). The tool waits until the cluster and every member are available on V. After that, the readers, cluster-level actions and writer are processed as usual; any pending action that AWS cleared during the upgrade is shown as `skipped`.
+The upgrade runs only after the rolling pass is verified. The tool re-reads the version first; if a `db-upgrade` already moved the cluster to the latest minor, the step is `skipped: already at latest`. Otherwise it runs `modify-db-cluster --engine-version T --apply-immediately` and waits until the cluster and every member are available on T. An Aurora minor upgrade restarts all instances at the same time (not rolling), so this is the main downtime moment of the run.
 
 ## 6. DocumentDB / Neptune
 
@@ -91,7 +119,7 @@ done
 $ echo $?            # 0 ok / nothing to do, 2 preflight abort, 3 step failed or timeout, 4 declined, 130 interrupted
 $ cat ~/patch_runs/orders-prod_*.summary.txt
 ```
-* [Successful run with a failover during the writer patch](samples/orders-prod_sample.log) and its [summary](samples/orders-prod_sample.summary.txt).
-* [A reader failure](samples/orders-prod_reader_failure_sample.log): the run stops before the writer, exits 3, and the [summary](samples/orders-prod_reader_failure_sample.summary.txt) lists what is still pending.
+* [Successful run: rolling pass, then the minor upgrade](samples/orders-prod_sample.log) and its [summary](samples/orders-prod_sample.summary.txt).
+* [A reader failure](samples/orders-prod_reader_failure_sample.log): the run stops before the writer, does not run the minor upgrade, exits 3, and the [summary](samples/orders-prod_reader_failure_sample.summary.txt) lists what is still pending.
 
 When a run stops (exit 3 or 130), fix the cause and then simply run the same command again. The tool re-reads what is still pending and continues from there. Steps whose actions are already done are skipped. A new pre-maintenance snapshot is taken on each run unless you pass `--skip-snapshot`.
