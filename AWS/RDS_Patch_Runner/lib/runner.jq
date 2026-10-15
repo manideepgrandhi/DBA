@@ -47,7 +47,7 @@ def plan:
         | sort_by([(if .writer then 1 else 0 end), (.id | ascii_downcase)])) as $members
   | (act_rows($c.DBClusterArn; $pma; $acts) | order_acts) as $cacts
   | (if $A.ev_ok == "1" then ($A.ev[0] // {} | minor_targets($c.EngineVersion)) else null end) as $mt
-  | ( [ {kind: "snapshot", target: $c.DBClusterIdentifier} ]
+  | ( [ {kind: "snapshot", target: $c.DBClusterIdentifier, prefix: ($A.snap_prefix // "pre-maint"), tags: ($A.tags // [])} ]
       + ([$members[] | select(.writer | not) | act_steps("instance"; "reader"; .id; .arn; .actions)] | add // [])
       + act_steps("cluster"; "cluster"; $c.DBClusterIdentifier; $c.DBClusterArn; $cacts)
       + ([$members[] | select(.writer) | act_steps("instance"; "writer"; .id; .arn; .actions)] | add // []) ) as $pass
@@ -66,7 +66,9 @@ def plan:
               mode: $A.minor_mode, target: (if $A.minor_target == "" then null else $A.minor_target end), note: ($A.minor_note // "")},
       not_selected: ([$cacts[], $members[].actions[] | select(.selected | not) | .action] | unique),
       minor_to: $A.minor_target,
-      nothing_to_do: ($n_apply == 0 and $A.minor_target == ""),
+      snapshot_only: ($A.snapshot_only == "1"),
+      snapshot_prefix: ($A.snap_prefix // "pre-maint"), snapshot_tags: ($A.tags // []),
+      nothing_to_do: ($A.snapshot_only != "1" and $n_apply == 0 and $A.minor_target == ""),
       steps: ($steps | to_entries | map(.value + {n: (.key + 1)})) };
 
 def pad($n): tostring | if length >= $n then .[0:$n] else . + (" " * ($n - length)) end;
@@ -97,20 +99,22 @@ def plan_text:
     "Account   : \($ARGS.named.account // "-")   profile: \($ARGS.named.profile // "default")   region: \($ARGS.named.region // "-")",
     "Writer    : \($p.writer)",
     "",
-    minor_lines($p.minor),
+    (if $p.snapshot_only then
+       "MODE      : SNAPSHOT ONLY - no maintenance actions, no minor upgrade (pending actions and minor versions not checked)",
+       (if $p.cluster.global != "" then "Global DB : member of '\($p.cluster.global)'; the snapshot covers this regional cluster only" else empty end)
+     else minor_lines($p.minor) end),
     "",
     "MEMBERS   " + ("ROLE" | pad(8)) + ("INSTANCE" | pad(32)) + ("STATUS" | pad(12)) + ("CLASS" | pad(18)) + ("VERSION" | pad(14)) + "PENDING",
     ($p.members[] | "          " + ((if .writer then "writer" else "reader" end) | pad(8)) + (.id | pad(32)) + (.status | pad(12))
-                    + (.class | pad(18)) + (.version | pad(14)) + (.actions | acts_txt)),
-    "          " + ("cluster" | pad(8)) + ($p.cluster.id | pad(32)) + ($p.cluster.status | pad(12)) + ("-" | pad(18)) + ($p.cluster.version | pad(14)) + ($p.cluster_actions | acts_txt),
+                    + (.class | pad(18)) + (.version | pad(14)) + (if $p.snapshot_only then "(not checked)" else (.actions | acts_txt) end)),
+    "          " + ("cluster" | pad(8)) + ($p.cluster.id | pad(32)) + ($p.cluster.status | pad(12)) + ("-" | pad(18)) + ($p.cluster.version | pad(14)) + (if $p.snapshot_only then "(not checked)" else ($p.cluster_actions | acts_txt) end),
     "",
-    pending_lines($p),
-    "",
+    (if $p.snapshot_only then empty else pending_lines($p), "" end),
     (if $p.nothing_to_do then "PLAN      : nothing to do (no selected pending action, and no minor upgrade: \($p.minor.note | if . == "" then "none" else . end))"
-     else "PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):",
+     else (if $p.snapshot_only then "PLAN (snapshot only; nothing else is changed):" else "PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):" end),
        ($p.steps[] | "  " + ("\(.n)." | pad(4)) + (
           if .kind == "snapshot" then (if $ARGS.named.skip_snapshot == "1" then "snapshot   : SKIPPED (--skip-snapshot)"
-                                       else "snapshot   : create-db-cluster-snapshot pre-maint-\(.target)-<UTC YYYYMMDD-HHMM>, wait until available" end)
+                                       else "snapshot   : create-db-cluster-snapshot \(.prefix // "pre-maint")-\(.target)-<UTC YYYYMMDD-HHMM>\(if (.tags // []) | length > 0 then " --tags " + ((.tags // []) | join(" ")) else "" end), wait until available" end)
           elif .kind == "instance" then "\(.role | pad(10)) : \(.target) <- \(.action) [\(.phase)] (--opt-in-type immediate), wait until available and \(.action) gone"
           elif .kind == "cluster" then "cluster    : \(.target) <- \(.action) [\(.phase), cluster-level] (--opt-in-type immediate), wait for cluster + members"
           elif .kind == "verify" then "verify     : rolling pass done? cluster + all members available, selected actions gone (else STOP, no minor upgrade)"
@@ -126,22 +130,36 @@ def summary_text:
     "Result   : \($s.meta.result) (exit \($s.meta.exit_code))\(if ($s.meta.message // "") != "" then " - " + $s.meta.message else "" end)",
     "Snapshot : \(if ($s.meta.snapshot // "") == "" then "-" else $s.meta.snapshot end)",
     "",
-    "BEFORE:",
-    (minor_lines($s.plan.minor) | "  " + .),
-    "",
-    (pending_lines($s.plan) | "  " + .),
-    "",
-    "MINOR UPGRADE (last step): \($s.minor_result.result // "not run") - \($s.minor_result.detail // "")\(if ($s.minor_result.to // "") != "" then " (target " + $s.minor_result.to + ")" else "" end)",
-    "",
+    (if $s.plan.snapshot_only then
+       "MODE     : SNAPSHOT ONLY (no maintenance actions, no minor upgrade)",
+       (if $s.snapshot_info != null then
+          "  name           : \($s.snapshot_info.name)",
+          "  ARN            : \($s.snapshot_info.arn | dash)",
+          "  status         : \($s.snapshot_info.status | dash)",
+          "  engine         : \($s.snapshot_info.engine | dash) \($s.snapshot_info.engine_version | dash)",
+          "  allocated (GB) : \($s.snapshot_info.allocated_storage_gb | dash)",
+          "  create time    : \($s.snapshot_info.create_time | dash)",
+          "  tags requested : \($s.plan.snapshot_tags | if length == 0 then "-" else join(" ") end)"
+        else "  snapshot details: not available (the snapshot did not complete)" end),
+       ""
+     else
+       "BEFORE:",
+       (minor_lines($s.plan.minor) | "  " + .),
+       "",
+       (pending_lines($s.plan) | "  " + .),
+       "",
+       "MINOR UPGRADE (last step): \($s.minor_result.result // "not run") - \($s.minor_result.detail // "")\(if ($s.minor_result.to // "") != "" then " (target " + $s.minor_result.to + ")" else "" end)",
+       "" end),
     ("STEP" | pad(5)) + ("KIND" | pad(14)) + ("TARGET" | pad(30)) + ("ACTIONS" | pad(30)) + ("START (UTC)" | pad(21)) + ("END (UTC)" | pad(21)) + ("DURATION" | pad(10)) + ("RESULT" | pad(10)) + ("BEFORE -> AFTER" | pad(40)) + "DETAIL",
     ($s.steps[] | (.n | tostring | pad(5)) + (.kind | pad(14)) + (.target | pad(30)) + ((.actions // "") | pad(30)) + ((.start_utc // "-") | pad(21))
                   + ((.end_utc // "-") | pad(21)) + (.duration_s | dur | pad(10)) + (.result | pad(10))
                   + ("\(.version_before // "") -> \(.version_after // "")" | pad(40)) + (.detail // "")),
+    (if $s.plan.snapshot_only then empty else
     "",
     "VERSIONS (before -> after):",
     ($s.versions[] | "  \(.resource | pad(32)) \(.before // "-") -> \(.after // "-")"),
     "",
-    (if $s.state_unknown then "PENDING ACTIONS LEFT: unknown (final state could not be read)" elif ($s.remaining | length) > 0 then "PENDING ACTIONS LEFT:", ($s.remaining[] | "  \(.resource): \(.action)\(if .opt_in_status != "" then " [opt-in: " + .opt_in_status + "]" else "" end)") else "PENDING ACTIONS LEFT: none" end),
+    (if $s.state_unknown then "PENDING ACTIONS LEFT: unknown (final state could not be read)" elif ($s.remaining | length) > 0 then "PENDING ACTIONS LEFT:", ($s.remaining[] | "  \(.resource): \(.action)\(if .opt_in_status != "" then " [opt-in: " + .opt_in_status + "]" else "" end)") else "PENDING ACTIONS LEFT: none" end) end),
     (if ($s.failovers | length) > 0 then "", "FAILOVERS SEEN:", ($s.failovers[] | "  \(.at_utc): writer \(.from) -> \(.to)") else empty end);
 
 def summary_csv:
@@ -161,15 +179,17 @@ def plan_html:
   | "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>RDS patch runner plan - \($p.cluster.id | h)</title><style>" + css + "</style></head><body>"
   + "<header><h1>RDS patch runner: \($p.cluster.id | h) - DRY RUN plan (\($m.result | h))</h1><p>\($p.cluster.engine | h) \($p.cluster.version | h) &middot; account \($m.account | h) &middot; profile \($m.profile | h) &middot; \($m.region | h) &middot; created \($m.created_utc | h) UTC &middot; writer \($p.writer | h) &middot; window \($p.cluster.window | h) UTC</p></header><main>"
   + "<p class=\"note\">Read-only dry run: nothing was changed. Re-run with <span class=\"mono\">--execute</span> to apply this plan.</p>"
-  + "<h2>Minor version availability</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th></tr>"
+  + (if $p.snapshot_only then "<h2>Snapshot only</h2><p>Only <span class=\"mono\">create-db-cluster-snapshot \($p.snapshot_prefix | h)-\($p.cluster.id | h)-&lt;UTC YYYYMMDD-HHMM&gt;</span>\(if ($p.snapshot_tags | length) > 0 then " with tags " + ($p.snapshot_tags | join(" ") | h) else "" end) is run, then the tool waits until the snapshot is available. No maintenance actions, no minor upgrade; pending actions and minor versions are not checked.\(if $p.cluster.global != "" then " Member of global database " + ($p.cluster.global | h) + ": the snapshot covers this regional cluster only." else "" end)</p>" else ("<h2>Minor version availability</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th></tr>"
   + ($p.minor | "<tr><td>\(.current | h)</td><td>\(.auto_minor_upgrade | h)</td><td>\(if .up_to_date then "- (up to date)" else (.next | dash) end | h)</td><td>\(if .up_to_date then "- (already latest)" else (.latest | dash) end | h)</td><td>\(if .lookup_ok then (.available | join(", ") | if . == "" then "none" else . end) else "unknown (lookup failed)" end | h)</td><td>\(.mode | h) &rarr; \(if .target != null then (.target + " (runs LAST)") else ("no upgrade step: " + (.note | if . == "" then "none" else . end)) end | h)</td></tr></table>")
+) end)
   + "<h2>Members</h2><table><tr><th>Role</th><th>Instance</th><th>Status</th><th>Class</th><th>Version</th><th>Pending</th></tr>"
   + ($p.members | map("<tr><td>\(if .writer then "writer" else "reader" end)</td><td>\(.id | h)</td><td>\(.status | h)</td><td>\(.class | h)</td><td>\(.version | h)</td><td>\(.actions | acts_txt | h)</td></tr>") | join(""))
   + "<tr><td>cluster</td><td>\($p.cluster.id | h)</td><td>\($p.cluster.status | h)</td><td>-</td><td>\($p.cluster.version | h)</td><td>\($p.cluster_actions | acts_txt | h)</td></tr></table>"
-  + "<h2>Pending maintenance (per resource, in apply order)</h2>"
+  + (if $p.snapshot_only then "" else ("<h2>Pending maintenance (per resource, in apply order)</h2>"
   + ([($p.members[] | . as $mm | .actions[] | {role: (if $mm.writer then "writer" else "reader" end), r: $mm.id} + .), ($p.cluster_actions[] | {role: "cluster", r: $p.cluster.id} + .)]
      | if length == 0 then "<p>none</p>" else "<table><tr><th>Role</th><th>Resource</th><th>Action</th><th>Type</th><th>Selected</th><th>Auto-applied after</th><th>Forced apply</th><th>Description</th></tr>"
        + (map("<tr><td>\(.role)</td><td>\(.r | h)</td><td>\(.action | h)</td><td>\(.action | act_phase | h)</td><td>\(if .selected then "yes" else "<span class=\"warn\">no</span>" end)</td><td>\(.auto_applied_after | dash | h)</td><td>\(.forced_apply | dash | h)</td><td>\(.description | dash | h)</td></tr>") | join("")) + "</table>" end)
+) end)
   + "<h2>Plan (exact execution order)</h2>"
   + (if $p.nothing_to_do then "<p>Nothing to do: no selected pending action and no minor upgrade.</p>"
      else "<table><tr><th>#</th><th>Step</th></tr>" + ($lines | to_entries | map("<tr><td>\(.key + 1)</td><td class=\"mono\">\(.value | h)</td></tr>") | join("")) + "</table>" end)
@@ -186,16 +206,21 @@ def summary_html:
   + ($s.steps | map("<tr><td>\(.n)</td><td>\(.kind | h)</td><td>\(.target | h)</td><td>\(.actions // "" | h)</td><td>\(.start_utc // "-" | h)</td><td>\(.end_utc // "-" | h)</td><td>\(.duration_s | dur)</td>"
        + "<td class=\"\(if .result == "ok" then "ok" elif .result == "failed" or .result == "timeout" then "fail" else "other" end)\">\(.result | h)</td>"
        + "<td>\(.version_before // "" | h) &rarr; \(.version_after // "" | h)</td><td>\(.detail // "" | h)</td></tr>") | join(""))
-  + "</table><h2>Minor version (before)</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th><th>Minor upgrade result</th></tr>"
+  + "</table>" + (if $s.plan.snapshot_only then
+      "<h2>Snapshot (snapshot only - nothing else changed)</h2>" + (if $s.snapshot_info == null then "<p>Snapshot did not complete.</p>" else
+        ($s.snapshot_info | "<table><tr><th>Name</th><td>\(.name | h)</td></tr><tr><th>ARN</th><td>\(.arn | dash | h)</td></tr><tr><th>Status</th><td>\(.status | dash | h)</td></tr><tr><th>Engine</th><td>\(.engine | dash | h) \(.engine_version | dash | h)</td></tr><tr><th>Allocated (GB)</th><td>\(.allocated_storage_gb | dash | h)</td></tr><tr><th>Create time</th><td>\(.create_time | dash | h)</td></tr>")
+        + "<tr><th>Tags requested</th><td>\($s.plan.snapshot_tags | join(" ") | if . == "" then "-" else . end | h)</td></tr></table>" end) else "" end)
+  + (if $s.plan.snapshot_only then "" else ("<h2>Minor version (before)</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th><th>Minor upgrade result</th></tr>"
   + ($s.plan.minor | "<tr><td>\(.current | h)</td><td>\(.auto_minor_upgrade | h)</td><td>\(.next | dash | h)</td><td>\(.latest | dash | h)</td><td>\(if .lookup_ok then (.available | join(", ") | if . == "" then "none (up to date)" else . end) else "unknown" end | h)</td><td>\(.mode | h) &rarr; \(.target | dash | h)</td>")
   + "<td>\($s.minor_result.result // "not run" | h): \($s.minor_result.detail // "" | h)</td></tr></table>"
   + "<h2>Pending maintenance (before)</h2><table><tr><th>Resource</th><th>Action</th><th>Type</th><th>Description</th><th>Auto-applied after</th><th>Forced apply</th></tr>"
   + ([($s.plan.members[] | .id as $r | .actions[] | {r: $r} + .), ($s.plan.cluster_actions[] | {r: $s.plan.cluster.id} + .)]
      | map("<tr><td>\(.r | h)</td><td>\(.action | h)</td><td>\(.action | act_phase | h)</td><td>\(.description | dash | h)</td><td>\(.auto_applied_after | dash | h)</td><td>\(.forced_apply | dash | h)</td></tr>") | join(""))
-  + "</table><h2>Versions</h2><table><tr><th>Resource</th><th>Before</th><th>After</th></tr>"
+  + "</table>") end)
+  + (if $s.plan.snapshot_only then "" else ("<h2>Versions</h2><table><tr><th>Resource</th><th>Before</th><th>After</th></tr>"
   + ($s.versions | map("<tr><td>\(.resource | h)</td><td>\(.before // "-" | h)</td><td>\(.after // "-" | h)</td></tr>") | join("")) + "</table>"
   + "<h2>Pending actions left</h2>" + (if ($s.remaining | length) == 0 then "<p>none</p>" else "<table><tr><th>Resource</th><th>Action</th><th>Opt-in</th></tr>"
-       + ($s.remaining | map("<tr><td>\(.resource | h)</td><td>\(.action | h)</td><td>\(.opt_in_status | h)</td></tr>") | join("")) + "</table>" end)
+       + ($s.remaining | map("<tr><td>\(.resource | h)</td><td>\(.action | h)</td><td>\(.opt_in_status | h)</td></tr>") | join("")) + "</table>" end)) end)
   + (if ($s.failovers | length) > 0 then "<h2>Failovers seen</h2><ul>" + ($s.failovers | map("<li>\(.at_utc | h): writer \(.from | h) &rarr; \(.to | h)</li>") | join("")) + "</ul>" else "" end)
   + "</main></body></html>";
 

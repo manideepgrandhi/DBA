@@ -1,0 +1,23 @@
+2026-10-15 11:29:05 [INFO] rds_patch_runner.sh v1.2.0 EXECUTE run for cluster orders-prod (log ~/rds_patch_runs/orders-prod_20261015_055905.log)
+2026-10-15 11:29:05 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster orders-prod
+Cluster   : orders-prod (aurora-postgresql 15.4, status available, window sun:04:00-sun:04:30 UTC)
+Account   : 123456789012   profile: prod   region: us-east-1
+Writer    : orders-prod-1
+
+MODE      : SNAPSHOT ONLY - no maintenance actions, no minor upgrade (pending actions and minor versions not checked)
+
+MEMBERS   ROLE    INSTANCE                        STATUS      CLASS             VERSION       PENDING
+          reader  orders-prod-2                   available   db.r6g.large      15.4          (not checked)
+          reader  orders-prod-3                   available   db.r6g.large      15.4          (not checked)
+          writer  orders-prod-1                   available   db.r6g.large      15.4          (not checked)
+          cluster orders-prod                     available   -                 15.4          (not checked)
+
+PLAN (snapshot only; nothing else is changed):
+  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM> --tags Key=CreatedBy,Value=rds_patch_runner Key=Ticket,Value=CHG-1234, wait until available
+2026-10-15 11:29:05 [INFO] Starting (confirmed by --yes)
+2026-10-15 11:29:05 [INFO] === step 1: snapshot orders-prod - start
+2026-10-15 11:29:05 [INFO]     snapshot pre-maint-orders-prod-20261015-0559 requested; waiting (aws rds wait, then polling)
+2026-10-15 11:29:05 [INFO]     snapshot ARN: arn:aws:rds:us-east-1:123456789012:cluster-snapshot:pre-maint-orders-prod-20261015-0559
+2026-10-15 11:29:05 [INFO] === step 1: snapshot orders-prod - ok after 0s: snapshot pre-maint-orders-prod-20261015-0559 available
+2026-10-15 11:29:05 [INFO] Done: snapshot pre-maint-orders-prod-20261015-0559 of orders-prod is available (snapshot only, nothing else changed)
+2026-10-15 11:29:05 [INFO] Saved: ~/rds_patch_runs/orders-prod_20261015_055905.summary.txt, ~/rds_patch_runs/orders-prod_20261015_055905.summary.csv, ~/rds_patch_runs/orders-prod_20261015_055905.summary.html, ~/rds_patch_runs/orders-prod_20261015_055905.json, log ~/rds_patch_runs/orders-prod_20261015_055905.log

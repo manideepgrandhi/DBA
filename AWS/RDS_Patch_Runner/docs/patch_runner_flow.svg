@@ -73,6 +73,9 @@
 <text x="1310.0" y="1087.5" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">Verify fails</text>
 <text x="1310.0" y="1110.4" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">-> NO minor upgrade, exit 3</text>
 <line x1="990" y1="1093.0" x2="1086" y2="1093.0" stroke="#c62828" stroke-width="3" marker-end="url(#red)"/>
+<rect x="1090" y="396" width="440" height="78" rx="12" fill="#e6f4ea" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="1310.0" y="429.8" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Snapshot only (--snapshot-only)</text>
+<text x="1310.0" y="451.4" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">runs just step 1, then the summary; no patching</text>
 <rect x="1090" y="1166" width="440" height="110" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
 <text x="1310.0" y="1205.0" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Any time</text>
 <text x="1310.0" y="1226.6" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">Ctrl-C: state reported, what still runs in AWS;</text>
@@ -112,5 +115,5 @@
 <text x="944" y="1449" font-size="17" fill="#1f2933">safety stop</text>
 <rect x="1083" y="1428" width="34" height="28" rx="6" fill="#eef1f5" stroke="#52606d" stroke-width="2.5"/>
 <text x="1127" y="1449" font-size="17" fill="#1f2933">you / start</text>
-<text x="1540" y="1473" text-anchor="end" font-size="14" fill="#7b8794">rds_patch_runner.sh v1.1.0 - dry run is the default; nothing changes without --execute</text>
+<text x="1540" y="1473" text-anchor="end" font-size="14" fill="#7b8794">rds_patch_runner.sh v1.2.0 - dry run is the default; nothing changes without --execute</text>
 </svg>

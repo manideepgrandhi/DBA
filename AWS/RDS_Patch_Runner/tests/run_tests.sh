@@ -48,7 +48,7 @@ check "jq library compiles" "jq -n --arg mode none -f '$ROOT/lib/runner.jq' >/de
 
 echo "== usage (exit 1)"
 "$RUNNER" -h >/dev/null 2>&1; check "-h exit 0" "[[ $? == 0 ]]"
-"$RUNNER" -V 2>&1 | grep -q '1.1.1'; check "-V shows version" "[[ $? == 0 ]]"
+"$RUNNER" -V 2>&1 | grep -q '1.2.0'; check "-V shows version" "[[ $? == 0 ]]"
 run ok --bogus;               check "unknown option -> 1" "[[ $RC == 1 ]]"
 "$RUNNER" -r us-east-1 >/dev/null 2>&1; check "missing --cluster -> 1" "[[ $? == 1 ]]"
 run ok --timeout-min 0;       check "timeout 0 -> 1" "[[ $RC == 1 ]]"
@@ -108,6 +108,66 @@ check "default dir ./rds_patch_runs (absolute paths printed)" "[[ $R == 0 ]] && 
 touch "$d/c"; check "default dir run: zero writes" "[[ \$(jq -r '[.[] | select(test(\"^(apply-pending-maintenance-action|create-db-cluster-snapshot|modify-db-cluster)$\"))] | .[]' '$d/c' | wc -l) == 0 ]]"
 run ok "${EX[@]}" --html
 check "execute --html: summary.html + absolute paths in the last lines" "ls '$ODIR'/orders-prod_*.summary.html >/dev/null && grep -q \"Saved: $ODIR/orders-prod_.*summary.html\" '$OUT' && ! ls '$ODIR'/*_plan.json >/dev/null 2>&1"
+
+echo "== --snapshot-only (v1.2.0)"
+SO=(--snapshot-only)
+snapcalls() { jq -r '[.[] | select(test("^(apply-pending-maintenance-action|create-db-cluster-snapshot|modify-db-cluster)$"))] | .[]' "$CALLS" | paste -sd, ; }
+run ok "${SO[@]}" --html
+check "dry run: exit 0, single snapshot step, zero writes" "[[ $RC == 0 ]] && [[ \$(writes) == 0 ]] && has 'PLAN (snapshot only' && [[ \$(grep -cE '^  [0-9]+\. ' '$OUT') == 1 ]] && has 'pre-maint-orders-prod-<UTC YYYYMMDD-HHMM> --tags Key=CreatedBy,Value=rds_patch_runner'"
+check "dry run: files saved incl. plan.html" "ls '$ODIR'/*_dryrun.log '$ODIR'/*_plan.txt '$ODIR'/*_plan.json '$ODIR'/*_plan.html >/dev/null && jq -e '.plan.snapshot_only == true' '$ODIR'/*_plan.json >/dev/null && grep -q 'Snapshot only' '$ODIR'/*_plan.html"
+check "dry run: no pending / engine-version lookups" "! jq -r '.[]' '$CALLS' | grep -qE '^(describe-pending-maintenance-actions|describe-db-engine-versions)$'"
+run ok "${SO[@]}" "${EX[@]}" --html
+check "execute: exit 0, exactly one write = create-db-cluster-snapshot" "[[ $RC == 0 ]] && [[ \$(snapcalls) == create-db-cluster-snapshot ]]" "got: $(snapcalls)"
+check "execute: default tag passed via --tags" "jq -e 'select(index(\"create-db-cluster-snapshot\")) | .[index(\"--tags\")+1] == \"Key=CreatedBy,Value=rds_patch_runner\"' '$CALLS' >/dev/null"
+check "execute: summary has name, ARN, size, engine version, duration" "grep -q 'ARN            : arn:aws:rds:us-east-1:123456789012:cluster-snapshot:pre-maint-orders-prod-' '$ODIR'/*.summary.txt && grep -q 'allocated (GB) : 120' '$ODIR'/*.summary.txt && grep -q 'aurora-postgresql 15.4' '$ODIR'/*.summary.txt && jq -e '.snapshot_info.arn != \"\" and (.steps | length) == 1 and .steps[0].duration_s != null' '$ODIR'/*[0-9].json >/dev/null && ls '$ODIR'/*.summary.csv '$ODIR'/*.summary.html '$ODIR'/*[0-9].log >/dev/null && grep -q 'Snapshot (snapshot only' '$ODIR'/*.summary.html"
+check "execute: no pending-actions section in summary" "! grep -q 'PENDING ACTIONS LEFT' '$ODIR'/*.summary.txt"
+run ok "${SO[@]}" "${EX[@]}" --snapshot-name-prefix manual --tag Ticket=CHG-1234 --tag 'Owner=dba team' --no-default-tag
+check "prefix + tags (no default tag)" "[[ $RC == 0 ]] && jq -e 'select(index(\"create-db-cluster-snapshot\")) | (.[index(\"--db-cluster-snapshot-identifier\")+1] | test(\"^manual-orders-prod-[0-9]{8}-[0-9]{4}$\")) and .[index(\"--tags\")+1] == \"Key=Ticket,Value=CHG-1234\" and .[index(\"--tags\")+2] == \"Key=Owner,Value=dba team\" and (index(\"Key=CreatedBy,Value=rds_patch_runner\") == null)' '$CALLS' >/dev/null"
+run ok "${SO[@]}" "${EX[@]}" --tag CreatedBy=manideep
+check "own CreatedBy replaces the default" "[[ $RC == 0 ]] && [[ \$(jq -r 'select(index(\"create-db-cluster-snapshot\")) | [.[] | select(startswith(\"Key=CreatedBy\"))] | join(\" \")' '$CALLS') == 'Key=CreatedBy,Value=manideep' ]]"
+run ok "${SO[@]}" --tag 'bad'; check "bad tag -> 1" "[[ $RC == 1 ]]"
+run ok "${SO[@]}" --tag 'aws:x=1'; check "aws: tag key -> 1" "[[ $RC == 1 ]]"
+run ok "${SO[@]}" --tag 'K=a,b'; check "comma in tag value -> 1" "[[ $RC == 1 ]]"
+run ok "${SO[@]}" --snapshot-name-prefix '9bad'; check "bad prefix -> 1" "[[ $RC == 1 ]]"
+run ok "${SO[@]}" --skip-snapshot; check "conflict --skip-snapshot -> 1" "[[ $RC == 1 ]] && has 'conflicts with --skip-snapshot'"
+run ok "${SO[@]}" --action system-update; check "conflict --action -> 1" "[[ $RC == 1 ]] && has 'conflicts with --action'"
+run ok "${SO[@]}" --minor-upgrade none; check "conflict --minor-upgrade -> 1" "[[ $RC == 1 ]] && has 'conflicts with --minor-upgrade'"
+printf 'snapshot_only = yes\nminor_upgrade = latest\naction = all\n' >"$T/so.conf"; run ok --config "$T/so.conf"
+check "config snapshot_only=yes" "[[ $RC == 0 ]] && has 'PLAN (snapshot only'"
+run nothing "${SO[@]}" "${EX[@]}"
+check "nothing pending still snapshots" "[[ $RC == 0 ]] && [[ \$(snapcalls) == create-db-cluster-snapshot ]]"
+run membernotavailable "${SO[@]}" "${EX[@]}"
+check "member not available: reported, snapshot still taken" "[[ $RC == 0 ]] && has 'orders-prod-3=rebooting' && [[ \$(snapcalls) == create-db-cluster-snapshot ]]"
+run global "${SO[@]}" "${EX[@]}"
+check "global member: allowed with a note" "[[ $RC == 0 ]] && has \"member of global database 'pg-global'\" && [[ \$(snapcalls) == create-db-cluster-snapshot ]]"
+run notavailable "${SO[@]}" "${EX[@]}"
+check "cluster not available -> 2, no writes" "[[ $RC == 2 ]] && [[ \$(writes) == 0 ]]"
+run snapfail "${SO[@]}" "${EX[@]}"
+check "snapshot failure -> 3, summary failed" "[[ $RC == 3 ]] && has 'SnapshotQuotaExceeded' && jq -e '.meta.result == \"failed\" and .snapshot_info == null' '$ODIR'/*[0-9].json >/dev/null"
+run snaptimeout "${SO[@]}" --execute --yes --poll-sec 0.2 --timeout-min 0.02
+check "snapshot timeout -> 3, result timeout" "[[ $RC == 3 ]] && jq -e '.steps[0].result == \"timeout\"' '$ODIR'/*[0-9].json >/dev/null"
+run waitgiveup "${SO[@]}" "${EX[@]}"
+check "waiter gives up -> polling -> ok" "[[ $RC == 0 ]] && has 'waiter ended rc=255' && [[ \$(jq -r '.[]' '$CALLS' | grep -c describe-db-cluster-snapshots) -ge 3 ]]"
+run docdb "${SO[@]}" "${EX[@]}"
+check "docdb snapshot-only via docdb CLI" "[[ $RC == 0 ]] && jq -e 'select(index(\"create-db-cluster-snapshot\")) | .[index(\"create-db-cluster-snapshot\")-1] == \"docdb\"' '$CALLS' >/dev/null && [[ \$(snapcalls) == create-db-cluster-snapshot ]]"
+run neptune "${SO[@]}" "${EX[@]}"
+check "neptune snapshot-only" "[[ $RC == 0 ]] && [[ \$(snapcalls) == create-db-cluster-snapshot ]]"
+run ok "${SO[@]}" --execute --poll-sec 0
+check "no TTY + no --yes -> 4, no writes" "[[ $RC == 4 ]] && [[ \$(writes) == 0 ]]"
+if command -v script >/dev/null; then
+    N=$(( N + 1 )); d="$T/case$N"; mkdir -p "$d"
+    printf 'n\n' | MOCK_SCENARIO=ok MOCK_STATE="$d/s.json" MOCK_CALLS="$d/c" RDS_PR_LOCK_DIR="$d/l" \
+        script -qec "'$RUNNER' -P prod -r us-east-1 -c orders-prod --snapshot-only --execute --poll-sec 0 -o '$d/o'" /dev/null >"$d/out" 2>&1; R=$?
+    check "declined at 'Snapshot orders-prod? [y/N]' -> 4" "[[ $R == 4 ]] && grep -q 'Snapshot orders-prod (account' '$d/out' && ! jq -r '.[]' '$d/c' | grep -qx create-db-cluster-snapshot"
+fi
+mkdir -p "$T/lk2"; (sleep 30 & echo $! >"$T/lk2/pid.tmp"); LP="$(cat "$T/lk2/pid.tmp")"
+mkdir -p "$T/lk2/prod_us-east-1_orders-prod.lock"; echo "$LP" >"$T/lk2/prod_us-east-1_orders-prod.lock/pid"
+N=$(( N + 1 )); mkdir -p "$T/case$N"; MOCK_SCENARIO=ok MOCK_STATE="$T/case$N/s.json" MOCK_CALLS="$T/case$N/c" RDS_PR_LOCK_DIR="$T/lk2" \
+    "$RUNNER" -P prod -r us-east-1 -c orders-prod --snapshot-only "${EX[@]}" -o "$T/case$N/o" </dev/null >"$T/case$N/out" 2>&1; R=$?
+check "lock held -> 2, no snapshot" "[[ $R == 2 ]] && grep -q 'Another run' '$T/case$N/out' && ! jq -r '.[]' '$T/case$N/c' | grep -qx create-db-cluster-snapshot"
+kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null
+run ok "${EX[@]}"
+check "normal run also tags its snapshot (default tag)" "[[ $RC == 0 ]] && jq -e 'select(index(\"create-db-cluster-snapshot\")) | .[index(\"--tags\")+1] == \"Key=CreatedBy,Value=rds_patch_runner\"' '$CALLS' >/dev/null"
 
 echo "== preflight aborts (exit 2)"
 run notavailable; check "cluster not available -> 2" "[[ $RC == 2 ]] && has \"status is 'modifying'\""

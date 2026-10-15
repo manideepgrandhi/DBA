@@ -25,7 +25,7 @@ PENDING MAINTENANCE (per resource, in apply order)
   cluster orders-prod                   db-upgrade                DB update               2026-11-01T04:00:00Z  -                     Cluster engine patch
 
 PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):
-  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM>, wait until available
+  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM> --tags Key=CreatedBy,Value=rds_patch_runner, wait until available
   2.  reader     : orders-prod-2 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
   3.  reader     : orders-prod-2 <- os-upgrade [OS update] (--opt-in-type immediate), wait until available and os-upgrade gone
   4.  reader     : orders-prod-3 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone

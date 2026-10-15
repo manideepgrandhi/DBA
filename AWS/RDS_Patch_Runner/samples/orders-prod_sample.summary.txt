@@ -1,8 +1,8 @@
-RDS patch runner summary - rds_patch_runner.sh v1.1.1
+RDS patch runner summary - rds_patch_runner.sh v1.2.0
 Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
-Started  : 2026-10-15 04:12:44   Finished: 2026-10-15 04:12:47   Mode: execute
-Result   : ok (exit 0) - Done: orders-prod patched; pre-maintenance snapshot pre-maint-orders-prod-20261015-0412
-Snapshot : pre-maint-orders-prod-20261015-0412
+Started  : 2026-10-15 05:59:18   Finished: 2026-10-15 05:59:22   Mode: execute
+Result   : ok (exit 0) - Done: orders-prod patched; pre-maintenance snapshot pre-maint-orders-prod-20261015-0559
+Snapshot : pre-maint-orders-prod-20261015-0559
 
 BEFORE:
   MINOR VERSION AVAILABILITY (describe-db-engine-versions, non-major targets only)
@@ -24,14 +24,14 @@ BEFORE:
 MINOR UPGRADE (last step): ok - 15.5 -> 15.10 (target 15.10)
 
 STEP KIND          TARGET                        ACTIONS                       START (UTC)          END (UTC)            DURATION  RESULT    BEFORE -> AFTER                         DETAIL
-1    snapshot      orders-prod                                                 2026-10-15 04:12:44  2026-10-15 04:12:44  0m0s      ok        15.4 -> 15.4                            snapshot pre-maint-orders-prod-20261015-0412 available
-2    reader        orders-prod-2                 system-update                 2026-10-15 04:12:44  2026-10-15 04:12:45  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
-3    reader        orders-prod-2                 os-upgrade                    2026-10-15 04:12:45  2026-10-15 04:12:45  0m0s      ok        15.4 -> 15.4                            status went through maintenance and is available again
-4    reader        orders-prod-3                 system-update                 2026-10-15 04:12:45  2026-10-15 04:12:46  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
-5    cluster       orders-prod                   db-upgrade                    2026-10-15 04:12:46  2026-10-15 04:12:46  0m0s      ok        15.4 -> 15.5                            status went through maintenance and is available again
-6    writer        orders-prod-1                 system-update                 2026-10-15 04:12:46  2026-10-15 04:12:46  0m0s      ok        15.5 -> 15.5                            status went through maintenance and is available again
-7    verify        orders-prod                                                 2026-10-15 04:12:46  2026-10-15 04:12:47  0m1s      ok        15.4 -> 15.5                            nothing selected left pending; cluster and all members available (0 unselected action(s) left)
-8    minor-upgrade orders-prod                   engine-version 15.10          2026-10-15 04:12:47  2026-10-15 04:12:47  0m0s      ok        15.5 -> 15.10                           status went through maintenance and is available again
+1    snapshot      orders-prod                                                 2026-10-15 05:59:19  2026-10-15 05:59:19  0m0s      ok        15.4 -> 15.4                            snapshot pre-maint-orders-prod-20261015-0559 available
+2    reader        orders-prod-2                 system-update                 2026-10-15 05:59:19  2026-10-15 05:59:19  0m0s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+3    reader        orders-prod-2                 os-upgrade                    2026-10-15 05:59:19  2026-10-15 05:59:20  0m1s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+4    reader        orders-prod-3                 system-update                 2026-10-15 05:59:20  2026-10-15 05:59:20  0m0s      ok        15.4 -> 15.4                            status went through maintenance and is available again
+5    cluster       orders-prod                   db-upgrade                    2026-10-15 05:59:20  2026-10-15 05:59:20  0m0s      ok        15.4 -> 15.5                            status went through maintenance and is available again
+6    writer        orders-prod-1                 system-update                 2026-10-15 05:59:21  2026-10-15 05:59:21  0m0s      ok        15.5 -> 15.5                            status went through maintenance and is available again
+7    verify        orders-prod                                                 2026-10-15 05:59:21  2026-10-15 05:59:21  0m0s      ok        15.4 -> 15.5                            nothing selected left pending; cluster and all members available (0 unselected action(s) left)
+8    minor-upgrade orders-prod                   engine-version 15.10          2026-10-15 05:59:21  2026-10-15 05:59:21  0m0s      ok        15.5 -> 15.10                           status went through maintenance and is available again
 
 VERSIONS (before -> after):
   orders-prod                      15.4 -> 15.10

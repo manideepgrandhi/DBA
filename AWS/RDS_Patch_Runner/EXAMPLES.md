@@ -143,3 +143,18 @@ orders-prod_20261015_041241_plan.txt
 * Download everything: `cd ~ && zip -r patch_runs.zip rds_patch_runs` (or zip the folder you passed to `-o`), then download `/home/cloudshell-user/patch_runs.zip`.
 
 See README "Output files" for the full table per mode (dry run / execute / failed / interrupted).
+
+## 12. Snapshot only (no maintenance)
+
+```
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --snapshot-only            # dry run
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --snapshot-only --execute \
+    --snapshot-name-prefix manual --tag Ticket=CHG-1234 --html                       # Snapshot orders-prod? [y/N]
+```
+Dry run output ([sample](samples/snapshot_only_sample_dryrun.log)):
+```
+MODE      : SNAPSHOT ONLY - no maintenance actions, no minor upgrade (pending actions and minor versions not checked)
+PLAN (snapshot only; nothing else is changed):
+  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM> --tags Key=CreatedBy,Value=rds_patch_runner, wait until available
+```
+The execute run creates only the snapshot, waits until it is available, and writes the usual summary files with the snapshot ARN, size and duration ([log](samples/snapshot_only_sample.log), [summary](samples/snapshot_only_sample.summary.txt), [html](samples/snapshot_only_sample.summary.html)). `--snapshot-only` cannot be combined with `--skip-snapshot`, `--action` or `--minor-upgrade`.

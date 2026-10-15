@@ -70,6 +70,27 @@ On each resource the actions are applied **one at a time**: apply, wait until th
 * Only non-major `ValidUpgradeTarget`s from `describe-db-engine-versions` are used; **major upgrades are always refused** (exit 2 at preflight).
 * **Downtime:** an Aurora minor version upgrade restarts **all instances together** (writer and readers at the same time; it is not rolling), so it is the main downtime moment of the run, typically a few minutes. That is why it is a separate, last step. On engine versions that support **zero-downtime patching (ZDP)** (recent Aurora MySQL 2/3 and Aurora PostgreSQL minor versions), Aurora tries to keep client connections open across the engine restart; ZDP is best effort and can fall back to a normal restart, so still plan a window. DocumentDB and Neptune engine upgrades also restart the whole cluster.
 
+## Snapshot only
+
+`--snapshot-only` takes **just the cluster snapshot**, with no maintenance actions and no minor upgrade. Use it before risky changes, or for an ad-hoc backup with the same naming, logging and lock as a patch run.
+
+```
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --snapshot-only                     # dry run: shows the plan, saves the dry-run files
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --snapshot-only --execute           # asks 'Snapshot orders-prod? [y/N]'
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --snapshot-only --execute --yes \
+    --snapshot-name-prefix manual --tag Ticket=CHG-1234 --tag 'Owner=dba team' --html         # manual-orders-prod-<UTC YYYYMMDD-HHMM>
+```
+
+* **Preflight:** the cluster must exist and be `available`. Members are listed with their status but do not need to be `available`. Pending actions and minor versions are **not** looked up (no `DescribePendingMaintenanceActions` / `DescribeDBEngineVersions` calls), and "nothing to do" does not apply.
+* **Global databases:** allowed. The snapshot covers the regional cluster you name, and the plan says so.
+* **Execute:** `create-db-cluster-snapshot`, then the same wait as a patch run (`aws rds wait db-cluster-snapshot-available` inside the step timeout, falling back to polling). This is the only write call. The per-cluster lock is taken, so a snapshot-only run cannot overlap a patch run on the same cluster.
+* **Summary:** the log, `.summary.txt` / `.csv` / `.json`, and `.summary.html` with `--html`. They show the snapshot name, ARN, status, engine and version, allocated storage (GB), create time, the tags requested, and the step's start, end and duration in UTC.
+* **Name:** `<prefix>-<cluster>-<UTC YYYYMMDD-HHMM>`. `--snapshot-name-prefix` defaults to `pre-maint`. It must start with a letter and contain only letters, digits and single hyphens (max 40), for example `manual`. The prefix applies to normal patch runs too.
+* **Tags:** `--tag Key=Value` (repeatable) is passed as `--tags Key=K,Value=V ...`. `CreatedBy=rds_patch_runner` is added unless you set `CreatedBy` yourself or pass `--no-default-tag`. Keys: 1-128 characters from letters, digits and `_ . : / + @ -`, and no `aws:` prefix. Values: up to 256 characters, no commas. Patch-run snapshots get the same tags.
+* **Conflicts (exit 1):** `--snapshot-only` with `--skip-snapshot`, `--action`, or a `--minor-upgrade` other than the default `latest`. In a config file use `snapshot_only = yes`.
+* **Exit codes:** 0 snapshot available, 1 usage, 2 preflight abort (cluster not found or not available, lock held), 3 snapshot failed or timed out, 4 declined, 130 interrupted.
+* DocumentDB and Neptune work the same way (`aws docdb` / `aws neptune create-db-cluster-snapshot`).
+
 ## Steps in detail
 
 | Step | What happens | Stops with |
@@ -115,6 +136,9 @@ Aurora can fail over while an instance is being patched, and the "writer" is a m
 | `-a, --action LIST` | `all` (default), or for example `system-update`, `db-upgrade`, `os-upgrade`, `system-update,db-upgrade`. Unselected actions stay pending and are listed |
 | `--minor-upgrade latest\|V\|none` | Minor version upgrade as the LAST step (default `latest`); `none` skips it; major versions are refused |
 | `--skip-snapshot` | No pre-maintenance snapshot |
+| `--snapshot-only` | Only the cluster snapshot (see "Snapshot only") |
+| `--snapshot-name-prefix P` | Snapshot name prefix (default `pre-maint`) |
+| `--tag Key=Value`, `--no-default-tag` | Snapshot tags (repeatable); the default `CreatedBy=rds_patch_runner` is added unless turned off |
 | `--timeout-min N` | Per-step timeout in minutes (default 60; decimals allowed) |
 | `--poll-sec N` | Poll interval (default 30) |
 | `--grace-sec N` | "Not started by AWS" grace period (default 600) |
@@ -146,6 +170,8 @@ Every run saves its output, dry runs included. The default folder is `./rds_patc
 | Dry run, nothing to do | same three files; `plan.json` has `"result": "nothing-to-do"` | + `_plan.html` |
 | Dry run, preflight abort (exit 2) | `_dryrun.log` + `_plan.json` with `"result": "aborted"`, the error message and `"plan": null` (no plan was built, so no `_plan.txt`/`.html`) | no html |
 | Dry run with `--no-save` | nothing (print only, the pre-1.1.1 behaviour) | - |
+| Snapshot only, dry run (`--snapshot-only`) | `<cluster>_<stamp>_dryrun.log`, `_plan.txt`, `_plan.json` (`plan.snapshot_only: true`, one snapshot step) | + `_plan.html` |
+| Snapshot only, execute (ok / failed / timeout) | `<cluster>_<stamp>.log`, `.summary.txt`, `.summary.csv`, `.json` with the snapshot name, ARN, size, engine version and duration (`snapshot_info`) | + `.summary.html` |
 | Execute, success | `<cluster>_<stamp>.log`, `<cluster>_<stamp>.summary.txt`, `<cluster>_<stamp>.summary.csv`, `<cluster>_<stamp>.json` | + `<cluster>_<stamp>.summary.html` |
 | Execute, failed (exit 3) | same files; result `failed`, the steps run so far, and what is still pending | + `.summary.html` |
 | Execute, interrupted (Ctrl-C / SIGTERM, exit 130) | same files; result `interrupted`, the step that was running | + `.summary.html` |
@@ -176,7 +202,7 @@ See [samples/](samples/): [dry-run log](samples/orders-prod_sample_dryrun.log), 
 
 ## IAM permissions
 
-A dry run needs only the read actions. `--execute` also needs the write actions.
+A dry run needs only the read actions (a `--snapshot-only` run needs only `DescribeDBClusters`, `DescribeDBInstances`, `DescribeDBClusterSnapshots`, `CreateDBClusterSnapshot` and, for the tags, `AddTagsToResource`). `--execute` also needs the write actions.
 
 ```json
 {
@@ -215,7 +241,7 @@ A dry run needs only the read actions. `--execute` also needs the write actions.
 ```
 
 * DocumentDB and Neptune use the same `rds:` IAM actions; the tool calls them through `aws docdb` / `aws neptune`.
-* `rds:ModifyDBCluster` is needed for the minor upgrade (default `--minor-upgrade latest`; not needed with `none`). `rds:DescribeDBEngineVersions` is used by every run, including dry runs. The tool passes no tags, so `rds:AddTagsToResource` is only there for accounts whose SCPs or tag policies make tagging part of create calls; drop it if you don't need it.
+* `rds:ModifyDBCluster` is needed for the minor upgrade (default `--minor-upgrade latest`; not needed with `none`). `rds:DescribeDBEngineVersions` is used by every run, including dry runs. Snapshots are created with tags (`CreatedBy=rds_patch_runner` by default), which needs `rds:AddTagsToResource` on the snapshot ARN; with `--no-default-tag` and no `--tag` you can drop it.
 * **Encrypted clusters:** a same-account snapshot uses the cluster's KMS key and normally needs no extra KMS permission. If your key policy is restrictive, allow `kms:DescribeKey` and `kms:CreateGrant` on that key for the role.
 * Scope the write statement to the clusters you own. Snapshots count against the manual cluster snapshot quota (100 per region by default), and the tool never deletes them.
 
@@ -237,17 +263,18 @@ See [EXAMPLES.md](EXAMPLES.md) for dry run, execute, a cron/no-TTY run, action f
 ## Tests
 
 ```
-tests/run_tests.sh     # 139 checks against the stateful mock (no AWS)
+tests/run_tests.sh     # 169 checks against the stateful mock (no AWS)
 tests/validate_cli.sh  # replays every generated command through the REAL AWS CLI v2 with fake credentials
                        # and a dead endpoint/proxy, runs negative controls, and checks mock output shapes against the CLI's output skeletons
 ```
 
 * The mock (`tests/mock/aws`, Python) keeps state in a JSON file. Statuses advance one "tick" per describe call: available → upgrading → rebooting → available, and a snapshot goes creating → available.
-* Mock scenarios: `ok failover earlyfailover timeout readererror readerfailed notavailable membernotavailable global nothing quick deferred minor docdb neptune waitgiveup snapfail unsupported clusteronly ordered dbtolatest uptodate writerfailed newpending minorfail`. In `ok` the cluster `db-upgrade` moves 15.4 → 15.5 and the minor upgrade then goes to 15.10; in `dbtolatest` the `db-upgrade` reaches 15.10, so the minor step is skipped. The mock rejects an apply on a resource that is not `available`, so overlapping actions would fail the tests.
+* Mock scenarios: `ok failover earlyfailover timeout readererror readerfailed notavailable membernotavailable global nothing quick deferred minor docdb neptune waitgiveup snapfail unsupported clusteronly ordered dbtolatest uptodate writerfailed newpending minorfail snaptimeout`. In `ok` the cluster `db-upgrade` moves 15.4 → 15.5 and the minor upgrade then goes to 15.10; in `dbtolatest` the `db-upgrade` reaches 15.10, so the minor step is skipped. The mock rejects an apply on a resource that is not `available`, so overlapping actions would fail the tests.
 * **Guard:** the tests put the mock first in `PATH` and refuse to start unless `command -v aws` is the mock and reports `(mock)`. Credentials are fake, config files are `/dev/null`, and `HTTP(S)_PROXY` and `AWS_ENDPOINT_URL` point to the closed port 127.0.0.1:9, so even a stray real `aws` cannot reach AWS. `validate_cli.sh` calls the real CLI only through a wrapper that forces `--endpoint-url http://127.0.0.1:9`.
 
 ## Changelog
 
+* 1.2.0: `--snapshot-only` (just the cluster snapshot: cluster must be available, members only reported, global members allowed, no pending/engine-version lookups, confirm `Snapshot <cluster>? [y/N]`, lock, summary with the snapshot ARN, size, engine version and duration); `--snapshot-name-prefix`; `--tag Key=Value` (repeatable) and the default tag `CreatedBy=rds_patch_runner` (`--no-default-tag`), used for patch-run snapshots too; config keys `snapshot_only`, `snapshot_name_prefix`, `tag`, `no_default_tag`.
 * 1.1.1: dry runs now save their output (`_dryrun.log`, `_plan.txt`, `_plan.json`, `_plan.html` with `--html`) to the output folder, including the nothing-to-do and preflight-abort cases; `--no-save` keeps the print-only behaviour; the last log line prints the absolute paths of all files written (dry run and execute); the stamp in file names is UTC.
 * 1.1.0: ONE rolling pass for all pending maintenance, one step per action in the order `system-update` → `os-upgrade` → `db-upgrade` → other/unknown types (readers, then cluster-level, then the writer); the minor upgrade moved to the **end**, after verification, with the target recomputed after the pass (skip if already at latest); `--minor-upgrade` now defaults to `latest` and accepts `none`; the preflight summary and the summary files show minor version availability (current, auto minor upgrade, next, latest, available) and the pending actions with description and auto-applied/forced dates.
 * 1.0.0: first version.

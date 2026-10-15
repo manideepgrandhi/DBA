@@ -1,0 +1,17 @@
+RDS patch runner summary - rds_patch_runner.sh v1.2.0
+Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
+Started  : 2026-10-15 05:59:05   Finished: 2026-10-15 05:59:05   Mode: execute
+Result   : ok (exit 0) - Done: snapshot pre-maint-orders-prod-20261015-0559 of orders-prod is available (snapshot only, nothing else changed)
+Snapshot : pre-maint-orders-prod-20261015-0559
+
+MODE     : SNAPSHOT ONLY (no maintenance actions, no minor upgrade)
+  name           : pre-maint-orders-prod-20261015-0559
+  ARN            : arn:aws:rds:us-east-1:123456789012:cluster-snapshot:pre-maint-orders-prod-20261015-0559
+  status         : available
+  engine         : aurora-postgresql 15.4
+  allocated (GB) : 120
+  create time    : 2026-10-15T05:30:00+00:00
+  tags requested : Key=CreatedBy,Value=rds_patch_runner Key=Ticket,Value=CHG-1234
+
+STEP KIND          TARGET                        ACTIONS                       START (UTC)          END (UTC)            DURATION  RESULT    BEFORE -> AFTER                         DETAIL
+1    snapshot      orders-prod                                                 2026-10-15 05:59:05  2026-10-15 05:59:05  0m0s      ok        15.4 -> 15.4                            snapshot pre-maint-orders-prod-20261015-0559 available

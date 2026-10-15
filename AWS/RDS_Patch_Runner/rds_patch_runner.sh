@@ -15,7 +15,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.1"
+readonly SCRIPT_VERSION="1.2.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PR_LIB:-$SCRIPT_DIR/lib}/runner.jq"
@@ -35,6 +35,10 @@ ASSUME_YES=0
 ACTIONS=(all)
 MINOR="latest"
 SKIP_SNAPSHOT=0
+SNAPSHOT_ONLY=0
+SNAP_PREFIX="pre-maint"
+SNAP_TAGS=()
+NO_DEFAULT_TAG=0
 TIMEOUT_MIN=60
 POLL_SEC=30
 GRACE_SEC=600
@@ -108,6 +112,18 @@ What to apply:
                             re-checked after the pass (a db-upgrade may already have moved the version) and is
                             skipped when already there. Major versions are always refused.
       --skip-snapshot       Do not take the pre-maintenance cluster snapshot (not recommended)
+
+Snapshot only:
+      --snapshot-only       Take ONLY the cluster snapshot (no maintenance, no minor upgrade, no pending-action or
+                            engine-version lookups). Needs the cluster 'available'; members are only reported.
+                            Works for global database members (snapshot of the regional cluster). Dry run by
+                            default; --execute asks 'Snapshot <cluster>? [y/N]'. Conflicts with --skip-snapshot,
+                            --action and a non-default --minor-upgrade.
+      --snapshot-name-prefix P  Snapshot name prefix (default pre-maint): <P>-<cluster>-<UTC YYYYMMDD-HHMM>.
+                            Letters, digits and hyphens; must start with a letter (e.g. manual)
+      --tag Key=Value       Tag the snapshot (create-db-cluster-snapshot --tags)              [repeatable]
+                            CreatedBy=rds_patch_runner is added unless you set CreatedBy yourself
+      --no-default-tag      Do not add CreatedBy=rds_patch_runner
 
 Run control:
       --dry-run             Print the plan only (default)
@@ -191,6 +207,10 @@ load_config() {
             action|actions)         ACTIONS=(); add_list ACTIONS "$val" ;;
             minor_upgrade)          MINOR="$val" ;;
             skip_snapshot)          if is_true "$val"; then SKIP_SNAPSHOT=1; else SKIP_SNAPSHOT=0; fi ;;
+            snapshot_only)          if is_true "$val"; then SNAPSHOT_ONLY=1; else SNAPSHOT_ONLY=0; fi ;;
+            snapshot_name_prefix)   SNAP_PREFIX="$val" ;;
+            tag|tags)               SNAP_TAGS=(); add_list SNAP_TAGS "$val" ;;
+            no_default_tag)         if is_true "$val"; then NO_DEFAULT_TAG=1; else NO_DEFAULT_TAG=0; fi ;;
             timeout_min)            TIMEOUT_MIN="$val" ;;
             poll_sec)               POLL_SEC="$val" ;;
             grace_sec)              GRACE_SEC="$val" ;;
@@ -225,7 +245,7 @@ parse_args() {
         esac
     done
     [[ -n "$CONFIG_FILE" ]] && load_config "$CONFIG_FILE"
-    local opt acts_reset=0
+    local opt acts_reset=0 tags_reset=0
     while (( $# )); do
         opt="$1"
         if [[ "$opt" == --*=* ]]; then set -- "${opt%%=*}" "${opt#*=}" "${@:2}"; opt="$1"; fi
@@ -236,6 +256,10 @@ parse_args() {
             -a|--action)        need_arg "$opt" $#; (( acts_reset )) || ACTIONS=(); acts_reset=1; add_list ACTIONS "$2"; shift 2 ;;
             --minor-upgrade)    need_arg "$opt" $#; MINOR="$2"; shift 2 ;;
             --skip-snapshot)    SKIP_SNAPSHOT=1; shift ;;
+            --snapshot-only)    SNAPSHOT_ONLY=1; shift ;;
+            --snapshot-name-prefix) need_arg "$opt" $#; SNAP_PREFIX="$2"; shift 2 ;;
+            --tag)              need_arg "$opt" $#; (( tags_reset )) || SNAP_TAGS=(); tags_reset=1; SNAP_TAGS+=("$2"); shift 2 ;;
+            --no-default-tag)   NO_DEFAULT_TAG=1; shift ;;
             --dry-run)          EXECUTE=0; shift ;;
             --execute)          EXECUTE=1; shift ;;
             -y|--yes)           ASSUME_YES=1; shift ;;
@@ -286,10 +310,30 @@ validate() {
         [[ "$x" =~ ^[^[:space:]@\;\|\&\$\`]+@[^[:space:]@\;\|\&\$\`]+$ ]] || die 1 "Invalid --alert-email address: $x"
     done
     for x in "${ALERT_WEBHOOKS[@]}"; do [[ "$x" =~ ^https?:// ]] || die 1 "--alert-webhook must be an http(s) URL: $(redact_url "$x")"; done
+    [[ "$SNAP_PREFIX" =~ ^[A-Za-z][A-Za-z0-9-]{0,39}$ && "$SNAP_PREFIX" != *--* && "$SNAP_PREFIX" != *- ]] \
+        || die 1 "Invalid --snapshot-name-prefix '$SNAP_PREFIX' (letter first, then letters/digits/single hyphens, max 40, no trailing hyphen)"
+    local k v have_cb=0; TAG_ARGS=()
+    for x in "${SNAP_TAGS[@]}"; do
+        [[ "$x" == *=* ]] || die 1 "Invalid --tag '$x' (expected Key=Value)"
+        k="${x%%=*}"; v="${x#*=}"
+        [[ "$k" =~ ^[A-Za-z0-9_.:/+@-]{1,128}$ ]] || die 1 "Invalid --tag key '$k' (1-128 of letters, digits, _ . : / + @ -)"
+        [[ "${k,,}" == aws:* ]] && die 1 "Invalid --tag key '$k' (the aws: prefix is reserved)"
+        [[ "$v" =~ ^[A-Za-z0-9_.:/=+@\ -]{0,256}$ ]] || die 1 "Invalid --tag value for '$k' (0-256 of letters, digits, space, _ . : / = + @ -; no commas)"
+        [[ "$k" == CreatedBy ]] && have_cb=1
+        TAG_ARGS+=("Key=$k,Value=$v")
+    done
+    (( have_cb || NO_DEFAULT_TAG )) || TAG_ARGS=("Key=CreatedBy,Value=rds_patch_runner" "${TAG_ARGS[@]}")
+    if (( SNAPSHOT_ONLY )); then
+        (( SKIP_SNAPSHOT )) && die 1 "--snapshot-only conflicts with --skip-snapshot"
+        [[ "${ACTIONS[*]}" == all ]] || die 1 "--snapshot-only conflicts with --action"
+        [[ "$MINOR" == latest ]] || die 1 "--snapshot-only conflicts with --minor-upgrade $MINOR"
+        MINOR=none
+    fi
     TIMEOUT_SEC="$(awk -v v="$TIMEOUT_MIN" 'BEGIN{printf "%d", (v * 60 < 1 ? 1 : v * 60)}')"
     GRACE_SEC="$(awk -v v="$GRACE_SEC" 'BEGIN{printf "%d", v}')"
 }
 
+TAG_ARGS=()
 rjq() {   # rjq <mode> [jq args...]
     local mode="$1"; shift
     jq --arg mode "$mode" -f "$LIB" "$@"
@@ -399,6 +443,7 @@ preflight() {
         *) die 2 "Engine '$engine' is not supported (Aurora PostgreSQL / MySQL, DocumentDB, Neptune clusters only; RDS instances and Multi-AZ DB clusters come later)" ;;
     esac
     [[ "$mode" == serverless ]] && die 2 "Aurora Serverless v1 (EngineMode serverless) is not supported"
+    if (( SNAPSHOT_ONLY )); then preflight_snapshot_only "$global" "$status"; return 0; fi
     [[ -z "$global" ]] || die 2 "$CLUSTER is a member of global database '$global'; global databases are not supported yet (patch secondaries, then the primary, by hand)"
     [[ "$status" == available ]] || die 2 "Cluster $CLUSTER status is '$status', not 'available'; not starting"
     get_members || die 2 "describe-db-instances for $CLUSTER failed: $LAST_ERR"
@@ -436,7 +481,22 @@ preflight() {
     esac
     rjq plan -n --slurpfile cluster "$WORK/cluster.json" --slurpfile members "$WORK/members.json" --slurpfile pma "$WORK/pma.json" \
         --slurpfile ev "$WORK/ev.json" --arg ev_ok "$ev_ok" --arg minor_mode "$MINOR" --arg minor_target "$MINOR_TARGET" --arg minor_note "$MINOR_NOTE" \
+        --arg snapshot_only 0 --arg snap_prefix "$SNAP_PREFIX" --argjson tags "$(json_array "${TAG_ARGS[@]}")" \
         --argjson actions "$(json_array "${ACTIONS[@]}")" >"$WORK/plan.json" || die 2 "Building the plan failed"
+}
+
+# --snapshot-only: cluster must be available, members only reported; no pending / engine-version lookups
+preflight_snapshot_only() {   # <global id> <cluster status>
+    [[ -z "$1" ]] || log_info "$CLUSTER is a member of global database '$1': the snapshot covers this regional cluster only"
+    [[ "$2" == available ]] || die 2 "Cluster $CLUSTER status is '$2', not 'available'; no snapshot taken"
+    get_members || die 2 "describe-db-instances for $CLUSTER failed: $LAST_ERR"
+    local bad; bad="$(jq -r '[.DBInstances[] | select(.DBInstanceStatus != "available") | "\(.DBInstanceIdentifier)=\(.DBInstanceStatus)"] | join(", ")' "$WORK/members.json")"
+    [[ -n "$bad" ]] && log_warn "Member(s) not available (reported only, the snapshot does not need them): $bad"
+    echo '[]' >"$WORK/pma.json"; echo '{}' >"$WORK/ev.json"
+    rjq plan -n --slurpfile cluster "$WORK/cluster.json" --slurpfile members "$WORK/members.json" --slurpfile pma "$WORK/pma.json" \
+        --slurpfile ev "$WORK/ev.json" --arg ev_ok 0 --arg minor_mode none --arg minor_target "" --arg minor_note "--snapshot-only" \
+        --arg snapshot_only 1 --arg snap_prefix "$SNAP_PREFIX" --argjson tags "$(json_array "${TAG_ARGS[@]}")" \
+        --argjson actions '["all"]' >"$WORK/plan.json" || die 2 "Building the plan failed"
 }
 
 # get_minor_targets <current version> <outfile>: non-major upgrade targets newer than current, oldest first
@@ -511,10 +571,11 @@ wait_resource() {
 snap_id() { printf '%s' "$1" | tr -c 'A-Za-z0-9-' '-' | tr -s '-' | sed -E 's/^-+//; s/^(.{0,231}).*/\1/; s/-+$//'; }
 
 step_snapshot() {
-    SNAP_NAME="pre-maint-$(snap_id "$CLUSTER")-$(date -u +%Y%m%d-%H%M)"
+    SNAP_NAME="$SNAP_PREFIX-$(snap_id "$CLUSTER")-$(date -u +%Y%m%d-%H%M)"
     step_begin snapshot "$CLUSTER" "" "$(cluster_field EngineVersion)"
     IN_FLIGHT="cluster snapshot $SNAP_NAME is being created (it continues in AWS if this run stops)"
-    if ! aws_call "$WORK/snap.json" "$SVC" create-db-cluster-snapshot --db-cluster-identifier "$CLUSTER" --db-cluster-snapshot-identifier "$SNAP_NAME"; then
+    if ! aws_call "$WORK/snap.json" "$SVC" create-db-cluster-snapshot --db-cluster-identifier "$CLUSTER" --db-cluster-snapshot-identifier "$SNAP_NAME" \
+            ${TAG_ARGS[0]:+--tags} "${TAG_ARGS[@]}"; then
         step_end failed "create-db-cluster-snapshot $SNAP_NAME: $LAST_ERR" ""; return 3
     fi
     log_info "    snapshot $SNAP_NAME requested; waiting (aws rds wait, then polling)"
@@ -537,6 +598,10 @@ step_snapshot() {
         (( $(now) - start >= TIMEOUT_SEC )) && { step_end timeout "snapshot $SNAP_NAME still '$st' after $(( $(now) - start ))s" ""; return 3; }
         sleep_poll
     done
+    jq -c '.DBClusterSnapshots[0] | {name: .DBClusterSnapshotIdentifier, arn: (.DBClusterSnapshotArn // ""), status: .Status,
+           engine: (.Engine // ""), engine_version: (.EngineVersion // ""), allocated_storage_gb: (.AllocatedStorage // null),
+           create_time: (.SnapshotCreateTime // ""), type: (.SnapshotType // "")}' "$WORK/snapd.json" >"$WORK/snapinfo.json" 2>/dev/null || true
+    log_info "    snapshot ARN: $(jq -r '.arn | if . == "" then "-" else . end' "$WORK/snapinfo.json" 2>/dev/null || echo -)"
     step_end ok "snapshot $SNAP_NAME available" "$(cluster_field EngineVersion)"
 }
 
@@ -719,7 +784,7 @@ write_summary() {   # write_summary <result> <exit> <message>
     touch "$WORK/steps.jsonl" "$WORK/failovers.jsonl"
     local base="${OUTPUT_DIR%/}/${CLUSTER}_${STAMP}"
     jq -n --slurpfile plan "$WORK/plan.json" --slurpfile v "$WORK/verify.json" --slurpfile steps <(jq -cs . "$WORK/steps.jsonl") \
-        --slurpfile fo <(jq -cs . "$WORK/failovers.jsonl") \
+        --slurpfile fo <(jq -cs . "$WORK/failovers.jsonl") --slurpfile si <(if [[ -s "$WORK/snapinfo.json" ]]; then cat "$WORK/snapinfo.json"; else echo null; fi) \
         --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" --arg account "$ACCOUNT" --arg region "$REGION" --arg profile "${PROFILE:-default}" \
         --arg started "$RUN_STARTED" --arg finished "$(utc)" --arg result "$1" --argjson exit "$2" --arg msg "$3" --arg snap "$SNAP_NAME" \
         --arg mode "$( (( EXECUTE )) && echo execute || echo dry-run)" --argjson minor_result "$MINOR_RESULT" '
@@ -727,7 +792,7 @@ write_summary() {   # write_summary <result> <exit> <message>
         | {meta: {script: $script, version: $version, cluster: $p.cluster.id, engine: $p.cluster.engine, account: $account, region: $region,
                   profile: $profile, started_utc: $started, finished_utc: $finished, result: $result, exit_code: $exit, message: $msg,
                   snapshot: $snap, mode: $mode},
-           plan: $p, minor_result: $minor_result, steps: $steps[0], failovers: $fo[0], remaining: $v[0].remaining, state_unknown: ($v[0].unknown // false),
+           plan: $p, snapshot_info: $si[0], minor_result: $minor_result, steps: $steps[0], failovers: $fo[0], remaining: $v[0].remaining, state_unknown: ($v[0].unknown // false),
            versions: ([{resource: $p.cluster.id, before: $p.cluster.version}] + [$p.members[] | {resource: .id, before: .version}]
                       | map(. as $b | $b + {after: ([$v[0].versions_after[] | select(.resource == $b.resource) | .after] | .[0] // "")}))}' \
         >"$base.json" || { log_warn "Writing the summary failed"; return 0; }
@@ -876,13 +941,18 @@ main() {
     if (( ! ASSUME_YES )); then
         if [[ -t 0 ]]; then
             local ans=""
-            read -r -p "Patch $CLUSTER (account $ACCOUNT, $REGION)? [y/N] " ans || true
+            read -r -p "$( (( SNAPSHOT_ONLY )) && echo Snapshot || echo Patch) $CLUSTER (account $ACCOUNT, $REGION)? [y/N] " ans || true
             [[ "${ans,,}" == y || "${ans,,}" == yes ]] || { FINISHED=1; log_warn "Declined - nothing changed"; exit 4; }
         else
             FINISHED=1; die 4 "No terminal to confirm on and --yes not given - nothing changed"
         fi
     fi
     log_info "Starting (confirmed$( (( ASSUME_YES )) && echo " by --yes"))"
+    if (( SNAPSHOT_ONLY )); then
+        echo '{"remaining":[],"versions_after":[],"snapshot_only":true}' >"$WORK/verify.json"
+        step_snapshot || finish 3 failed "Snapshot failed$( [[ -n "$SNAP_NAME" ]] && echo ": $SNAP_NAME")"
+        finish 0 ok "Done: snapshot $SNAP_NAME of $CLUSTER is available (snapshot only, nothing else changed)"
+    fi
     if ! run_steps; then
         finish 3 failed "Step failed: stopped here, later steps were NOT run$( [[ ${#TODO[@]} -gt 0 ]] && echo " (not patched: ${TODO[*]})")"
     fi

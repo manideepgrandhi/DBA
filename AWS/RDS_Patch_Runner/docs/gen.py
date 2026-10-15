@@ -55,6 +55,7 @@ stops=[(t1,100,["STOP: not available","cluster / member not 'available',","globa
 for (ty,h,l) in stops:
     box(sx,ty,sw,h,R[0],R[1],l,tsize=17)
     arrow(cx+cw,ty+h/2,sx-4,ty+h/2,col="#c62828")
+box(sx,t2,sw,78,G[0],G[1],["Snapshot only (--snapshot-only)","runs just step 1, then the summary; no patching"],tsize=16)
 # general safety notes
 ny=t6
 box(sx,ny,sw,110,R[0],R[1],["Any time","Ctrl-C: state reported, what still runs in AWS;","re-run picks up only what is pending"],tsize=16)
@@ -80,7 +81,7 @@ for col,lab in [(B,"check (read-only)"),(G,"action (changes AWS)"),(A,"downtime 
     o.append(f'<text x="{lx+44}" y="{ly+21}" font-size="17" fill="#1f2933">{lab}</text>')
     lx+=44+len(lab)*9+40
 H=ly+70
-o.append(f'<text x="{W-60}" y="{H-25}" text-anchor="end" font-size="14" fill="#7b8794">rds_patch_runner.sh v1.1.0 - dry run is the default; nothing changes without --execute</text>')
+o.append(f'<text x="{W-60}" y="{H-25}" text-anchor="end" font-size="14" fill="#7b8794">rds_patch_runner.sh v1.2.0 - dry run is the default; nothing changes without --execute</text>')
 head=f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
 <defs><marker id="grey" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#52606d"/></marker>
 <marker id="red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c62828"/></marker></defs>

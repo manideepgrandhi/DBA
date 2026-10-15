@@ -1,6 +1,6 @@
-2026-10-15 09:42:48 [INFO] rds_patch_runner.sh v1.1.1 EXECUTE run for cluster orders-prod (log ./rds_patch_runs/orders-prod_20261015_041248.log)
-2026-10-15 09:42:48 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster orders-prod
-2026-10-15 09:42:49 [INFO] Minor: latest is 15.10 (current 15.4); planned as the LAST step
+2026-10-15 11:29:22 [INFO] rds_patch_runner.sh v1.2.0 EXECUTE run for cluster orders-prod (log ~/rds_patch_runs/orders-prod_20261015_055922.log)
+2026-10-15 11:29:22 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster orders-prod
+2026-10-15 11:29:22 [INFO] Minor: latest is 15.10 (current 15.4); planned as the LAST step
 Cluster   : orders-prod (aurora-postgresql 15.4, status available, window sun:04:00-sun:04:30 UTC)
 Account   : 123456789012   profile: prod   region: us-east-1
 Writer    : orders-prod-1
@@ -26,19 +26,20 @@ PENDING MAINTENANCE (per resource, in apply order)
   writer  orders-prod-1                 system-update             system patch            2026-11-01T04:00:00Z  -                     New Operating System update is available
 
 PLAN (exact execution order; ONE rolling pass, then the minor upgrade; stop on the first failure):
-  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM>, wait until available
+  1.  snapshot   : create-db-cluster-snapshot pre-maint-orders-prod-<UTC YYYYMMDD-HHMM> --tags Key=CreatedBy,Value=rds_patch_runner, wait until available
   2.  reader     : orders-prod-2 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
   3.  reader     : orders-prod-3 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
   4.  writer     : orders-prod-1 <- system-update [system patch] (--opt-in-type immediate), wait until available and system-update gone
   5.  verify     : rolling pass done? cluster + all members available, selected actions gone (else STOP, no minor upgrade)
   6.  minor upg  : re-check the latest minor (skip if a DB update already got there), then modify-db-cluster --engine-version 15.10 --apply-immediately (from 15.4; ALL instances restart together), wait until cluster + members available on 15.10
-2026-10-15 09:42:49 [INFO] Starting (confirmed by --yes)
-2026-10-15 09:42:49 [INFO] === step 1: snapshot orders-prod - start
-2026-10-15 09:42:49 [INFO]     snapshot pre-maint-orders-prod-20261015-0412 requested; waiting (aws rds wait, then polling)
-2026-10-15 09:42:49 [INFO] === step 1: snapshot orders-prod - ok after 0s: snapshot pre-maint-orders-prod-20261015-0412 available
-2026-10-15 09:42:49 [INFO] --- reader orders-prod-2: 1 action(s) back to back: system-update
-2026-10-15 09:42:49 [INFO] === step 2: reader orders-prod-2 (system-update) - start
-2026-10-15 09:42:49 [INFO]     apply-pending-maintenance-action system-update --opt-in-type immediate on orders-prod-2
-2026-10-15 09:42:49 [INFO] === step 2: reader orders-prod-2 (system-update) - failed after 0s: apply system-update: An error occurred (InvalidDBInstanceState) when calling the apply-pending-maintenance-action operation: Instance orders-prod-2 is not in a valid state for this operation.
-2026-10-15 09:42:49 [ERROR] Step failed: stopped here, later steps were NOT run (not patched: orders-prod-2 orders-prod-3 orders-prod-1)
-2026-10-15 09:42:49 [INFO] Saved: ~/rds_patch_runs/orders-prod_20261015_041248.summary.txt, ~/rds_patch_runs/orders-prod_20261015_041248.summary.csv, ~/rds_patch_runs/orders-prod_20261015_041248.json, log ~/rds_patch_runs/orders-prod_20261015_041248.log
+2026-10-15 11:29:22 [INFO] Starting (confirmed by --yes)
+2026-10-15 11:29:22 [INFO] === step 1: snapshot orders-prod - start
+2026-10-15 11:29:22 [INFO]     snapshot pre-maint-orders-prod-20261015-0559 requested; waiting (aws rds wait, then polling)
+2026-10-15 11:29:22 [INFO]     snapshot ARN: arn:aws:rds:us-east-1:123456789012:cluster-snapshot:pre-maint-orders-prod-20261015-0559
+2026-10-15 11:29:22 [INFO] === step 1: snapshot orders-prod - ok after 0s: snapshot pre-maint-orders-prod-20261015-0559 available
+2026-10-15 11:29:22 [INFO] --- reader orders-prod-2: 1 action(s) back to back: system-update
+2026-10-15 11:29:22 [INFO] === step 2: reader orders-prod-2 (system-update) - start
+2026-10-15 11:29:22 [INFO]     apply-pending-maintenance-action system-update --opt-in-type immediate on orders-prod-2
+2026-10-15 11:29:22 [INFO] === step 2: reader orders-prod-2 (system-update) - failed after 0s: apply system-update: An error occurred (InvalidDBInstanceState) when calling the apply-pending-maintenance-action operation: Instance orders-prod-2 is not in a valid state for this operation.
+2026-10-15 11:29:22 [ERROR] Step failed: stopped here, later steps were NOT run (not patched: orders-prod-2 orders-prod-3 orders-prod-1)
+2026-10-15 11:29:23 [INFO] Saved: ~/rds_patch_runs/orders-prod_20261015_055922.summary.txt, ~/rds_patch_runs/orders-prod_20261015_055922.summary.csv, ~/rds_patch_runs/orders-prod_20261015_055922.json, log ~/rds_patch_runs/orders-prod_20261015_055922.log

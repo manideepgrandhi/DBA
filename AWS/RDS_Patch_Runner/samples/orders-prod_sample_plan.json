@@ -1,13 +1,13 @@
 {
   "meta": {
     "script": "rds_patch_runner.sh",
-    "version": "1.1.1",
+    "version": "1.2.0",
     "mode": "dry-run",
     "cluster": "orders-prod",
     "account": "123456789012",
     "region": "us-east-1",
     "profile": "prod",
-    "created_utc": "2026-10-15 04:12:41",
+    "created_utc": "2026-10-15 05:59:18",
     "result": "dry-run",
     "message": "dry run only - nothing changed"
   },
@@ -130,11 +130,20 @@
     },
     "not_selected": [],
     "minor_to": "15.10",
+    "snapshot_only": false,
+    "snapshot_prefix": "pre-maint",
+    "snapshot_tags": [
+      "Key=CreatedBy,Value=rds_patch_runner"
+    ],
     "nothing_to_do": false,
     "steps": [
       {
         "kind": "snapshot",
         "target": "orders-prod",
+        "prefix": "pre-maint",
+        "tags": [
+          "Key=CreatedBy,Value=rds_patch_runner"
+        ],
         "n": 1
       },
       {

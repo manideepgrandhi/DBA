@@ -13,6 +13,10 @@ action = all
 #   latest (default) | an exact minor such as 15.10 | none (skip). Major versions are always refused.
 minor_upgrade = latest
 skip_snapshot = false
+# snapshot_only = no                 # yes: take only the cluster snapshot (no maintenance, no minor upgrade)
+# snapshot_name_prefix = pre-maint   # snapshot name: <prefix>-<cluster>-<UTC YYYYMMDD-HHMM>
+# tag = Ticket=CHG-1234,Owner=dba-team   # snapshot tags (comma-separated Key=Value)
+# no_default_tag = false             # true: do not add CreatedBy=rds_patch_runner
 
 # Waiting
 timeout_min = 60                   # per step

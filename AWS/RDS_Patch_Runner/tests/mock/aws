@@ -9,7 +9,7 @@ Scenarios: ok failover earlyfailover timeout readererror readerfailed notavailab
            nothing quick deferred minor docdb neptune waitgiveup snapfail unsupported clusteronly
            ordered (several action types per resource, scrambled) dbtolatest (db-upgrade moves the cluster to the
            latest minor) uptodate (already on the latest minor) writerfailed newpending (a new action appears
-           during the pass -> verify fails) minorfail (modify-db-cluster rejected)
+           during the pass -> verify fails) minorfail (modify-db-cluster rejected) snaptimeout (snapshot stays creating)
 Minor targets (describe-db-engine-versions): aurora 15.5, 15.6, 15.10 (+16.4 major); docdb none; neptune 1.3.2.0,
 1.3.2.1 (+1.4.0.0 major).  In 'ok' the cluster db-upgrade moves the version 15.4 -> 15.5.
 An apply on a resource that is not 'available' (or still applying another action) is rejected, like AWS does.
@@ -202,6 +202,8 @@ elif op == "create-db-cluster-snapshot":
                                  "SnapshotType": "manual", "Engine": C["engine"]}}
 elif op == "wait db-cluster-snapshot-available":
     sid = params.get("--db-cluster-snapshot-identifier")
+    if scen == "snaptimeout":
+        S["snapshots"][sid] = ["creating"]; save(); print("\nWaiter DBClusterSnapshotAvailable failed: Max attempts exceeded", file=sys.stderr); sys.exit(255)
     if scen == "waitgiveup":
         save(); print("\nWaiter DBClusterSnapshotAvailable failed: Max attempts exceeded", file=sys.stderr); sys.exit(255)
     S["snapshots"][sid] = ["available"]; save(); sys.exit(0)
@@ -210,7 +212,10 @@ elif op == "describe-db-cluster-snapshots":
     if sid not in S["snapshots"]: err("DBClusterSnapshotNotFoundFault", "not found")
     t = S["snapshots"][sid]
     stt = t.pop(0) if len(t) > 1 else t[0]
-    out = {"DBClusterSnapshots": [{"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": C["id"], "Status": stt}]}
+    out = {"DBClusterSnapshots": [{"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": C["id"], "Status": stt,
+            "DBClusterSnapshotArn": f"arn:aws:rds:{region}:{ACCT}:cluster-snapshot:{sid}", "Engine": C["engine"],
+            "EngineVersion": C["version"], "AllocatedStorage": 120, "SnapshotType": "manual",
+            **({"SnapshotCreateTime": "2026-10-15T05:30:00+00:00"} if stt == "available" else {})}]}
 elif op == "describe-db-engine-versions":
     if params.get("--engine") != C["engine"]: err("InvalidParameterValue", "engine")
     vk = lambda v: [int(x) for x in v.split(".")]
