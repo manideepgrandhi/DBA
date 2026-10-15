@@ -62,7 +62,7 @@ HOOK="http://127.0.0.1:$(cat "$PORT_FILE")/hooks/T000/SECRET"
 
 echo "== usage / validation"
 t help 0 fleet --help;                 has help out 'Exit codes'; has help out 'read-only'; has help out '--no-version-check'; hasnt help out 'apply-opt-in'
-t version 0 fleet --version;           has version out '1\.4\.0'
+t version 0 fleet --version;           has version out '1\.4\.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -166,6 +166,14 @@ jqt fleet_json '.rows[] | select(.identifier == "orders-prod-2") | .minor_upgrad
 jqt fleet_json '[.rows[] | select(.identifier == "crm-sql-prod")][0] | .auto_minor_upgrade == "false" and .latest_minor_version == "15.00.4430.1.v1" and (.minor_upgrade_command | startswith("aws rds modify-db-instance --db-instance-identifier crm-sql-prod --engine-version 15.00.4430.1.v1 "))'
 jqt fleet_json '.rows[] | select(.identifier == "web-mysql-prod") | .latest_minor_version == "8.0.42" and (.minor_targets | index("8.4.5") | not)'
 jqt fleet_json '.rows[] | select(.identifier == "payments-ams") | .next_minor_version == "8.0.mysql_aurora.3.06.1" and .latest_minor_version == "8.0.mysql_aurora.3.08.0"'
+echo "-- oracle patch lines (MOCK_SCENARIO=oracle: erp-oracle-prod on 19.0.0.0.ru-2026-07.mrp-2026-07.r1)"
+t ora 11 oracle "${ALL3[@]}" -F json -v
+jqt ora '.rows[] | select(.identifier == "erp-oracle-prod") | .latest_minor_version == "19.0.0.0.ru-2026-07.mrp-2026-07.r2" and .minor_targets == ["19.0.0.0.ru-2026-07.mrp-2026-07.r2"] and .next_minor_version == "19.0.0.0.ru-2026-07.mrp-2026-07.r2"'
+jqt ora '.rows[] | select(.identifier == "erp-oracle-prod") | (.minor_upgrade_note | contains("excluded 19.0.0.0.ru-2026-07.spb-2026-07.r1 (different patch line spb; current is mrp)")) and (.minor_upgrade_note | contains("excluded 26.0.0.0.ru-2026-07.spb-1.r1 (different major version 26; current is 19)"))'
+jqt ora '.rows[] | select(.identifier == "erp-oracle-prod") | .minor_upgrade_command | contains("--engine-version 19.0.0.0.ru-2026-07.mrp-2026-07.r2 ")'
+has ora err 'DEBUG.*erp-oracle-prod: excluded .*spb-2026-07.r1'
+t ora_any 11 oracle "${ALL3[@]}" -F json --oracle-any-patch-line
+jqt ora_any '.rows[] | select(.identifier == "erp-oracle-prod") | .minor_targets == ["19.0.0.0.ru-2026-07.spb-2026-07.r1","19.0.0.0.ru-2026-07.mrp-2026-07.r2"] and (.minor_upgrade_note | contains("different major version 26"))'
 jqt fleet_json '.rows[] | select(.identifier == "reporting-pg") | .latest_minor_version == "15.16" and .minor_versions_available == "15.8, 15.10, 15.12, ..., 15.15, 15.16 (7 versions)"'
 jqt fleet_json '.rows[] | select(.identifier == "dev-apg") | .auto_minor_upgrade == "false" and .next_minor_version == "15.10" and .latest_minor_version == "15.13" and (.minor_upgrade_command | startswith("aws rds modify-db-cluster --db-cluster-identifier dev-apg "))'
 jqt fleet_json '.rows[] | select(.identifier == "graph-neptune") | .minor_upgrade_command == "aws neptune modify-db-cluster --db-cluster-identifier graph-neptune --engine-version 1.3.4.0 --region ap-south-1 --profile prod"'

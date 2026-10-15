@@ -48,7 +48,7 @@ check "jq library compiles" "jq -n --arg mode none -f '$ROOT/lib/runner.jq' >/de
 
 echo "== usage (exit 1)"
 "$RUNNER" -h >/dev/null 2>&1; check "-h exit 0" "[[ $? == 0 ]]"
-"$RUNNER" -V 2>&1 | grep -q '1.2.0'; check "-V shows version" "[[ $? == 0 ]]"
+"$RUNNER" -V 2>&1 | grep -q '1.2.1'; check "-V shows version" "[[ $? == 0 ]]"
 run ok --bogus;               check "unknown option -> 1" "[[ $RC == 1 ]]"
 "$RUNNER" -r us-east-1 >/dev/null 2>&1; check "missing --cluster -> 1" "[[ $? == 1 ]]"
 run ok --timeout-min 0;       check "timeout 0 -> 1" "[[ $RC == 1 ]]"
@@ -177,8 +177,21 @@ run global "${EX[@]}"; check "global member -> 2" "[[ $RC == 2 ]] && has 'global
 run unsupported; check "non-Aurora engine -> 2" "[[ $RC == 2 ]] && has 'not supported'"
 MOCK_STATE="$T/nf.json" "$RUNNER" -r us-east-1 -c other-cluster -o "$T/nfout" </dev/null >"$T/nf" 2>&1; R=$?
 check "cluster not found -> 2" "[[ $R == 2 ]] && grep -q 'DBClusterNotFoundFault' '$T/nf'" 2>/dev/null
-run ok --minor-upgrade 15.99; check "invalid minor target -> 2" "[[ $RC == 2 ]] && has 'not a valid minor (non-major) upgrade target' && has '15.5,15.6,15.10'"
+run ok --minor-upgrade 15.99; check "invalid minor target -> 2" "[[ $RC == 2 ]] && has 'not a valid minor upgrade target' && has '15.5,15.6,15.10'"
 run ok --minor-upgrade 16.4; check "major version refused -> 2" "[[ $RC == 2 ]]"
+echo "== same-major safety net + Oracle patch lines (lib/versions.jq)"
+run crossmajor; check "crossmajor: latest stays 15.10, 16.2 shown as not offered" "[[ $RC == 0 ]] && has 'latest minor           : 15.10' && has 'not offered            : excluded 16.2 (different major version 16; current is 15)' && has 'latest -> 15.10 (runs LAST'"
+run crossmajor --minor-upgrade 16.2; check "crossmajor: --minor-upgrade 16.2 refused -> 2" "[[ $RC == 2 ]] && has 'not a valid minor upgrade target'"
+mt() {   # mt <engine> <current> <targets csv> -> selected minor targets (csv)
+    jq -n --arg e "$1" --arg c "$2" --arg t "$3" '{DBEngineVersions: [{Engine: $e, EngineVersion: $c,
+        ValidUpgradeTarget: [$t | split(",")[] | {Engine: $e, EngineVersion: ., IsMajorVersionUpgrade: false}]}]}' >"$T/ev_unit.json"
+    jq -r --arg mode minor_targets --arg cur "$2" -f "$ROOT/lib/runner.jq" "$T/ev_unit.json" | paste -sd,
+}
+O=19.0.0.0.ru-
+check "oracle mrp r1: only mrp r2 (spb and 26.x refused)" "[[ \"\$(mt oracle-ee ${O}2026-07.mrp-2026-07.r1 ${O}2026-07.spb-2026-07.r1,${O}2026-07.mrp-2026-07.r2,26.0.0.0.ru-2026-07.spb-1.r1)\" == ${O}2026-07.mrp-2026-07.r2 ]]"
+check "oracle r9 -> r10 then 2026-10 (r8 never)" "[[ \"\$(mt oracle-ee ${O}2026-07.mrp-2026-07.r9 ${O}2026-10.mrp-2026-10.r1,${O}2026-07.mrp-2026-07.r10,${O}2026-07.mrp-2026-07.r8)\" == ${O}2026-07.mrp-2026-07.r10,${O}2026-10.mrp-2026-10.r1 ]]"
+check "oracle rur stays on rur" "[[ \"\$(mt oracle-ee ${O}2026-01.rur-2026-01.r1 ${O}2026-04.r1,${O}2026-01.rur-2026-04.r1)\" == ${O}2026-01.rur-2026-04.r1 ]]"
+check "aurora-mysql 2 -> 3 refused" "[[ \"\$(mt aurora-mysql 5.7.mysql_aurora.2.12.1 5.7.mysql_aurora.2.12.4,8.0.mysql_aurora.3.10.0)\" == 5.7.mysql_aurora.2.12.4 ]]"
 mkdir -p "$T/lk"; (sleep 30 & echo $! >"$T/lk/pid.tmp"); LP="$(cat "$T/lk/pid.tmp")"
 mkdir -p "$T/lk/prod_us-east-1_orders-prod.lock"; echo "$LP" >"$T/lk/prod_us-east-1_orders-prod.lock/pid"
 N=$(( N + 1 )); mkdir -p "$T/case$N"; MOCK_SCENARIO=ok MOCK_STATE="$T/case$N/s.json" MOCK_CALLS="$T/case$N/c" RDS_PR_LOCK_DIR="$T/lk" \
@@ -283,7 +296,7 @@ run minor "${EX[@]}" --minor-upgrade none
 check "--minor-upgrade none with nothing pending -> nothing to do" "[[ $RC == 0 ]] && has 'nothing to do' && [[ \$(writes) == 0 ]]"
 run ok "${EX[@]}" --minor-upgrade none
 check "--minor-upgrade none: pass runs, no modify-db-cluster" "[[ $RC == 0 ]] && [[ \$(applies | wc -w) == 5 ]] && ! jq -r '.[]' '$CALLS' | grep -qx modify-db-cluster && has 'no upgrade step (--minor-upgrade none)'"
-run ok --minor-upgrade 16.4; check "major target (dry run) refused -> 2" "[[ $RC == 2 ]] && has 'not a valid minor (non-major)'"
+run ok --minor-upgrade 16.4; check "major target (dry run) refused -> 2" "[[ $RC == 2 ]] && has 'not a valid minor upgrade target'"
 run minorfail "${EX[@]}"
 check "modify-db-cluster rejected -> 3, result failed" "[[ $RC == 3 ]] && has 'Minor upgrade failed' && jq -e '.minor_result.result == \"failed\"' '$ODIR'/orders-prod_*.json >/dev/null"
 

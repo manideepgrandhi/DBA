@@ -1,3 +1,4 @@
+include "versions" {search: "./"};   # lib/versions.jq (shared): version parsing + minor candidate selection
 # lib/report.jq - row building, filtering, summary and rendering for rds_pending_maintenance_report.sh
 # Modes ($mode):
 #   rows     : one (profile, region) collection dir -> array of rows      (slurpfiles pma/instances/clusters/versions)
@@ -33,8 +34,8 @@ def next_window($now):
   | {start: $s, end: ($s + $len * 60)};
 
 # ------------------------------------------------------------------ engine versions
-# "8.0.mysql_aurora.3.05.2" -> [8,0,"mysql","aurora",3,5,2]; numbers compare numerically (16.10 > 16.9)
-def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)];
+# vkey / minor_select live in lib/versions.jq: same major line for every engine, Oracle same patch line
+# (mrp/rur/plain RU/spb) unless --oracle-any-patch-line (--argjson oracle_any true)
 def vsvc($engine): if $engine == "docdb" then "docdb" elif $engine == "neptune" then "neptune" else "rds" end;
 # minor-version info for one resource; $V = {"svc|engine|version": {error, targets}} or null when the check is off
 def minor_info($res; $V):
@@ -46,9 +47,8 @@ def minor_info($res; $V):
        | if $x == null then {status: "not checked"}
          elif $x.error != null then {status: "lookup failed", error: $x.error}
          else {status: "checked",
-               targets: ([$x.targets[] | select((.IsMajorVersionUpgrade // false) == false and ((.Engine // $e) == $e)
-                                               and ((.EngineVersion // "") != "") and ((.EngineVersion | vkey) > ($v | vkey)))
-                          | .EngineVersion] | unique_by(vkey))} end end) as $m
+               sel: ($x.targets | minor_select($e; $v; null; ($ARGS.named.oracle_any // false)))}
+           | . + {targets: .sel.versions} end end) as $m
   | ($m.targets // []) as $t
   | { auto_minor_upgrade: (if $res == null or $res.AutoMinorVersionUpgrade == null then "" else ($res.AutoMinorVersionUpgrade | tostring) end),
       minor_version_status: (if $m.status != "checked" then $m.status elif ($t | length) == 0 then "up to date" else "behind" end),
@@ -58,7 +58,9 @@ def minor_info($res; $V):
       minor_versions_available: (if ($t | length) == 0 then ""
                                  elif ($t | length) <= 6 then ($t | join(", "))
                                  else ($t[0:3] + ["...", $t[-2], $t[-1]] | join(", ")) + " (\($t | length) versions)" end),
-      minor_lookup_error: ($m.error // "") };
+      minor_lookup_error: ($m.error // ""),
+      minor_excluded: ([($m.sel.excluded // [])[] | .reason] | join("; ")),
+      minor_version_warnings: ($m.sel.warnings // []) };
 
 # ------------------------------------------------------------------ role / patch sequence
 # $res = the instance or cluster; $CI = clusters by identifier (incl. clusters of pending member instances)
@@ -175,8 +177,9 @@ def minor_cmd:
 def minor_commands:
   if .minor_behind then
     {minor_upgrade_command: minor_cmd,
-     minor_upgrade_note: ("upgrades \(upgrade_target | "\(.kind) \(.id)") \(.engine_version) -> \(.latest_minor_version); applies in the next maintenance window unless --apply-immediately is added (restart / failover)")}
-  else {minor_upgrade_command: "", minor_upgrade_note: ""} end;
+     minor_upgrade_note: ("upgrades \(upgrade_target | "\(.kind) \(.id)") \(.engine_version) -> \(.latest_minor_version); applies in the next maintenance window unless --apply-immediately is added (restart / failover)"
+                         + (if (.minor_excluded // "") != "" then "; " + .minor_excluded else "" end))}
+  else {minor_upgrade_command: "", minor_upgrade_note: (.minor_excluded // "")} end;
 def apply_commands:
   if .resolved | not then {apply_immediate_command: "",
        apply_note: "resource not found by describe-db-instances/clusters (deleted or renamed?) - verify before applying"}

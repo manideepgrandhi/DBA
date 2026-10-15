@@ -1,4 +1,4 @@
-RDS patch runner summary - rds_patch_runner.sh v1.2.0
+RDS patch runner summary - rds_patch_runner.sh v1.2.1
 Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
 Started  : 2026-10-15 05:59:22   Finished: 2026-10-15 05:59:23   Mode: execute
 Result   : failed (exit 3) - Step failed: stopped here, later steps were NOT run (not patched: orders-prod-2 orders-prod-3 orders-prod-1)

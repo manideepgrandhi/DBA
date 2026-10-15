@@ -65,6 +65,27 @@ Boundary: 2 valid minor targets = COMPLIANT, 3 = NON-COMPLIANT (e.g. 14.12 with 
 * **Deprecated current version:** v1.0.0 still counted newer versions for a version AWS no longer returns; v1.1.0 shows UNKNOWN instead.
 * **Major targets:** a target list can contain major upgrades (e.g. 15.8 → 16.x); only `IsMajorVersionUpgrade=false` entries are counted.
 
+## Oracle versions (patch lines)
+
+RDS for Oracle version strings look like `<major>.0.0.0.ru-<YYYY-MM>[.<line>-<YYYY-MM or N>].r<N>`:
+
+| Example | Patch line |
+|---|---|
+| `19.0.0.0.ru-2026-04.r1` | plain RU (Release Update only) |
+| `19.0.0.0.ru-2026-01.rur-2026-04.r1` | `rur` - Release Update Revision |
+| `19.0.0.0.ru-2026-07.mrp-2026-07.r1` | `mrp` - Monthly Recommended Patches on top of the RU |
+| `19.0.0.0.ru-2026-07.spb-2026-07.r1` | `spb` - Spatial Patch Bundle |
+
+**Rule (default):** an Oracle upgrade target counts only when it has the **same major** (19 -> 19) **and the same patch line** as the current version (mrp -> mrp, rur -> rur, plain RU -> plain RU, spb -> spb). That matches what the RDS console Modify page offers. Within one line, versions are ordered numerically by RU date, then line date / number, then revision (`r2 > r1`, `r10 > r9`); a newer RU on the same line (for example `ru-2026-10.mrp-2026-10.r1` after `ru-2026-07.mrp-2026-07.r10`) counts. The current version and older builds are never counted. Targets on another line are left out and listed in the note, for example `excluded 19.0.0.0.ru-2026-07.spb-2026-07.r1 (different patch line spb; current is mrp)`.
+
+Example (a real case): current `19.0.0.0.ru-2026-07.mrp-2026-07.r1`, RDS lists `...spb-2026-07.r1` and `...mrp-2026-07.r2`. Before 1.1.1 the report picked `spb` as "latest" (letters compared as text, spb > mrp). Now: latest minor `19.0.0.0.ru-2026-07.mrp-2026-07.r2`, 1 behind, COMPLIANT, spb excluded with a note.
+
+In the summary table the Oracle "latest minor" is shown per patch line. Sample: [samples/oracle_patch_lines.txt](samples/oracle_patch_lines.txt) (mock scenario `oracle`).
+
+`--oracle-any-patch-line` (config `oracle_any_patch_line = yes`) restores counting across patch lines (default off). An Oracle version string in an unknown format falls back to the generic compare, and a line is written with `-v`.
+
+**Same-major safety net (every engine):** a target counts only if it is in the current major line, even when AWS lists it with `IsMajorVersionUpgrade=false`: Oracle / SQL Server first part (19, 15 vs 16), PostgreSQL first part (two parts before 10), MySQL / MariaDB first two parts (8.0 vs 8.4), Aurora MySQL the Aurora major (2 vs 3), DocumentDB / Neptune first two parts. Excluded targets are noted (`excluded 16.00.4185.3.v1 (different major version 16; current is 15)`).
+
 ## Other flags (shown; they do not change the status)
 
 * **End of standard support / Extended Support** from `rds describe-db-major-engine-versions` (`SupportedEngineLifecycles`: `open-source-rds-standard-support`, `open-source-rds-extended-support`). `support_flag`:
@@ -175,6 +196,7 @@ No AWS account is used and nothing can reach AWS.
 
 ## Changelog
 
+* **1.1.1** - Oracle: upgrade targets count only on the SAME patch line as the current version (mrp/rur/plain RU/spb; numeric ru date, line date, rN ordering); other lines are excluded with a note. Fixes `...mrp-2026-07.r1` showing `...spb-2026-07.r1` as latest (console offers `...mrp-2026-07.r2`). Same-major safety net for every engine (a target AWS marks as minor but in another major line is excluded and noted). New `--oracle-any-patch-line` / `oracle_any_patch_line`. JSON rows gain `excluded_targets`, `version_warnings`; meta gains `oracle_any_patch_line`. Shared logic in `lib/versions.jq` (same file in RDS_Pending_Maintenance and RDS_Patch_Runner). Mock scenario `oracle`.
 * **1.1.0** - Counting source is now RDS metadata only: per server `describe-db-engine-versions --engine E --engine-version <current>`, `ValidUpgradeTarget[]` with `IsMajorVersionUpgrade=false` (no more full-list counting or own derivation); new column `default_auto_upgrade_target`; current version not returned → UNKNOWN + deprecated note; cache per engine+version+region; summary latest minor = highest valid target seen. Pending maintenance is now `pending_actions_count` + readable `pending_actions` (action, on cluster / member, auto-apply / forced dates, opt-in status, short description), HTML badge with expandable list and IST tooltip, summary by action type, legend.
 * **1.0.0** - First version.
 

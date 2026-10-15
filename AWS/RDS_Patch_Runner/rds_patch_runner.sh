@@ -15,7 +15,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="1.2.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PR_LIB:-$SCRIPT_DIR/lib}/runner.jq"
@@ -476,7 +476,7 @@ preflight() {
                 else log_info "Minor: latest is $MINOR_TARGET (current $cur); planned as the LAST step"; fi ;;
         *)      if [[ "$MINOR" == "$cur" ]]; then MINOR_NOTE="already on $MINOR"; log_info "--minor-upgrade $MINOR: already on that version; no upgrade step"
                 elif grep -qxF -- "$MINOR" "$WORK/minor_targets.txt"; then MINOR_TARGET="$MINOR"
-                else die 2 "--minor-upgrade $MINOR is not a valid minor (non-major) upgrade target from $cur (valid: $(paste -sd, "$WORK/minor_targets.txt" | sed 's/^$/none/'))"
+                else die 2 "--minor-upgrade $MINOR is not a valid minor upgrade target from $cur (same major version and, for Oracle, the same patch line only; valid: $(paste -sd, "$WORK/minor_targets.txt" | sed 's/^$/none/'))"
                 fi ;;
     esac
     rjq plan -n --slurpfile cluster "$WORK/cluster.json" --slurpfile members "$WORK/members.json" --slurpfile pma "$WORK/pma.json" \
@@ -504,7 +504,9 @@ preflight_snapshot_only() {   # <global id> <cluster status>
 ENGINE=""; MINOR_TARGET=""; MINOR_NOTE=""
 get_minor_targets() {
     aws_call "$WORK/ev.json" "$SVC" describe-db-engine-versions --engine "$ENGINE" --engine-version "$1" || return 1
-    rjq minor_targets -r --arg cur "$1" "$WORK/ev.json" >"$2"
+    rjq minor_targets -r --arg cur "$1" --arg engine "$ENGINE" "$WORK/ev.json" >"$2" || return 1
+    local x
+    while IFS= read -r x; do log_info "    minor target $x"; done < <(rjq minor_excluded -r --arg cur "$1" --arg engine "$ENGINE" "$WORK/ev.json")
 }
 
 print_plan() {   # stdout, and into the log file on execute runs
@@ -626,7 +628,7 @@ step_minor() {
         [[ "$to" != "$planned" ]] && log_info "    latest minor is now $to (planned $planned; current $from)"
     else
         to="$MINOR"
-        if [[ "$from" == "$to" ]] || jq -en --arg a "$from" --arg b "$to" 'def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)]; ($a | vkey) >= ($b | vkey)' >/dev/null; then
+        if [[ "$from" == "$to" ]] || [[ "$(rjq vcmp_e -rn --arg e "$ENGINE" --arg a "$from" --arg b "$to")" != -1 ]]; then
             step_begin minor-upgrade "$CLUSTER" "engine-version $to" "$from"
             step_end skipped "already at $from (target $to)" "$from"; minor_result skipped "already at $from" "$from" "$to" "$from"; return 0
         fi

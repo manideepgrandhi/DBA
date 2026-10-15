@@ -1,7 +1,7 @@
 {
   "meta": {
     "script": "rds_patch_compliance_report.sh",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "generated_utc": "2026-10-15 10:53 UTC",
     "generated_local": "2026-10-15 16:23 IST",
     "tz": "Asia/Kolkata",

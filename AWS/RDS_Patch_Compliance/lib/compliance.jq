@@ -1,6 +1,7 @@
 # lib/compliance.jq - logic + rendering for rds_patch_compliance_report.sh
+include "versions" {search: "./"};   # lib/versions.jq: version parsing + minor candidate selection (shared with the sibling tools)
 # Modes ($mode): rows | finalize | text | csv | json | html | alert | vkey_cmp (tests)
-# Every mode gets: $now (epoch), $max_behind, $warn_days, $top_n, $tagcols, $f (filters), $nc_only
+# Every mode gets: $now (epoch), $max_behind, $warn_days, $top_n, $tagcols, $f (filters), $nc_only; optional --argjson oracle_any (default false)
 
 # ------------------------------------------------------------------ helpers
 def h: tostring | @html;
@@ -17,7 +18,7 @@ def epoch_of_day: if . == null then null else (. + "T00:00:00Z" | fromdateiso860
 # before strings, so "19.0.0.0.ru-2024-01.rur-2024-01.r1" and "15.00.4415.2.v1" compare field by field.
 # Aurora MySQL "8.0.mysql_aurora.3.05.2" shares the "8.0.mysql_aurora." prefix inside one major line, so the
 # Aurora release (3.05.2) decides.
-def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // ascii_downcase)];
+# vkey lives in lib/versions.jq; Oracle patch lines are parsed there (ora_parse) and compared numerically.
 def vcmp($a; $b): ($a | vkey) as $x | ($b | vkey) as $y | if $x < $y then -1 elif $x > $y then 1 else 0 end;
 # major line when AWS no longer lists the version (deprecated): same rule AWS uses for MajorEngineVersion
 def derive_major($engine):
@@ -87,8 +88,10 @@ def rows:
       | ($ok and ($e.returned != true)) as $deprecated
       | ($ok and ($e.returned == true)) as $known
       | ($e.major // ($r.version | derive_major($r.engine))) as $major
-      | ([ ($e.targets // [])[] | select(.IsMajorVersionUpgrade == false and ((.Engine // $r.engine) == $r.engine)) ]
-         | unique_by(.EngineVersion) | sort_by(.EngineVersion | vkey)) as $tg
+      # minor_select (lib/versions.jq): same engine, IsMajorVersionUpgrade false, SAME major line (all engines),
+      # Oracle: SAME patch line (mrp/rur/plain RU/spb...) unless --oracle-any-patch-line; newer than current only
+      | (($e.targets // []) | minor_select($r.engine; $r.version; ($e.major // null); ($ARGS.named.oracle_any // false))) as $sel
+      | $sel.targets as $tg
       | ($tg | map(.EngineVersion)) as $newer
       | ([ $tg[] | select(.AutoUpgrade == true) | .EngineVersion ] | .[-1] // null) as $auto_target
       | ([ ($e.targets // [])[] | select(.IsMajorVersionUpgrade == true) ] | length) as $major_targets
@@ -114,6 +117,7 @@ def rows:
          engine: $r.engine, major_version: $major, current_version: $r.version,
          latest_minor_version: (if $known then $latest else null end),
          versions_behind: $behind, newer_versions: $newer, default_auto_upgrade_target: $auto_target, major_upgrade_targets: $major_targets,
+         excluded_targets: $sel.excluded, version_warnings: $sel.warnings,
          compliance_status: $status, auto_minor_upgrade: $auto,
          standard_support_end: $std, extended_support_end: $ext, support_days_left: $days, support_flag: $sflag,
          past_standard_support: ($sflag | startswith("past")), nearing_end_of_support: ($sflag | startswith("standard support ends")),
@@ -127,6 +131,7 @@ def rows:
          note: ([ (if $ok | not then "version lookup failed: \($e.error // "unknown")" else empty end),
                   (if $deprecated then "current version not returned by describe-db-engine-versions (deprecated or not offered in \($region)); no valid upgrade targets known" else empty end),
                   (if $known and ($behind // 0) > 0 then "upgrade applies in the next maintenance window (no --apply-immediately)" + (if $r.rtype == "aurora-cluster" then "; Aurora restarts all instances together" else "" end) else empty end),
+                  ($sel.excluded[] | .reason),
                   (if $auto == "false" then "auto minor upgrade is off" elif $auto == "mixed" then "auto minor upgrade is off on some members" else empty end) ] | join("; "))} ];
 
 # ------------------------------------------------------------------ finalize: filters, sort, summary
@@ -155,7 +160,7 @@ def finalize:
              engines: ($r.rows | group_by(.engine) | map(. as $g | {engine: $g[0].engine, anchor: ("eng-" + ($g[0].engine | gsub("[^A-Za-z0-9]"; "-")))} + ($g | counts)
                          + {pct_compliant: pct(($g | counts).compliant; $g | length),
                             majors: ($g | group_by(.major_version) | map(. as $m | {major: $m[0].major_version} + ($m | counts)
-                                       + {latest_minor: ([$m[].latest_minor_version | select(. != null)] | sort_by(vkey) | .[-1] // null),
+                                       + {latest_minor: ([$m[].latest_minor_version] | latest_of($m[0].engine)),   # Oracle: per patch line
                                           standard_support_end: ([$m[].standard_support_end | select(. != null)] | .[0] // null),
                                           support_flag: ($m[0].support_flag)}) | sort_by(.major | vkey) | reverse)})),
              top_behind: ([$r.rows[] | select(.versions_behind != null and .versions_behind > 0)] | sort_by([-.versions_behind, .identifier]) | .[:$top_n]
@@ -188,7 +193,8 @@ def text:
     "",
     "PER ENGINE / MAJOR VERSION",
     "  " + ("ENGINE" | pad($ew)) + ("MAJOR" | pad(10)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + "  " + ("LATEST MINOR" | pad($vw)) + "SUPPORT",
-    ($s.engines[] | . as $e | .majors[] | "  " + ($e.engine | pad($ew)) + (.major | pad(10)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + "  " + (.latest_minor | dash | pad($vw)) + (.support_flag | dash) + (if .standard_support_end != null then " (standard end \(.standard_support_end))" else "" end)),
+    ($s.engines[] | . as $e | .majors[] | "  " + ($e.engine | pad($ew)) + (.major | pad(10)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + "  " + ((.latest_minor | dash) as $l | if ($l | contains("; ")) then ("per patch line, below" | pad($vw)) else ($l | pad($vw)) end) + (.support_flag | dash) + (if .standard_support_end != null then " (standard end \(.standard_support_end))" else "" end)
+       + ((.latest_minor // "") | if contains("; ") then "\n" + (split("; ") | map("        latest minor, " + .) | join("\n")) else "" end)),
     ($s.engines[] | "  " + (.engine | pad($ew)) + ("all" | pad(10)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + "  \(.pct_compliant)% compliant"),
     "",
     "TOP \($top_n) MOST BEHIND",
@@ -291,4 +297,5 @@ def html:
 
 if $mode == "rows" then rows elif $mode == "finalize" then finalize elif $mode == "text" then text elif $mode == "csv" then csv
 elif $mode == "html" then html elif $mode == "json" then json_out elif $mode == "alert" then alert
-elif $mode == "vkey_cmp" then vcmp($ARGS.named.a; $ARGS.named.b) elif $mode == "major" then ($ARGS.named.a | derive_major($ARGS.named.e)) else . end
+elif $mode == "vkey_cmp" then vcmp($ARGS.named.a; $ARGS.named.b)
+elif $mode == "vcmp_e" then vcmp_e($ARGS.named.e; $ARGS.named.a; $ARGS.named.b) elif $mode == "major" then ($ARGS.named.a | derive_major($ARGS.named.e)) else . end

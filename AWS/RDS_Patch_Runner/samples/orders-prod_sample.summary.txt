@@ -1,4 +1,4 @@
-RDS patch runner summary - rds_patch_runner.sh v1.2.0
+RDS patch runner summary - rds_patch_runner.sh v1.2.1
 Cluster  : orders-prod (aurora-postgresql)  account 123456789012  region us-east-1  profile prod
 Started  : 2026-10-15 05:59:18   Finished: 2026-10-15 05:59:22   Mode: execute
 Result   : ok (exit 0) - Done: orders-prod patched; pre-maintenance snapshot pre-maint-orders-prod-20261015-0559

@@ -1,10 +1,10 @@
+include "versions" {search: "./"};   # lib/versions.jq (shared): version parsing + minor candidate selection
 # lib/runner.jq - plan building and rendering for rds_patch_runner.sh
 # Modes ($mode): plan | plan_text | plan_html | minor_targets | summary_text | summary_csv | summary_html
 # plan inputs (--slurpfile): cluster (describe-db-clusters), members (describe-db-instances), pma (array of
 # {ResourceIdentifier, PendingMaintenanceActionDetails}), ev (describe-db-engine-versions or {});
 # --argjson actions ["all"] | [..]; --arg ev_ok 1|0; --arg minor_mode latest|<version>|none; --arg minor_target
 # "<version>|"; --arg minor_note "<why there is no target>"
-def vkey: [scan("[0-9]+|[A-Za-z]+") | (tonumber? // .)];
 def selected($acts): . as $a | ($acts | index("all")) != null or ($acts | index($a)) != null;
 def ts: if . == null or . == "" then "" else sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") end;
 def act_rows($arn; $pma; $acts):
@@ -20,10 +20,15 @@ def act_rows($arn; $pma; $acts):
 def act_rank: if . == "system-update" then 0 elif . == "os-upgrade" then 1 elif . == "db-upgrade" then 2 else 3 end;
 def act_phase: ["system patch", "OS update", "DB update", "DB update (other type)"][act_rank];
 def order_acts: sort_by([(.action | act_rank), .action]);
-# non-major upgrade targets newer than $cur, oldest first
-def minor_targets($cur):
-  [ .DBEngineVersions[]?.ValidUpgradeTarget[]? | select((.IsMajorVersionUpgrade // false) == false) | .EngineVersion
-    | select(vkey > ($cur | vkey)) ] | unique_by(vkey);
+# non-major upgrade targets newer than $cur, oldest first (lib/versions.jq minor_select): same engine, SAME major
+# line for every engine, and for Oracle the SAME patch line (mrp->mrp, rur->rur, plain RU->plain RU, spb->spb).
+# The runner has no "any patch line" switch: a cross-major or cross-line target is refused even if AWS lists it.
+def minor_sel($cur; $eng):
+  ([.DBEngineVersions[]? | select(.EngineVersion == $cur)] | .[0] // (.DBEngineVersions[0]? // {})) as $ev
+  | (if ($eng // "") != "" then $eng else ($ev.Engine // "") end) as $e
+  | [.DBEngineVersions[]?.ValidUpgradeTarget[]?] | minor_select($e; $cur; ($ev.MajorEngineVersion // null); false);
+def minor_sel($cur): minor_sel($cur; $ARGS.named.engine // "");
+def minor_targets($cur): minor_sel($cur).versions;
 def auto_minor($c; $inst):
   ([$inst[] | .AutoMinorVersionUpgrade | select(. != null)] | unique) as $u
   | if ($u | length) == 1 then ($u[0] | tostring) elif ($u | length) > 1 then "mixed (" + ([$inst[] | "\(.DBInstanceIdentifier)=\(.AutoMinorVersionUpgrade)"] | join(", ")) + ")"
@@ -46,7 +51,8 @@ def plan:
   | ($m0 | map(. + {actions: (act_rows(.arn; $pma; $acts) | order_acts)})
         | sort_by([(if .writer then 1 else 0 end), (.id | ascii_downcase)])) as $members
   | (act_rows($c.DBClusterArn; $pma; $acts) | order_acts) as $cacts
-  | (if $A.ev_ok == "1" then ($A.ev[0] // {} | minor_targets($c.EngineVersion)) else null end) as $mt
+  | (if $A.ev_ok == "1" then ($A.ev[0] // {} | minor_sel($c.EngineVersion; $c.Engine)) else null end) as $ms
+  | ($ms.versions // null) as $mt
   | ( [ {kind: "snapshot", target: $c.DBClusterIdentifier, prefix: ($A.snap_prefix // "pre-maint"), tags: ($A.tags // [])} ]
       + ([$members[] | select(.writer | not) | act_steps("instance"; "reader"; .id; .arn; .actions)] | add // [])
       + act_steps("cluster"; "cluster"; $c.DBClusterIdentifier; $c.DBClusterArn; $cacts)
@@ -63,6 +69,7 @@ def plan:
       minor: {current: $c.EngineVersion, auto_minor_upgrade: auto_minor($c; $inst),
               lookup_ok: ($A.ev_ok == "1"), available: ($mt // []), next: (($mt // [])[0] // null), latest: (($mt // [])[-1] // null),
               up_to_date: ($A.ev_ok == "1" and (($mt // []) | length) == 0),
+              excluded: [($ms.excluded // [])[] | .reason], warnings: ($ms.warnings // []),
               mode: $A.minor_mode, target: (if $A.minor_target == "" then null else $A.minor_target end), note: ($A.minor_note // "")},
       not_selected: ([$cacts[], $members[].actions[] | select(.selected | not) | .action] | unique),
       minor_to: $A.minor_target,
@@ -83,6 +90,7 @@ def minor_lines($m):
    else "  next minor             : \(if $m.up_to_date then "- (up to date)" else $m.next end)",
         "  latest minor           : \(if $m.up_to_date then "- (already on the latest minor)" else $m.latest end)",
         "  available minors       : \(if $m.up_to_date then "none" else ($m.available | join(", ")) end)" end),
+  (($m.excluded // [])[] | "  not offered            : " + .),
   "  --minor-upgrade        : \($m.mode) -> \(if $m.target != null then $m.target + " (runs LAST, after the rolling pass is verified)" else "no upgrade step (" + ($m.note | if . == "" then "none" else . end) + ")" end)";
 def pending_lines($p):
   ([ ($p.members[] | . as $m | .actions[] | {role: (if $m.writer then "writer" else "reader" end), res: $m.id} + .),
@@ -224,5 +232,7 @@ def summary_html:
   + (if ($s.failovers | length) > 0 then "<h2>Failovers seen</h2><ul>" + ($s.failovers | map("<li>\(.at_utc | h): writer \(.from | h) &rarr; \(.to | h)</li>") | join("")) + "</ul>" else "" end)
   + "</main></body></html>";
 
-if $mode == "plan" then plan elif $mode == "minor_targets" then minor_targets($ARGS.named.cur)[] elif $mode == "plan_text" then plan_text elif $mode == "summary_text" then summary_text
+if $mode == "plan" then plan elif $mode == "minor_targets" then minor_targets($ARGS.named.cur)[]
+elif $mode == "minor_excluded" then (minor_sel($ARGS.named.cur) | ([.excluded[] | .reason] + .warnings)[])
+elif $mode == "vcmp_e" then vcmp_e($ARGS.named.e; $ARGS.named.a; $ARGS.named.b) elif $mode == "plan_text" then plan_text elif $mode == "summary_text" then summary_text
 elif $mode == "summary_csv" then summary_csv elif $mode == "summary_html" then summary_html elif $mode == "plan_html" then plan_html else . end

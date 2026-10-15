@@ -10,6 +10,7 @@ Scenarios: ok failover earlyfailover timeout readererror readerfailed notavailab
            ordered (several action types per resource, scrambled) dbtolatest (db-upgrade moves the cluster to the
            latest minor) uptodate (already on the latest minor) writerfailed newpending (a new action appears
            during the pass -> verify fails) minorfail (modify-db-cluster rejected) snaptimeout (snapshot stays creating)
+           crossmajor (16.2 listed as a minor target of 15.4: excluded by the same-major safety net)
 Minor targets (describe-db-engine-versions): aurora 15.5, 15.6, 15.10 (+16.4 major); docdb none; neptune 1.3.2.0,
 1.3.2.1 (+1.4.0.0 major).  In 'ok' the cluster db-upgrade moves the version 15.4 -> 15.5.
 An apply on a resource that is not 'available' (or still applying another action) is rejected, like AWS does.
@@ -221,6 +222,7 @@ elif op == "describe-db-engine-versions":
     vk = lambda v: [int(x) for x in v.split(".")]
     minors, major = {"docdb": ([], None), "neptune": (["1.3.2.0", "1.3.2.1"], "1.4.0.0")}.get(C["engine"], (["15.5", "15.6", "15.10"], "16.4"))
     cur = params.get("--engine-version", C["version"])
+    if scen == "crossmajor": minors = minors + ["16.2"]   # AWS lists a 16.x target WITHOUT IsMajorVersionUpgrade: must be refused
     tg = [{"Engine": C["engine"], "EngineVersion": v, "IsMajorVersionUpgrade": False, "AutoUpgrade": False} for v in minors if vk(v) > vk(cur)]
     if major: tg.append({"Engine": C["engine"], "EngineVersion": major, "IsMajorVersionUpgrade": True})
     out = {"DBEngineVersions": [{"Engine": C["engine"], "EngineVersion": params.get("--engine-version"), "ValidUpgradeTarget": tg}]}

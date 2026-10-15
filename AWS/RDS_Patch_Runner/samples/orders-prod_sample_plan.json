@@ -1,7 +1,7 @@
 {
   "meta": {
     "script": "rds_patch_runner.sh",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "mode": "dry-run",
     "cluster": "orders-prod",
     "account": "123456789012",

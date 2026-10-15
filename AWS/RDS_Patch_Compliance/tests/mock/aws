@@ -3,7 +3,7 @@
 
 Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2.37); validate_cli.sh checks that.
 Lifecycle dates are relative to now. Env:
-  MOCK_SCENARIO = fleet (default) | empty | lookupfail | nolc | lcfail | accessdenied | badcreds | large
+  MOCK_SCENARIO = fleet (default) | empty | lookupfail | nolc | lcfail | accessdenied | badcreds | large | oracle
   MOCK_LARGE_N  = instances for 'large' (default 3000) ; MOCK_LOG = JSONL of argv
   MOCK_DEFAULT_REGION = answer for `aws configure get region`
 Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1 fleet), (none) -> prod,
@@ -137,6 +137,32 @@ TGT = {
 }
 
 
+# ---- MOCK_SCENARIO=oracle: Oracle patch lines + cross-major targets mislabelled as minor (IsMajorVersionUpgrade false)
+O = "19.0.0.0.ru-%s"
+if SCEN == "oracle":
+    CAT["oracle-ee"] = fam("19", [O % x for x in (
+        "2026-07.mrp-2026-07.r1", "2026-07.mrp-2026-07.r2", "2026-07.spb-2026-07.r1",          # user's real case
+        "2026-01.rur-2026-01.r1", "2026-01.rur-2026-04.r1", "2026-04.rur-2026-04.r1", "2026-04.r1", "2026-07.r1",
+        "2026-04.mrp-2026-04.r1", "2026-10.r1", "2026-07.mrp-2026-07.r1",
+        "2026-07.mrp-2026-07.r8", "2026-07.mrp-2026-07.r9", "2026-07.mrp-2026-07.r10", "2026-10.mrp-2026-10.r1")]) \
+        + [("19.0.0.0.custom-build", "19"), ("19.0.0.0.custom-build2", "19"), ("26.0.0.0.ru-2026-07.spb-1.r1", "26")]
+    CAT["oracle-ee"] = list(dict.fromkeys(CAT["oracle-ee"]))
+    CAT["sqlserver-se"] += [("15.00.4440.1.v1", "15.00")]
+    CAT["mysql"] += [("8.0.44", "8.0")]
+    F = False
+    TGT.update({
+        ("oracle-ee", O % "2026-07.mrp-2026-07.r1"): [(O % "2026-07.spb-2026-07.r1", F, F), (O % "2026-07.mrp-2026-07.r2", F, F)],
+        ("oracle-ee", O % "2026-01.rur-2026-01.r1"): [(O % "2026-01.rur-2026-04.r1", F, F), (O % "2026-04.rur-2026-04.r1", F, F),
+                                                    (O % "2026-04.r1", F, F), (O % "2026-04.mrp-2026-04.r1", F, F)],
+        ("oracle-ee", O % "2026-04.r1"): [(O % "2026-07.r1", F, F), (O % "2026-07.mrp-2026-07.r1", F, F), (O % "2026-10.r1", F, F)],
+        ("oracle-ee", O % "2026-07.mrp-2026-07.r9"): [(O % "2026-07.mrp-2026-07.r8", F, F), (O % "2026-07.mrp-2026-07.r10", F, F),
+                                                    (O % "2026-10.mrp-2026-10.r1", F, F), ("26.0.0.0.ru-2026-07.spb-1.r1", F, F)],
+        ("oracle-ee", "19.0.0.0.custom-build"): [("19.0.0.0.custom-build2", F, F)],
+        ("sqlserver-se", "15.00.4430.1.v1"): [("15.00.4440.1.v1", F, F), ("16.00.4185.3.v1", F, F)],
+        ("mysql", "8.0.43"): [("8.0.44", F, F), ("8.4.6", F, F)],
+        ("aurora-mysql", "5.7.mysql_aurora.2.12.1"): [("5.7.mysql_aurora.2.12.4", F, F), (AMY % "3.10.0", F, F)],
+    })
+
 def targets(eng, v, major):
     if (eng, v) in TGT:
         return TGT[(eng, v)]
@@ -242,6 +268,16 @@ if SCEN == "large" and REGION == "us-east-1" and PROFILE in ("", "prod"):
     vers = ["16.3", "16.4", "16.6", "16.8", "16.9", "16.10"]
     for k in range(n):
         inst("bulk-pg-%05d" % k, "postgres", vers[k % 6], tg=tags("prod", "team-%d" % (k % 7), "bulk-app-with-a-long-name-%d" % k))
+elif SCEN == "oracle" and REGION == "us-east-1" and PROFILE in ("", "prod"):
+    T = tags("prod", "dba", "ora")
+    inst("ora-mrp", "oracle-ee", O % "2026-07.mrp-2026-07.r1", tg=T)
+    inst("ora-rur", "oracle-ee", O % "2026-01.rur-2026-01.r1", tg=T)
+    inst("ora-ru", "oracle-ee", O % "2026-04.r1", tg=T)
+    inst("ora-r9", "oracle-ee", O % "2026-07.mrp-2026-07.r9", tg=T)
+    inst("ora-odd", "oracle-ee", "19.0.0.0.custom-build", tg=T)
+    inst("sql15", "sqlserver-se", "15.00.4430.1.v1", tg=T)
+    inst("my80", "mysql", "8.0.43", tg=T)
+    cluster("amy2", "aurora-mysql", "5.7.mysql_aurora.2.12.1", ["amy2-1"], T)
 elif SCEN != "empty" and REGION == "us-east-1" and PROFILE in ("", "prod"):
     P = tags("prod", "payments", "pay")
     cluster("pay-aurora-pg16", "aurora-postgresql", "16.9", ["pay-aurora-pg16-1", "pay-aurora-pg16-2"], P)

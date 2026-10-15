@@ -87,9 +87,38 @@ vct 10.11.10 1 10.11.9;  vct 1.3.10.0 1 1.3.4.0
 mj postgres 16.4 16; mj postgres 9.6.24 9.6; mj aurora-postgresql 15.10 15; mj mysql 8.0.36 8.0; mj aurora-mysql 8.0.mysql_aurora.3.05.2 8.0
 mj sqlserver-se 15.00.4410.1.v1 15.00; mj oracle-ee 19.0.0.0.ru-2025-01.rur-2025-01.r1 19; mj docdb 5.0.0 5.0; mj neptune 1.3.2.1 1.3
 
+echo "== oracle patch lines + same-major safety net (MOCK_SCENARIO=oracle)"
+O=19.0.0.0.ru-
+t ora 0 oracle -P prod -r us-east-1 -F json -v
+rowt ora ora-mrp ".latest_minor_version == \"${O}2026-07.mrp-2026-07.r2\" and .versions_behind == 1 and .compliance_status == \"COMPLIANT\""
+rowt ora ora-mrp ".newer_versions == [\"${O}2026-07.mrp-2026-07.r2\"] and (.note | contains(\"excluded ${O}2026-07.spb-2026-07.r1 (different patch line spb; current is mrp)\"))"
+rowt ora ora-rur ".newer_versions == [\"${O}2026-01.rur-2026-04.r1\", \"${O}2026-04.rur-2026-04.r1\"] and (.excluded_targets | length) == 2"
+rowt ora ora-ru ".newer_versions == [\"${O}2026-07.r1\", \"${O}2026-10.r1\"] and (.note | test(\"patch line mrp; current is plain RU\"))"
+rowt ora ora-r9 ".newer_versions == [\"${O}2026-07.mrp-2026-07.r10\", \"${O}2026-10.mrp-2026-10.r1\"] and .versions_behind == 2"
+rowt ora ora-r9 '(.note | contains("excluded 26.0.0.0.ru-2026-07.spb-1.r1 (different major version 26; current is 19)")) and (.newer_versions | index("19.0.0.0.ru-2026-07.mrp-2026-07.r8")) == null'
+rowt ora ora-odd '.newer_versions == ["19.0.0.0.custom-build2"] and .version_warnings[0] != null'
+has ora err 'DEBUG.*ora-odd: oracle version format not recognised'
+has ora err 'DEBUG.*ora-mrp: excluded .*spb-2026-07.r1'
+rowt ora sql15 '.newer_versions == ["15.00.4440.1.v1"] and (.note | contains("excluded 16.00.4185.3.v1 (different major version 16; current is 15)"))'
+rowt ora my80 '.newer_versions == ["8.0.44"] and (.note | contains("excluded 8.4.6 (different major version 8.4; current is 8.0)"))'
+rowt ora amy2 '.newer_versions == ["5.7.mysql_aurora.2.12.4"] and (.note | test("different major version 3; current is 2"))'
+jqt ora '.summary.engines[] | select(.engine == "oracle-ee") | .majors[0].latest_minor | contains("mrp: 19.0.0.0.ru-2026-10.mrp-2026-10.r1") and contains("plain RU: 19.0.0.0.ru-2026-10.r1")'
+t ora_any 0 oracle -P prod -r us-east-1 -F json --oracle-any-patch-line
+rowt ora_any ora-mrp ".latest_minor_version == \"${O}2026-07.mrp-2026-07.r2\" and .versions_behind == 2 and (.newer_versions | index(\"${O}2026-07.spb-2026-07.r1\")) != null and (.excluded_targets | length) == 0"
+rowt ora_any ora-r9 '(.newer_versions | length) == 2'
+jqt ora_any '.meta.oracle_any_patch_line == true'
+printf 'oracle_any_patch_line = yes\n' >"$OUT/oal.conf"
+t ora_conf 0 oracle --config "$OUT/oal.conf" -P prod -r us-east-1 -F json
+rowt ora_conf ora-mrp '.versions_behind == 2'
+vce() { local r; r="$(jq -n --arg mode vcmp_e --arg e "$1" --arg a "$2" --arg b "$4" --argjson now 0 --argjson max_behind 2 --argjson warn_days 180 --argjson top_n 10 \
+            --argjson tagcols '[]' --argjson f '{}' --argjson nc_only false -f "$LIBJQ")"; if [[ "$r" == "$3" ]]; then ok "vcmp_e $2 vs $4 = $3"; else bad "vcmp_e $2 vs $4 = $r expected $3"; fi; }
+vce oracle-ee "${O}2026-07.mrp-2026-07.r10" 1 "${O}2026-07.mrp-2026-07.r9"
+vce oracle-ee "${O}2026-07.mrp-2026-07.r2" 1 "${O}2026-07.mrp-2026-07.r1"
+vce oracle-ee "${O}2026-10.mrp-2026-10.r1" 1 "${O}2026-07.mrp-2026-07.r10"
+
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.1\.0'
+t version 0 fleet --version;         has version out '1\.1\.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html

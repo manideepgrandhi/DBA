@@ -30,7 +30,7 @@ real() {   # guard: the real CLI only ever runs with a loopback endpoint (or for
 }
 
 for s in "fleet -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1" "fleet -P nonprod --all-regions" \
-         "lookupfail -P prod -r us-east-1" "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1"; do
+         "lookupfail -P prod -r us-east-1" "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "oracle -P prod -r us-east-1"; do
     read -r scen args <<<"$s"
     # shellcheck disable=SC2086
     MOCK_SCENARIO="$scen" PATH="$HERE/mock:$PATH" "$S" $args -F json >/dev/null 2>&1

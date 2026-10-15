@@ -2,7 +2,7 @@
 """Stub `aws` for testing rds_pending_maintenance_report.sh without AWS credentials.
 
 Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2). Dates are relative to now.
-Env: MOCK_SCENARIO = fleet (default) | none | accessdenied | badcreds | large ; MOCK_LOG = JSONL of argv ;
+Env: MOCK_SCENARIO = fleet (default) | none | accessdenied | badcreds | large | oracle (erp-oracle-prod on the mrp line) ; MOCK_LOG = JSONL of argv ;
      MOCK_DEFAULT_REGION = answer for `aws configure get region`.
 Profiles: prod -> 111111111111, nonprod -> 222222222222, (none) -> 111111111111, broken -> invalid credentials.
 """
@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 NOW = datetime.now(timezone.utc)
 SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+ORA_V = "19.0.0.0.ru-2026-07.mrp-2026-07.r1" if SCEN == "oracle" else "19.0.0.0.ru-2024-07.rur-2024-07.r1"
 
 
 def iso(dt):
@@ -152,7 +153,7 @@ if SCEN != "none":
         I.append(inst("payments-ams-1", "aurora-mysql", "8.0.mysql_aurora.3.05.2", "db.serverless", "mon:20:30-mon:21:00",
                       tags("prod", "payments-team", "payments"), "payments-ams"))
         I.append(inst("reporting-pg", "postgres", "15.7", "db.m7g.xlarge", "thu:21:30-thu:22:00", tags("prod", "bi-team", "reporting")))
-        I.append(inst("erp-oracle-prod", "oracle-ee", "19.0.0.0.ru-2024-07.rur-2024-07.r1", "db.r6i.4xlarge", "sat:22:00-sat:23:00",
+        I.append(inst("erp-oracle-prod", "oracle-ee", ORA_V, "db.r6i.4xlarge", "sat:22:00-sat:23:00",
                       tags("prod", "erp-team", "erp")))
         C.append(clus("graph-neptune", "neptune", "1.3.2.1", "fri:19:00-fri:19:30", tags("prod", "data-team", "graph"), ["graph-neptune-1"]))
         P += [{"ResourceIdentifier": arn("cluster", "payments-ams"), "PendingMaintenanceActionDetails": [
@@ -276,6 +277,10 @@ EV = {
     ("postgres", "16.4"): [("16.6", False), ("16.8", False), ("17.4", True)],
     ("oracle-ee", "19.0.0.0.ru-2024-07.rur-2024-07.r1"): [("19.0.0.0.ru-2024-10.rur-2024-10.r1", False),
                                                          ("19.0.0.0.ru-2025-01.rur-2025-01.r1", False)],
+    # user's real case: mrp line; spb (other patch line) and 26.x (other major, mislabelled minor) must be excluded
+    ("oracle-ee", "19.0.0.0.ru-2026-07.mrp-2026-07.r1"): [("19.0.0.0.ru-2026-07.spb-2026-07.r1", False),
+                                                         ("19.0.0.0.ru-2026-07.mrp-2026-07.r2", False),
+                                                         ("26.0.0.0.ru-2026-07.spb-1.r1", False)],
     ("neptune", "1.3.2.1"): [("1.3.3.0", False), ("1.3.4.0", False), ("1.4.0.0", True)],
     ("mariadb", "10.11.8"): [("10.11.9", False), ("10.11.10", False), ("11.4.4", True)],
     ("sqlserver-ex", "16.00.4135.4.v1"): [],

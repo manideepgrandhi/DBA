@@ -16,7 +16,7 @@ export MOCK_LOG="$OUT/calls.jsonl"
 S="$HERE/../rds_pending_maintenance_report.sh"
 
 for s in "fleet -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1 --include-docdb" "fleet -P nonprod --all-regions" \
-         "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "fleet -P prod -r us-west-2"; do
+         "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "fleet -P prod -r us-west-2" "oracle -P prod -r ap-south-1"; do
     read -r scen args <<<"$s"
     # shellcheck disable=SC2086
     MOCK_SCENARIO="$scen" PATH="$HERE/mock:$PATH" "$S" $args -F json >/dev/null 2>&1

@@ -1,4 +1,4 @@
-2026-10-15 11:29:05 [INFO] rds_patch_runner.sh v1.2.0 DRY RUN for cluster orders-prod (read-only; add --execute to patch)
+2026-10-15 11:29:05 [INFO] rds_patch_runner.sh v1.2.1 DRY RUN for cluster orders-prod (read-only; add --execute to patch)
 2026-10-15 11:29:05 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster orders-prod
 Cluster   : orders-prod (aurora-postgresql 15.4, status available, window sun:04:00-sun:04:30 UTC)
 Account   : 123456789012   profile: prod   region: us-east-1

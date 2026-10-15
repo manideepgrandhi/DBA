@@ -17,7 +17,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.1.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PCR_LIB:-$SCRIPT_DIR/lib}/compliance.jq"
@@ -40,6 +40,7 @@ MAX_BEHIND=2
 WARN_DAYS=180
 TOP_N=10
 NC_ONLY=0
+ORACLE_ANY_LINE=0
 FAIL_ON_NC=0
 readonly SLACK_MAX_CHARS=35000
 LOG_FILE=""
@@ -96,6 +97,10 @@ Compliance:
                             current version (default: 2; N+1 or more = NON-COMPLIANT)
       --warn-days N         Flag majors whose standard support ends within N days (default: 180)
       --non-compliant-only  Show only NON-COMPLIANT rows (the summary still counts everything)
+      --oracle-any-patch-line
+                            Oracle: also count targets on OTHER patch lines (e.g. spb when the server is on mrp).
+                            Default off: only the same line counts (mrp->mrp, rur->rur, plain RU->plain RU),
+                            matching the RDS console Modify page. See README "Oracle versions".
       --fail-on-noncompliant  Exit 5 when any NON-COMPLIANT server is found (default: exit 0)
 
 Report:
@@ -179,6 +184,7 @@ load_config() {
             warn_days)              WARN_DAYS="$val" ;;
             top)                    TOP_N="$val" ;;
             non_compliant_only)     if is_true "$val"; then NC_ONLY=1; else NC_ONLY=0; fi ;;
+            oracle_any_patch_line)  if is_true "$val"; then ORACLE_ANY_LINE=1; else ORACLE_ANY_LINE=0; fi ;;
             fail_on_noncompliant)   if is_true "$val"; then FAIL_ON_NC=1; else FAIL_ON_NC=0; fi ;;
             log_file)               LOG_FILE="${val/#\~/$HOME}" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
@@ -226,6 +232,7 @@ parse_args() {
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
             --top)              need_arg "$opt" $#; TOP_N="$2"; shift 2 ;;
             --non-compliant-only) NC_ONLY=1; shift ;;
+            --oracle-any-patch-line) ORACLE_ANY_LINE=1; shift ;;
             --fail-on-noncompliant) FAIL_ON_NC=1; shift ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --config)           shift 2 ;;
@@ -286,6 +293,7 @@ filters_text() {
     (( ${#ENGINES[@]} )) && p+=("engine=$(IFS=,; echo "${ENGINES[*]}")")
     (( ${#IDENTIFIERS[@]} )) && p+=("identifier=$(IFS=,; echo "${IDENTIFIERS[*]}")")
     (( NC_ONLY )) && p+=("non-compliant only")
+    (( ORACLE_ANY_LINE )) && p+=("oracle: any patch line")
     local out="" x
     for x in "${p[@]}"; do out+="${out:+; }$x"; done
     echo "$out"
@@ -296,6 +304,7 @@ rjq() {   # rjq <mode> [extra jq args...]
     local mode="$1"; shift
     TZ="$DISPLAY_TZ" jq --arg mode "$mode" --argjson now "$NOW" --argjson max_behind "$MAX_BEHIND" --argjson warn_days "$WARN_DAYS" \
         --argjson top_n "$TOP_N" --argjson nc_only "$( (( NC_ONLY )) && echo true || echo false)" \
+        --argjson oracle_any "$( (( ORACLE_ANY_LINE )) && echo true || echo false)" \
         --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" -f "$LIB" "$@"
 }
 
@@ -443,6 +452,9 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
         --slurpfile clusters "$d/clusters.json" --slurpfile instances "$d/instances.json" --slurpfile pma "$d/pma.json" \
         --slurpfile ev "$d/ev.json" --slurpfile lc "$d/lc.json" \
         >"$d/rows.json" || die 4 "Building rows failed for ${profile:-default}/$region"
+    local w
+    while IFS= read -r w; do log_debug "[${profile:-default}/$region] $w"; done \
+        < <(jq -r '.[] | . as $x | ((.version_warnings // [])[] | "\($x.identifier): \(.)"), ((.excluded_targets // [])[] | "\($x.identifier): \(.reason)")' "$d/rows.json")
     log_info "[${profile:-default}/$region] $(jq -r 'group_by(.compliance_status) | map("\(.[0].compliance_status)=\(length)") | join(" ") | if . == "" then "no matching servers" else . end' "$d/rows.json")"
 }
 
@@ -496,9 +508,10 @@ build_report() {
         --argjson regions "$(json_array "${ALL_REGIONS_SEEN[@]}" | jq -c 'unique')" --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" \
         --argjson mb "$MAX_BEHIND" --argjson warn "$WARN_DAYS" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
         --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" --argjson lcu "$LC_UNSUPPORTED" \
+        --argjson oal "$( (( ORACLE_ANY_LINE )) && echo true || echo false)" \
         '{script: $script, version: $version, generated_utc: $gu, generated_local: $gl, tz: $tz, host: $host,
           accounts: $accounts, regions: $regions, tag_columns: $tagcols, max_behind: $mb, warn_days: $warn,
-          filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails, lifecycle_api: ($lcu == 0)}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
+          filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails, lifecycle_api: ($lcu == 0), oracle_any_patch_line: $oal}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     REPORT="$WORK/report.json"
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile rows "$WORK/all_rows.json" --slurpfile errors "$WORK/all_errors.json" \
         '{meta: $meta[0], rows: $rows[0], errors: $errors[0]}' >"$WORK/raw_report.json" || die 4 "Assembling the report failed"

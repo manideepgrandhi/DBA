@@ -74,6 +74,7 @@ rec ok -P prod -r us-east-1 "${EX[@]}" --snapshot-only --snapshot-name-prefix ma
 rec docdb -P prod -r us-east-1 "${EX[@]}" --snapshot-only --tag Ticket=CHG-1
 rec neptune -P prod -r us-east-1 "${EX[@]}" --snapshot-only
 rec global -P prod -r us-east-1 "${EX[@]}" --snapshot-only --no-default-tag
+rec crossmajor -P prod -r us-east-1 "${EX[@]}"
 # normalise: identical shape -> one replay (values that vary per run are kept; they are real argv)
 jq -c 'select(.[0] != "--version")' "$T/calls" | sort -u >"$T/uniq"
 echo "  recorded $(wc -l <"$T/calls") calls, $(wc -l <"$T/uniq") distinct"

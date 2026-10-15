@@ -13,6 +13,8 @@ regions = us-east-1,ap-south-1
 max_behind = 2              # COMPLIANT when <= 2 minor versions behind
 warn_days = 180             # flag majors whose standard support ends within 180 days
 # non_compliant_only = no
+# Oracle: also count upgrade targets on other patch lines (spb when on mrp ...). Default no = same line only.
+# oracle_any_patch_line = no
 # fail_on_noncompliant = no  # yes = exit 5 when anything is NON-COMPLIANT
 
 # --- report

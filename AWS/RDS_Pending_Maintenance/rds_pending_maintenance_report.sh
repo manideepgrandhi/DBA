@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.4.0"
+readonly SCRIPT_VERSION="1.4.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PMR_LIB:-$SCRIPT_DIR/lib}/report.jq"
@@ -41,6 +41,7 @@ DISPLAY_TZ="Asia/Kolkata"
 CRIT_DAYS=7
 WARN_DAYS=30
 VERSION_CHECK=1
+ORACLE_ANY_LINE=0
 SPLIT_BY_ENGINE=0
 readonly SLACK_MAX_CHARS=35000
 LOG_FILE=""
@@ -109,6 +110,10 @@ Report:
       --crit-days N         Apply date within N days = CRIT (default: 7; past date = OVERDUE)
       --warn-days N         Apply date within N days = WARN (default: 30; later = INFO, no date = OPTIONAL)
       --split-by-engine     With csv and -o: also write one CSV per engine (<prefix>_<stamp>_<engine>.csv)
+      --oracle-any-patch-line
+                            Oracle: also offer minor targets on OTHER patch lines (e.g. spb when the server is
+                            on mrp). Default off: same line only (mrp->mrp, rur->rur, plain RU->plain RU), like the
+                            RDS console Modify page. Every engine: targets of another major line are never offered.
       --no-version-check    Skip the minor-version lookup (describe-db-engine-versions); the columns
                             auto_minor_upgrade stays, next/latest_minor_version show 'not checked'
                             Printed per row (NEVER run): apply_immediate_command (--opt-in-type immediate,
@@ -195,6 +200,7 @@ load_config() {
             apply_opt_in)           log_warn "Config $file:$lineno: apply_opt_in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored" ;;
             split_by_engine)        if is_true "$val"; then SPLIT_BY_ENGINE=1; else SPLIT_BY_ENGINE=0; fi ;;
             version_check)          if is_true "$val"; then VERSION_CHECK=1; else VERSION_CHECK=0; fi ;;
+            oracle_any_patch_line)  if is_true "$val"; then ORACLE_ANY_LINE=1; else ORACLE_ANY_LINE=0; fi ;;
             log_file)               LOG_FILE="$val" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
             max_attempts)           MAX_ATTEMPTS="$val" ;;
@@ -245,6 +251,7 @@ parse_args() {
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
             --apply-opt-in)     need_arg "$opt" $#; log_warn "--apply-opt-in is no longer used (removed in v1.3.0; only the immediate apply command is printed) - ignored"; shift 2 ;;
             --no-version-check) VERSION_CHECK=0; shift ;;
+            --oracle-any-patch-line) ORACLE_ANY_LINE=1; shift ;;
             --split-by-engine)  SPLIT_BY_ENGINE=1; shift ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --config)           shift 2 ;;
@@ -327,7 +334,8 @@ filters_text() {
 rjq() {   # rjq <mode> [extra jq args...]
     local mode="$1"; shift
     TZ="$DISPLAY_TZ" jq --arg mode "$mode" --argjson now "$NOW" --argjson crit_days "$CRIT_DAYS" --argjson warn_days "$WARN_DAYS" \
-        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" -f "$LIB" "$@"
+        --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" --argjson f "$FILTERS_JSON" \
+        --argjson oracle_any "$( (( ORACLE_ANY_LINE )) && echo true || echo false)" -f "$LIB" "$@"
 }
 
 # ----------------------------------------------------------------------------
@@ -448,6 +456,9 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
         --slurpfile pma "$d/pma.json" --slurpfile instances "$d/instances.json" --slurpfile clusters "$d/clusters.json" \
         --slurpfile versions "$d/versions.json" --argjson vc "$VERSION_CHECK" \
         >"$d/rows.json" || die 4 "Building rows failed for ${profile:-default}/$region"
+    local w
+    while IFS= read -r w; do log_debug "[${profile:-default}/$region] $w"; done \
+        < <(jq -r '[.[] | . as $x | ((.minor_version_warnings // [])[] | "\($x.identifier): \(.)"), (if (.minor_excluded // "") != "" then "\(.identifier): \(.minor_excluded)" else empty end)] | unique[]' "$d/rows.json")
 }
 
 # Engine versions of the resources found: one describe-db-engine-versions per (service, engine, version),
