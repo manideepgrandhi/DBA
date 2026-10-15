@@ -115,7 +115,7 @@ run notavailable "${EX[@]}"; check "not available + execute -> 2, no writes" "[[
 run membernotavailable "${EX[@]}"; check "member not available -> 2" "[[ $RC == 2 ]] && has 'orders-prod-3=rebooting' && [[ \$(writes) == 0 ]]"
 run global "${EX[@]}"; check "global member -> 2" "[[ $RC == 2 ]] && has 'global databases are not supported yet' && [[ \$(writes) == 0 ]]"
 run unsupported; check "non-Aurora engine -> 2" "[[ $RC == 2 ]] && has 'not supported'"
-MOCK_STATE="$T/nf.json" "$RUNNER" -r us-east-1 -c other-cluster </dev/null >"$T/nf" 2>&1; R=$?
+MOCK_STATE="$T/nf.json" "$RUNNER" -r us-east-1 -c other-cluster -o "$T/nfout" </dev/null >"$T/nf" 2>&1; R=$?
 check "cluster not found -> 2" "[[ $R == 2 ]] && grep -q 'DBClusterNotFoundFault' '$T/nf'" 2>/dev/null
 run ok --minor-upgrade 15.99; check "invalid minor target -> 2" "[[ $RC == 2 ]] && has 'not a valid minor (non-major) upgrade target' && has '15.5,15.6,15.10'"
 run ok --minor-upgrade 16.4; check "major version refused -> 2" "[[ $RC == 2 ]]"
