@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1498" viewBox="0 0 1600 1498" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<defs><marker id="grey" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#52606d"/></marker>
+<marker id="red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c62828"/></marker></defs>
+<rect width="1600" height="1498" fill="#ffffff"/>
+<rect width="1600" height="100" fill="#232f3e"/>
+<text x="60" y="52" font-size="34" font-weight="700" fill="#ffffff">RDS Aurora Patch Runner - how it works</text>
+<text x="60" y="84" font-size="18" fill="#c9d1d9">One Aurora / DocumentDB / Neptune cluster: snapshot, one rolling pass (readers, cluster, writer last), verify, then the minor upgrade</text>
+<rect x="90" y="150" width="900" height="78" rx="12" fill="#eef1f5" stroke="#52606d" stroke-width="2.5"/>
+<text x="540.0" y="182.8" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">Start: DBA runs a DRY RUN in AWS CloudShell</text>
+<text x="540.0" y="208.5" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod   (read-only, changes nothing)</text>
+<line x1="540.0" y1="228" x2="540.0" y2="258" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="262" width="900" height="100" rx="12" fill="#e3f0fc" stroke="#1565c0" stroke-width="2.5"/>
+<text x="540.0" y="293.0" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">Preflight checks</text>
+<text x="540.0" y="318.6" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">Cluster + every member 'available'?  Pending maintenance actions per instance / cluster</text>
+<text x="540.0" y="344.3" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">Minor version availability: current, next, latest, all available minors</text>
+<line x1="540.0" y1="362" x2="540.0" y2="392" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="396" width="900" height="78" rx="12" fill="#e3f0fc" stroke="#1565c0" stroke-width="2.5"/>
+<text x="540.0" y="428.8" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">Plan shown, numbered in the exact order it will run</text>
+<text x="540.0" y="454.5" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">Team reviews it, then re-runs with --execute  ->  confirm  Patch orders-prod? [y/N]</text>
+<line x1="540.0" y1="474" x2="540.0" y2="504" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="508" width="900" height="78" rx="12" fill="#e6f4ea" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="540.0" y="540.8" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">1  Snapshot</text>
+<text x="540.0" y="566.5" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">pre-maint-&lt;cluster&gt;-&lt;UTC time&gt;, wait until the snapshot is available</text>
+<line x1="540.0" y1="586" x2="540.0" y2="616" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="620" width="900" height="400" rx="14" fill="#f3faf4" stroke="#2e7d32" stroke-width="2.5" stroke-dasharray="9 6"/>
+<text x="114" y="656" font-size="22" font-weight="700" fill="#2e7d32">2  ONE rolling pass  (one failover pass overall)</text>
+<rect x="114" y="680" width="260" height="95" rx="12" fill="#ffffff" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="244.0" y="711.5" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Readers, one at a time</text>
+<text x="244.0" y="733.1" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">each: system patch -> OS</text>
+<text x="244.0" y="754.7" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">update -> DB update</text>
+<rect x="419" y="680" width="260" height="95" rx="12" fill="#ffffff" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="549.0" y="711.5" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Cluster-level actions</text>
+<text x="549.0" y="733.1" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">same order</text>
+<text x="549.0" y="754.7" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">(e.g. db-upgrade)</text>
+<rect x="724" y="680" width="260" height="95" rx="12" fill="#ffffff" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="854.0" y="711.5" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Writer LAST</text>
+<text x="854.0" y="733.1" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">same order;</text>
+<text x="854.0" y="754.7" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">failover is logged</text>
+<line x1="374" y1="727.5" x2="415" y2="727.5" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<line x1="679" y1="727.5" x2="720" y2="727.5" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<text x="540.0" y="815" text-anchor="middle" font-size="17" fill="#1f2933">After EVERY action: wait until the instance is healthy (available) and that action is gone, then the next.</text>
+<text x="540.0" y="843" text-anchor="middle" font-size="17" fill="#1f2933">The current writer is re-checked before each instance, so the real writer is always patched last.</text>
+<text x="540.0" y="871" text-anchor="middle" font-size="17" fill="#1f2933">Other / unknown action types count as DB updates and go last.</text>
+<text x="540.0" y="899" text-anchor="middle" font-size="15" fill="#52606d">--opt-in-type immediate, one action at a time</text>
+<line x1="540.0" y1="1020" x2="540.0" y2="1050" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="1054" width="900" height="78" rx="12" fill="#e3f0fc" stroke="#1565c0" stroke-width="2.5"/>
+<text x="540.0" y="1086.8" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">3  Verify</text>
+<text x="540.0" y="1112.5" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">Cluster + all members available, nothing selected still pending</text>
+<line x1="540.0" y1="1132" x2="540.0" y2="1162" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="1166" width="900" height="110" rx="12" fill="#fff4e0" stroke="#e08a00" stroke-width="2.5"/>
+<text x="540.0" y="1202.0" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">4  Minor version upgrade to the latest  (the downtime moment)</text>
+<text x="540.0" y="1227.7" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">Re-check the target; skip if already at the latest (a DB update may have got there)</text>
+<text x="540.0" y="1253.3" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">modify-db-cluster --apply-immediately: ALL instances restart together; wait on the new version</text>
+<line x1="540.0" y1="1276" x2="540.0" y2="1306" stroke="#52606d" stroke-width="3" marker-end="url(#grey)"/>
+<rect x="90" y="1310" width="900" height="78" rx="12" fill="#e6f4ea" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="540.0" y="1342.8" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933">5  Summary report + log  (+ optional e-mail / Slack alert)</text>
+<text x="540.0" y="1368.5" text-anchor="middle" font-size="19" font-weight="400" fill="#1f2933">txt / csv / html / json: every step with times, versions before -> after, anything left pending</text>
+<rect x="1090" y="262" width="440" height="100" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="295.0" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">STOP: not available</text>
+<text x="1310.0" y="317.9" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">cluster / member not 'available',</text>
+<text x="1310.0" y="340.9" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">global DB or engine not supported -> exit 2</text>
+<line x1="990" y1="312.0" x2="1086" y2="312.0" stroke="#c62828" stroke-width="3" marker-end="url(#red)"/>
+<rect x="1090" y="508" width="440" height="78" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="541.5" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">STOP: snapshot fails</text>
+<text x="1310.0" y="564.4" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">nothing is patched -> exit 3</text>
+<line x1="990" y1="547.0" x2="1086" y2="547.0" stroke="#c62828" stroke-width="3" marker-end="url(#red)"/>
+<rect x="1090" y="680" width="440" height="95" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="710.5" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">STOP before the writer</text>
+<text x="1310.0" y="733.5" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">a reader fails or times out:</text>
+<text x="1310.0" y="756.4" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">writer and minor upgrade NOT run</text>
+<line x1="990" y1="727.5" x2="1086" y2="727.5" stroke="#c62828" stroke-width="3" marker-end="url(#red)"/>
+<rect x="1090" y="1054" width="440" height="78" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="1087.5" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2933">Verify fails</text>
+<text x="1310.0" y="1110.4" text-anchor="middle" font-size="17" font-weight="400" fill="#1f2933">-> NO minor upgrade, exit 3</text>
+<line x1="990" y1="1093.0" x2="1086" y2="1093.0" stroke="#c62828" stroke-width="3" marker-end="url(#red)"/>
+<rect x="1090" y="1166" width="440" height="110" rx="12" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="1205.0" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Any time</text>
+<text x="1310.0" y="1226.6" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">Ctrl-C: state reported, what still runs in AWS;</text>
+<text x="1310.0" y="1248.2" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">re-run picks up only what is pending</text>
+<rect x="1090" y="1296" width="440" height="78" rx="12" fill="#fff" stroke="#c62828" stroke-width="2.5"/>
+<text x="1310.0" y="1329.8" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Lock</text>
+<text x="1310.0" y="1351.4" text-anchor="middle" font-size="16" font-weight="400" fill="#1f2933">one run per cluster: no double runs</text>
+<rect x="1090" y="805" width="440" height="195" rx="12" fill="#ffffff" stroke="#9aa5b1" stroke-width="2.5"/>
+<text x="1310.0" y="909.1" text-anchor="middle" font-size="21" font-weight="700" fill="#1f2933"></text>
+<text x="1310.0" y="835" text-anchor="middle" font-size="18" font-weight="700" fill="#1f2933">Example: cluster orders-prod</text>
+<rect x="1108" y="855" width="125" height="90" rx="10" fill="#f8fafc" stroke="#2e7d32" stroke-width="2.5"/>
+<ellipse cx="1170" cy="873" rx="22" ry="7" fill="none" stroke="#2e7d32" stroke-width="2"/>
+<path d="M1148 873 v22 a22 7 0 0 0 44 0 v-22" fill="none" stroke="#2e7d32" stroke-width="2"/>
+<text x="1170" y="920" text-anchor="middle" font-size="14" font-weight="700" fill="#2e7d32">reader</text>
+<text x="1170" y="938" text-anchor="middle" font-size="13" fill="#1f2933">orders-prod-2</text>
+<text x="1170" y="970" text-anchor="middle" font-size="14" font-weight="600" fill="#52606d">patched 1st</text>
+<rect x="1248" y="855" width="125" height="90" rx="10" fill="#f8fafc" stroke="#2e7d32" stroke-width="2.5"/>
+<ellipse cx="1310" cy="873" rx="22" ry="7" fill="none" stroke="#2e7d32" stroke-width="2"/>
+<path d="M1288 873 v22 a22 7 0 0 0 44 0 v-22" fill="none" stroke="#2e7d32" stroke-width="2"/>
+<text x="1310" y="920" text-anchor="middle" font-size="14" font-weight="700" fill="#2e7d32">reader</text>
+<text x="1310" y="938" text-anchor="middle" font-size="13" fill="#1f2933">orders-prod-3</text>
+<text x="1310" y="970" text-anchor="middle" font-size="14" font-weight="600" fill="#52606d">patched 2nd</text>
+<rect x="1388" y="855" width="125" height="90" rx="10" fill="#f8fafc" stroke="#1565c0" stroke-width="2.5"/>
+<ellipse cx="1450" cy="873" rx="22" ry="7" fill="none" stroke="#1565c0" stroke-width="2"/>
+<path d="M1428 873 v22 a22 7 0 0 0 44 0 v-22" fill="none" stroke="#1565c0" stroke-width="2"/>
+<text x="1450" y="920" text-anchor="middle" font-size="14" font-weight="700" fill="#1565c0">WRITER</text>
+<text x="1450" y="938" text-anchor="middle" font-size="13" fill="#1f2933">orders-prod-1</text>
+<text x="1450" y="970" text-anchor="middle" font-size="14" font-weight="600" fill="#52606d">patched last</text>
+<text x="90" y="1450" font-size="18" font-weight="700" fill="#1f2933">Legend</text>
+<rect x="180" y="1428" width="34" height="28" rx="6" fill="#e3f0fc" stroke="#1565c0" stroke-width="2.5"/>
+<text x="224" y="1449" font-size="17" fill="#1f2933">check (read-only)</text>
+<rect x="417" y="1428" width="34" height="28" rx="6" fill="#e6f4ea" stroke="#2e7d32" stroke-width="2.5"/>
+<text x="461" y="1449" font-size="17" fill="#1f2933">action (changes AWS)</text>
+<rect x="681" y="1428" width="34" height="28" rx="6" fill="#fff4e0" stroke="#e08a00" stroke-width="2.5"/>
+<text x="725" y="1449" font-size="17" fill="#1f2933">downtime moment</text>
+<rect x="900" y="1428" width="34" height="28" rx="6" fill="#fdecea" stroke="#c62828" stroke-width="2.5"/>
+<text x="944" y="1449" font-size="17" fill="#1f2933">safety stop</text>
+<rect x="1083" y="1428" width="34" height="28" rx="6" fill="#eef1f5" stroke="#52606d" stroke-width="2.5"/>
+<text x="1127" y="1449" font-size="17" fill="#1f2933">you / start</text>
+<text x="1540" y="1473" text-anchor="end" font-size="14" fill="#7b8794">rds_patch_runner.sh v1.1.0 - dry run is the default; nothing changes without --execute</text>
+</svg>
