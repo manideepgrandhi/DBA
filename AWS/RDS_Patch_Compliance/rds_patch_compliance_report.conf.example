@@ -1,0 +1,35 @@
+# rds_patch_compliance_report.sh configuration (key = value; parsed, never sourced).
+# Command-line options override these. Lists are comma-separated. Quotes are optional.
+# Credentials are NOT accepted here; use AWS CLI profiles / SSO / CloudShell's own login.
+
+# --- scope
+profiles = prod,nonprod
+regions = us-east-1,ap-south-1
+# all_regions = yes
+# engines = aurora-*,postgres,sqlserver-*
+# identifiers = prod-*
+
+# --- rule
+max_behind = 2              # COMPLIANT when <= 2 minor versions behind
+warn_days = 180             # flag majors whose standard support ends within 180 days
+# non_compliant_only = no
+# fail_on_noncompliant = no  # yes = exit 5 when anything is NON-COMPLIANT
+
+# --- report
+tag_columns = Environment,Owner,Application
+formats = csv,html,txt
+output_dir = ~/compliance-reports
+prefix = rds_patch_compliance
+top = 10
+tz = Asia/Kolkata
+# log_file = /home/cloudshell-user/compliance-reports/run.log
+
+# --- alerts (optional)
+# alert_emails = dba-team@example.com
+# alert_webhooks = https://hooks.slack.com/services/XXX/YYY/ZZZ
+# alert_webhook_format = slack
+# alert_on = noncompliant
+
+# --- behaviour
+aws_timeout = 30
+max_attempts = 5

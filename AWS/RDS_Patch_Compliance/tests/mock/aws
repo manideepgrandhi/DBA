@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Stub `aws` for testing rds_patch_compliance_report.sh. It never talks to AWS (no network code at all).
+
+Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2.37); validate_cli.sh checks that.
+Lifecycle dates are relative to now. Env:
+  MOCK_SCENARIO = fleet (default) | empty | lookupfail | nolc | lcfail | accessdenied | badcreds | large
+  MOCK_LARGE_N  = instances for 'large' (default 3000) ; MOCK_LOG = JSONL of argv
+  MOCK_DEFAULT_REGION = answer for `aws configure get region`
+Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1 fleet), (none) -> prod,
+          broken -> invalid credentials. Other regions are empty.
+"""
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+NOW = datetime.now(timezone.utc)
+SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+
+
+def day(n):
+    return (NOW + timedelta(days=n)).strftime("%Y-%m-%dT00:00:00+00:00")
+
+
+def fail(code, op, msg, rc=254):
+    sys.stderr.write("\naws: [ERROR]: An error occurred (%s) when calling the %s operation: %s\n\n" % (code, op, msg))
+    sys.exit(rc)
+
+
+argv = sys.argv[1:]
+if os.environ.get("MOCK_LOG"):
+    with open(os.environ["MOCK_LOG"], "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+if argv[:1] == ["--version"]:
+    print("aws-cli/2.37.12 Python/3.14.6 Linux/6.12 exe/x86_64.mock"); sys.exit(0)
+if argv[:3] == ["configure", "get", "region"]:
+    r = os.environ.get("MOCK_DEFAULT_REGION", "")
+    if r:
+        print(r); sys.exit(0)
+    sys.exit(1)
+
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout"}
+ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
+           ("rds", "describe-db-clusters"): set(), ("rds", "describe-db-instances"): set(),
+           ("rds", "describe-pending-maintenance-actions"): set(),
+           ("rds", "describe-db-engine-versions"): {"--engine"}, ("docdb", "describe-db-engine-versions"): {"--engine"},
+           ("neptune", "describe-db-engine-versions"): {"--engine"},
+           ("rds", "describe-db-major-engine-versions"): {"--engine"}}
+g, o, pos, i = {}, {}, [], 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--no-cli-pager":
+        g[a] = True
+    elif a in GLOBAL_VAL:
+        g[a] = argv[i + 1]; i += 1
+    elif a.startswith("--"):
+        o[a] = argv[i + 1] if i + 1 < len(argv) else ""; i += 1
+    else:
+        pos.append(a)
+    i += 1
+if SCEN == "nolc" and tuple(pos) == ("rds", "describe-db-major-engine-versions"):
+    sys.stderr.write("\nusage: aws [options] <command> <subcommand> [<subcommand> ...] [parameters]\naws: error: argument operation: Invalid choice, valid choices are:\n"); sys.exit(252)
+if len(pos) != 2 or tuple(pos) not in ALLOWED:
+    sys.stderr.write("\naws: [ERROR]: mock does not implement: %s\n" % " ".join(pos)); sys.exit(252)
+bad = set(o) - ALLOWED[tuple(pos)]
+if bad:
+    sys.stderr.write("\naws: [ERROR]: Unknown options: %s\n" % ", ".join(sorted(bad))); sys.exit(252)
+if g.get("--output") != "json" or "--no-cli-pager" not in g:
+    sys.stderr.write("mock: script must pass --output json --no-cli-pager\n"); sys.exit(252)
+REGION = g.get("--region") or os.environ.get("AWS_REGION", "")
+if not REGION:
+    sys.stderr.write("\naws: [ERROR]: An error occurred (NoRegion): You must specify a region.\n"); sys.exit(253)
+PROFILE = g.get("--profile", "")
+SVC, OP = pos
+OPNAME = "".join(p.capitalize() for p in OP.split("-")).replace("Db", "DB")
+if PROFILE == "broken" or SCEN == "badcreds":
+    fail("InvalidClientTokenId", OPNAME if SVC != "sts" else "GetCallerIdentity", "The security token included in the request is invalid.")
+ACCT = {"": "111111111111", "prod": "111111111111", "nonprod": "222222222222"}.get(PROFILE)
+if ACCT is None:
+    sys.stderr.write("\nThe config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
+
+
+def out(d):
+    print(json.dumps(d, indent=2)); sys.exit(0)
+
+
+if (SVC, OP) == ("sts", "get-caller-identity"):
+    out({"UserId": "AIDAMOCKUSER", "Account": ACCT, "Arn": "arn:aws:iam::%s:user/dba" % ACCT})
+if (SVC, OP) == ("ec2", "describe-regions"):
+    out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": "opt-in-not-required"}
+                     for r in ("us-east-1", "ap-south-1", "eu-west-1")]})
+if SCEN == "accessdenied" and REGION == "eu-west-1" and OP == "describe-db-clusters":
+    fail("AccessDenied", "DescribeDBClusters", "User is not authorized to perform: rds:DescribeDBClusters")
+
+# ------------------------------------------------------------------ engine version catalogue (per engine)
+def fam(major, minors, fmt="%s"):
+    return [(fmt % m, major) for m in minors]
+
+AMY = "8.0.mysql_aurora.%s"
+CAT = {
+    "aurora-postgresql": fam("16", ["16.1", "16.2", "16.3", "16.4", "16.6", "16.8", "16.9"]) + fam("15", ["15.4", "15.5", "15.6", "15.7", "15.8", "15.10", "15.12", "15.13"])
+        + fam("14", ["14.9", "14.10", "14.11", "14.12", "14.13", "14.15", "14.17", "14.18"]) + fam("12", ["12.15", "12.16", "12.17", "12.18", "12.19", "12.20", "12.22"])
+        + fam("11", ["11.21"]),
+    "aurora-mysql": fam("8.0", ["3.04.0", "3.04.1", "3.04.2", "3.04.3", "3.05.2", "3.06.0", "3.06.1", "3.07.1", "3.08.0", "3.08.1", "3.08.2", "3.09.0", "3.10.0"], AMY)
+        + fam("5.7", ["2.11.6", "2.12.1", "2.12.4"], "5.7.mysql_aurora.%s"),
+    "postgres": fam("17", ["17.2", "17.4", "17.5", "17.6"]) + fam("16", ["16.3", "16.4", "16.6", "16.8", "16.9", "16.10"]) + fam("13", ["13.18", "13.20", "13.21", "13.22"]),
+    "mysql": fam("8.4", ["8.4.3", "8.4.4", "8.4.5", "8.4.6"]) + fam("8.0", ["8.0.36", "8.0.37", "8.0.39", "8.0.40", "8.0.41", "8.0.42", "8.0.43"]),
+    "mariadb": fam("10.11", ["10.11.9", "10.11.10", "10.11.11"]),
+    "sqlserver-se": fam("15.00", ["15.00.4385.2.v1", "15.00.4395.2.v1", "15.00.4410.1.v1", "15.00.4415.2.v1", "15.00.4420.2.v1", "15.00.4430.1.v1"])
+        + fam("16.00", ["16.00.4165.4.v1", "16.00.4175.1.v1", "16.00.4185.3.v1"]),
+    "oracle-ee": fam("19", ["19.0.0.0.ru-2025-01.rur-2025-01.r1", "19.0.0.0.ru-2025-04.rur-2025-04.r1", "19.0.0.0.ru-2025-07.rur-2025-07.r1"]),
+    "docdb": [("4.0.0", None), ("5.0.0", None)],
+    "neptune": [(v, None) for v in ("1.3.2.1", "1.3.3.0", "1.3.4.0", "1.4.0.0", "1.4.1.0", "1.4.5.0")],
+}
+LC = {  # engine -> major -> (standard end days, extended end days)
+    "aurora-postgresql": {"11": (-600, 500), "12": (-580, 800), "14": (800, 1900), "15": (1200, 2300), "16": (1500, 2600)},
+    "aurora-mysql": {"5.7": (-400, 520), "8.0": (900, 2000)},
+    "postgres": {"13": (120, 1200), "16": (1500, 2600), "17": (1800, 2900)},
+    "mysql": {"8.0": (170, 1260), "8.4": (2000, 3100)},
+    "mariadb": {"10.11": (1000, None)},
+}
+
+if OP == "describe-db-engine-versions":
+    eng = o.get("--engine", "")
+    if SCEN == "lookupfail" and eng == "aurora-mysql":
+        fail("Throttling", "DescribeDBEngineVersions", "Rate exceeded")
+    vers = []
+    for v, major in CAT.get(eng, []):
+        e = {"Engine": eng, "EngineVersion": v, "DBParameterGroupFamily": eng + (major or v), "DBEngineDescription": eng,
+             "DBEngineVersionDescription": "%s %s" % (eng, v), "ValidUpgradeTarget": []}
+        if SVC == "rds":
+            e.update({"MajorEngineVersion": major, "Status": "available"})
+        vers.append(e)
+    out({"DBEngineVersions": vers})
+
+if OP == "describe-db-major-engine-versions":
+    eng = o.get("--engine", "")
+    if SCEN == "lcfail":
+        fail("AccessDenied", "DescribeDBMajorEngineVersions", "User is not authorized to perform: rds:DescribeDBMajorEngineVersions")
+    res = []
+    for major, (std, ext) in LC.get(eng, {}).items():
+        l = [{"LifecycleSupportName": "open-source-rds-standard-support", "LifecycleSupportStartDate": day(-1500), "LifecycleSupportEndDate": day(std)}]
+        if ext is not None:
+            l.append({"LifecycleSupportName": "open-source-rds-extended-support", "LifecycleSupportStartDate": day(std), "LifecycleSupportEndDate": day(ext)})
+        res.append({"Engine": eng, "MajorEngineVersion": major, "SupportedEngineLifecycles": l})
+    out({"DBMajorEngineVersions": res})
+
+# ------------------------------------------------------------------ fleet
+def arn(kind, ident):
+    return "arn:aws:rds:%s:%s:%s:%s" % (REGION, ACCT, kind, ident)
+
+
+def tags(env, owner, app):
+    return [{"Key": "Environment", "Value": env}, {"Key": "Owner", "Value": owner}, {"Key": "Application", "Value": app}]
+
+
+CL, INS, PMA = [], [], []
+
+
+def inst(ident, engine, ver, auto=True, cluster=None, cls="db.r6g.large", tg=None, window="sun:20:00-sun:20:30"):
+    d = {"DBInstanceIdentifier": ident, "DBInstanceClass": cls, "Engine": engine, "DBInstanceStatus": "available",
+         "EngineVersion": ver, "AutoMinorVersionUpgrade": auto, "PreferredMaintenanceWindow": window,
+         "DBInstanceArn": arn("db", ident), "MultiAZ": False, "TagList": tg or [],
+         "EngineLifecycleSupport": "open-source-rds-extended-support"}
+    if cluster:
+        d["DBClusterIdentifier"] = cluster
+    INS.append(d)
+    return d
+
+
+def cluster(ident, engine, ver, members, tg, window="sat:21:00-sat:21:30", auto=None, maz=False, autos=None):
+    c = {"DBClusterIdentifier": ident, "Engine": engine, "EngineVersion": ver, "Status": "available",
+         "DBClusterArn": arn("cluster", ident), "PreferredMaintenanceWindow": window, "TagList": tg,
+         "MultiAZ": len(members) > 1, "EngineMode": "provisioned",
+         "DBClusterMembers": [{"DBInstanceIdentifier": m, "IsClusterWriter": n == 0, "DBClusterParameterGroupStatus": "in-sync", "PromotionTier": 1}
+                              for n, m in enumerate(members)]}
+    if maz:
+        c["DBClusterInstanceClass"] = "db.m6gd.large"
+    if auto is not None:
+        c["AutoMinorVersionUpgrade"] = auto
+    if engine.startswith("aurora"):
+        c["EngineLifecycleSupport"] = "open-source-rds-extended-support"
+    CL.append(c)
+    for n, m in enumerate(members):
+        inst(m, engine, ver, auto=(autos[n] if autos else True), cluster=ident, tg=tg, window=window)
+    return c
+
+
+def pma(a, actions):
+    PMA.append({"ResourceIdentifier": a, "PendingMaintenanceActionDetails": [
+        {"Action": x, "OptInStatus": "pending", "Description": "mock %s" % x, "AutoAppliedAfterDate": day(20), "CurrentApplyDate": day(20)} for x in actions]})
+
+
+if SCEN == "large" and REGION == "us-east-1" and PROFILE in ("", "prod"):
+    n = int(os.environ.get("MOCK_LARGE_N", "3000"))
+    vers = ["16.3", "16.4", "16.6", "16.8", "16.9", "16.10"]
+    for k in range(n):
+        inst("bulk-pg-%05d" % k, "postgres", vers[k % 6], tg=tags("prod", "team-%d" % (k % 7), "bulk-app-with-a-long-name-%d" % k))
+elif SCEN != "empty" and REGION == "us-east-1" and PROFILE in ("", "prod"):
+    P = tags("prod", "payments", "pay")
+    cluster("pay-aurora-pg16", "aurora-postgresql", "16.9", ["pay-aurora-pg16-1", "pay-aurora-pg16-2"], P)
+    c = cluster("orders-aurora-pg15", "aurora-postgresql", "15.8", ["orders-pg15-1", "orders-pg15-2", "orders-pg15-3"], tags("prod", "orders", "orders"))
+    pma(c["DBClusterArn"], ["system-update"])
+    cluster("crm-aurora-pg15", "aurora-postgresql", "15.10", ["crm-pg15-1"], tags("prod", "crm", "crm"))
+    cluster("legacy-aurora-pg12", "aurora-postgresql", "12.15", ["legacy-pg12-1", "legacy-pg12-2"], tags("prod", "finance", "legacy-gl"))
+    cluster("old-aurora-pg11", "aurora-postgresql", "11.9", ["old-pg11-1"], tags("prod", "finance", "archive"))
+    cluster("reports-aurora-pg14", "aurora-postgresql", "14.12", ["reports-pg14-1", "reports-pg14-2"], tags("prod", "bi", "reports"), autos=[False, False])
+    cluster("shop-aurora-mysql", "aurora-mysql", AMY % "3.05.2", ["shop-mysql-1", "shop-mysql-2"], tags("prod", "shop", "storefront"), autos=[True, False])
+    cluster("cms-aurora-mysql", "aurora-mysql", AMY % "3.09.0", ["cms-mysql-1"], tags("prod", "web", "cms"))
+    cluster("ledger-maz", "postgres", "16.6", ["ledger-maz-1", "ledger-maz-2", "ledger-maz-3"], tags("prod", "finance", "ledger"), auto=True, maz=True)
+    inst("billing-pg", "postgres", "16.8", tg=tags("prod", "billing", "billing"))
+    inst("billing-pg-replica", "postgres", "16.8", tg=tags("prod", "billing", "billing"))
+    inst("analytics-pg", "postgres", "13.18", tg=tags("prod", "bi", "analytics"))
+    i = inst("inv-mysql", "mysql", "8.0.36", auto=False, tg=tags("prod", "ops", "inventory"))
+    pma(i["DBInstanceArn"], ["db-upgrade", "os-upgrade"])
+    inst("app-mysql84", "mysql", "8.4.6", tg=tags("prod", "web", "app"))
+    inst("hr-sql", "sqlserver-se", "15.00.4410.1.v1", tg=tags("prod", "hr", "hrms"), window="sat:18:30-sat:19:00")
+    inst("erp-sql", "sqlserver-se", "16.00.4175.1.v1", tg=tags("prod", "erp", "erp"))
+    inst("fin-ora", "oracle-ee", "19.0.0.0.ru-2025-01.rur-2025-01.r1", tg=tags("prod", "finance", "gl"))
+    cluster("catalog-docdb", "docdb", "5.0.0", ["catalog-docdb-1", "catalog-docdb-2"], tags("prod", "catalog", "catalog"))
+    pma(arn("db", "catalog-docdb-2"), ["system-update"])
+    cluster("graph-neptune", "neptune", "1.3.2.1", ["graph-neptune-1"], tags("prod", "graph", "recs"))
+    inst("unrelated-redis-like", "custom-sqlserver-ee", "15.00.4073.23.cev1", tg=[])  # out of scope engine: ignored
+elif SCEN != "empty" and REGION == "ap-south-1" and PROFILE == "nonprod":
+    cluster("dev-aurora-pg15", "aurora-postgresql", "15.4", ["dev-pg15-1"], tags("dev", "platform", "dev"))
+    inst("qa-pg", "postgres", "17.4", tg=tags("qa", "platform", "qa"))
+    inst("dev-mariadb", "mariadb", "10.11.9", tg=tags("dev", "platform", "dev"))
+
+if OP == "describe-db-clusters":
+    out({"DBClusters": CL})
+if OP == "describe-db-instances":
+    out({"DBInstances": INS})
+if OP == "describe-pending-maintenance-actions":
+    out({"PendingMaintenanceActions": PMA})
+sys.stderr.write("mock: unhandled\n"); sys.exit(252)

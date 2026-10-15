@@ -2,6 +2,8 @@
 
 Applies the **pending maintenance of ONE Aurora cluster** in a safe, logged order. It works with Aurora PostgreSQL and Aurora MySQL, and also with DocumentDB and Neptune clusters. It is the next step after [RDS_Pending_Maintenance](../RDS_Pending_Maintenance/README.md): the report tells you what is pending, and this tool applies it to one cluster at a time.
 
+Sibling tool: [RDS_Patch_Compliance](../RDS_Patch_Compliance/README.md) is a read-only report of how many minor versions each database is behind (compliance rule, Extended Support / end-of-support flags) - use it to decide which clusters to patch next.
+
 ```
 # 1. look first (DEFAULT: dry run, read-only)
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod

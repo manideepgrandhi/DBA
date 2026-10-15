@@ -1,0 +1,100 @@
+RDS PATCH COMPLIANCE REPORT - 2026-10-15 10:17 UTC (2026-10-15 15:47 IST)
+Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, us-east-1
+Rule     : COMPLIANT when the server is at most 2 minor version(s) behind the newest minor AWS offers in its major line (NON-COMPLIANT = 3+ behind; UNKNOWN = version lookup failed)
+
+SUMMARY
+  Servers/clusters : 22   COMPLIANT 13   NON-COMPLIANT 9   UNKNOWN 0   -> 59.1% compliant
+  Support          : 2 past standard support (Extended Support charges), 2 ending within 180 days
+  Other flags      : auto minor upgrade off 3, pending maintenance on 3 (4 action(s)), deprecated version 1
+
+PER ENGINE / MAJOR VERSION
+  ENGINE                MAJOR      TOTAL  COMPL  NON-C  UNKN  LATEST MINOR                        SUPPORT
+  aurora-mysql          8.0            2      1      1     0  8.0.mysql_aurora.3.10.0             ok (standard end 2029-04-02)
+  aurora-postgresql     16             1      1      0     0  16.9                                ok (standard end 2030-11-23)
+  aurora-postgresql     15             3      1      2     0  15.13                               ok (standard end 2030-01-27)
+  aurora-postgresql     14             1      0      1     0  14.18                               ok (standard end 2028-12-23)
+  aurora-postgresql     12             1      0      1     0  12.22                               past standard support (Extended Support charges) (standard end 2025-03-14)
+  aurora-postgresql     11             1      1      0     0  11.21                               past standard support (Extended Support charges) (standard end 2025-02-22)
+  docdb                 5.0            1      1      0     0  5.0.0                               n/a (no lifecycle API for docdb)
+  mariadb               10.11          1      1      0     0  10.11.11                            ok (standard end 2029-07-11)
+  mysql                 8.4            1      1      0     0  8.4.6                               ok (standard end 2032-04-06)
+  mysql                 8.0            1      0      1     0  8.0.43                              standard support ends in 169 days (standard end 2027-04-03)
+  neptune               1.3            1      1      0     0  1.3.4.0                             n/a (no lifecycle API for neptune)
+  oracle-ee             19             1      1      0     0  19.0.0.0.ru-2025-07.rur-2025-07.r1  unknown (AWS lists no lifecycle dates for oracle-ee 19)
+  postgres              17             1      1      0     0  17.6                                ok (standard end 2031-09-19)
+  postgres              16             3      2      1     0  16.10                               ok (standard end 2030-11-23)
+  postgres              13             1      0      1     0  13.22                               standard support ends in 119 days (standard end 2027-02-12)
+  sqlserver-se          16.00          1      1      0     0  16.00.4185.3.v1                     unknown (AWS lists no lifecycle dates for sqlserver-se 16.00)
+  sqlserver-se          15.00          1      0      1     0  15.00.4430.1.v1                     unknown (AWS lists no lifecycle dates for sqlserver-se 15.00)
+  aurora-mysql          all            2      1      1     0  50% compliant
+  aurora-postgresql     all            7      3      4     0  42.9% compliant
+  docdb                 all            1      1      0     0  100% compliant
+  mariadb               all            1      1      0     0  100% compliant
+  mysql                 all            2      1      1     0  50% compliant
+  neptune               all            1      1      0     0  100% compliant
+  oracle-ee             all            1      1      0     0  100% compliant
+  postgres              all            5      3      2     0  60% compliant
+  sqlserver-se          all            2      1      1     0  50% compliant
+
+TOP 10 MOST BEHIND
+    8 behind  shop-aurora-mysql               aurora-mysql          8.0.mysql_aurora.3.05.2             -> 8.0.mysql_aurora.3.10.0             NON-COMPLIANT  (us-east-1)
+    7 behind  dev-aurora-pg15                 aurora-postgresql     15.4                                -> 15.13                               NON-COMPLIANT  (ap-south-1)
+    6 behind  inv-mysql                       mysql                 8.0.36                              -> 8.0.43                              NON-COMPLIANT  (us-east-1)
+    6 behind  legacy-aurora-pg12              aurora-postgresql     12.15                               -> 12.22                               NON-COMPLIANT  (us-east-1)
+    4 behind  reports-aurora-pg14             aurora-postgresql     14.12                               -> 14.18                               NON-COMPLIANT  (us-east-1)
+    3 behind  analytics-pg                    postgres              13.18                               -> 13.22                               NON-COMPLIANT  (us-east-1)
+    3 behind  hr-sql                          sqlserver-se          15.00.4410.1.v1                     -> 15.00.4430.1.v1                     NON-COMPLIANT  (us-east-1)
+    3 behind  ledger-maz                      postgres              16.6                                -> 16.10                               NON-COMPLIANT  (us-east-1)
+    3 behind  orders-aurora-pg15              aurora-postgresql     15.8                                -> 15.13                               NON-COMPLIANT  (us-east-1)
+    2 behind  billing-pg                      postgres              16.8                                -> 16.10                               COMPLIANT  (us-east-1)
+
+=== aurora-mysql: 2 (compliant 1, non-compliant 1, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  NON-COMPLIANT      8  shop-aurora-mysql               aurora-cluster   8.0.mysql_aurora.3.05.2             8.0.mysql_aurora.3.10.0             mixed     0  us-east-1      -
+  COMPLIANT          1  cms-aurora-mysql                aurora-cluster   8.0.mysql_aurora.3.09.0             8.0.mysql_aurora.3.10.0             true      0  us-east-1      -
+
+=== aurora-postgresql: 7 (compliant 3, non-compliant 4, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  NON-COMPLIANT      7  dev-aurora-pg15                 aurora-cluster   15.4                                15.13                               true      0  ap-south-1     -
+  NON-COMPLIANT      6  legacy-aurora-pg12              aurora-cluster   12.15                               12.22                               true      0  us-east-1      past standard support (Extended Support charges)
+  NON-COMPLIANT      4  reports-aurora-pg14             aurora-cluster   14.12                               14.18                               false     0  us-east-1      -
+  NON-COMPLIANT      3  orders-aurora-pg15              aurora-cluster   15.8                                15.13                               true      1  us-east-1      -
+  COMPLIANT          2  crm-aurora-pg15                 aurora-cluster   15.10                               15.13                               true      0  us-east-1      -
+  COMPLIANT          1  old-aurora-pg11                 aurora-cluster   11.9                                11.21                               true      0  us-east-1      past standard support (Extended Support charges); DEPRECATED version
+  COMPLIANT          0  pay-aurora-pg16                 aurora-cluster   16.9                                16.9                                true      0  us-east-1      -
+
+=== docdb: 1 (compliant 1, non-compliant 0, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  COMPLIANT          0  catalog-docdb                   docdb-cluster    5.0.0                               5.0.0                               true      1  us-east-1      -
+
+=== mariadb: 1 (compliant 1, non-compliant 0, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  COMPLIANT          2  dev-mariadb                     instance         10.11.9                             10.11.11                            true      0  ap-south-1     -
+
+=== mysql: 2 (compliant 1, non-compliant 1, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  NON-COMPLIANT      6  inv-mysql                       instance         8.0.36                              8.0.43                              false     2  us-east-1      standard support ends in 169 days
+  COMPLIANT          0  app-mysql84                     instance         8.4.6                               8.4.6                               true      0  us-east-1      -
+
+=== neptune: 1 (compliant 1, non-compliant 0, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  COMPLIANT          2  graph-neptune                   neptune-cluster  1.3.2.1                             1.3.4.0                             true      0  us-east-1      -
+
+=== oracle-ee: 1 (compliant 1, non-compliant 0, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  COMPLIANT          2  fin-ora                         instance         19.0.0.0.ru-2025-01.rur-2025-01.r1  19.0.0.0.ru-2025-07.rur-2025-07.r1  true      0  us-east-1      unknown (AWS lists no lifecycle dates for oracle-ee 19)
+
+=== postgres: 5 (compliant 3, non-compliant 2, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  NON-COMPLIANT      3  analytics-pg                    instance         13.18                               13.22                               true      0  us-east-1      standard support ends in 119 days
+  NON-COMPLIANT      3  ledger-maz                      multi-az-cluster 16.6                                16.10                               true      0  us-east-1      -
+  COMPLIANT          2  billing-pg                      instance         16.8                                16.10                               true      0  us-east-1      -
+  COMPLIANT          2  billing-pg-replica              instance         16.8                                16.10                               true      0  us-east-1      -
+  COMPLIANT          2  qa-pg                           instance         17.4                                17.6                                true      0  ap-south-1     -
+
+=== sqlserver-se: 2 (compliant 1, non-compliant 1, unknown 0) ===
+  STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
+  NON-COMPLIANT      3  hr-sql                          instance         15.00.4410.1.v1                     15.00.4430.1.v1                     true      0  us-east-1      unknown (AWS lists no lifecycle dates for sqlserver-se 15.00)
+  COMPLIANT          1  erp-sql                         instance         16.00.4175.1.v1                     16.00.4185.3.v1                     true      0  us-east-1      unknown (AWS lists no lifecycle dates for sqlserver-se 16.00)
+
+Upgrade commands (printed only, never run) are in the CSV / HTML / JSON output.
