@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "script": "rds_patch_runner.sh",
+    "version": "1.1.1",
+    "mode": "dry-run",
+    "cluster": "orders-prod",
+    "account": "123456789012",
+    "region": "us-east-1",
+    "profile": "prod",
+    "created_utc": "2026-10-15 04:12:41",
+    "result": "dry-run",
+    "message": "dry run only - nothing changed"
+  },
+  "plan": {
+    "cluster": {
+      "id": "orders-prod",
+      "arn": "arn:aws:rds:us-east-1:123456789012:cluster:orders-prod",
+      "engine": "aurora-postgresql",
+      "version": "15.4",
+      "status": "available",
+      "global": "",
+      "multi_az": true,
+      "window": "sun:04:00-sun:04:30",
+      "engine_mode": "provisioned"
+    },
+    "writer": "orders-prod-1",
+    "members": [
+      {
+        "id": "orders-prod-2",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-2",
+        "status": "available",
+        "class": "db.r6g.large",
+        "version": "15.4",
+        "az": "us-east-1b",
+        "writer": false,
+        "auto_minor_upgrade": true,
+        "promotion_tier": 1,
+        "actions": [
+          {
+            "action": "system-update",
+            "description": "New Operating System update is available",
+            "opt_in_status": "",
+            "auto_applied_after": "2026-11-01T04:00:00Z",
+            "forced_apply": "",
+            "current_apply": "2026-11-01T04:00:00Z",
+            "selected": true
+          },
+          {
+            "action": "os-upgrade",
+            "description": "OS upgrade",
+            "opt_in_status": "",
+            "auto_applied_after": "2026-11-01T04:00:00Z",
+            "forced_apply": "2026-12-01T04:00:00Z",
+            "current_apply": "2026-11-01T04:00:00Z",
+            "selected": true
+          }
+        ]
+      },
+      {
+        "id": "orders-prod-3",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-3",
+        "status": "available",
+        "class": "db.r6g.large",
+        "version": "15.4",
+        "az": "us-east-1c",
+        "writer": false,
+        "auto_minor_upgrade": true,
+        "promotion_tier": 1,
+        "actions": [
+          {
+            "action": "system-update",
+            "description": "New Operating System update is available",
+            "opt_in_status": "",
+            "auto_applied_after": "2026-11-01T04:00:00Z",
+            "forced_apply": "",
+            "current_apply": "2026-11-01T04:00:00Z",
+            "selected": true
+          }
+        ]
+      },
+      {
+        "id": "orders-prod-1",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-1",
+        "status": "available",
+        "class": "db.r6g.large",
+        "version": "15.4",
+        "az": "us-east-1a",
+        "writer": true,
+        "auto_minor_upgrade": true,
+        "promotion_tier": 1,
+        "actions": [
+          {
+            "action": "system-update",
+            "description": "New Operating System update is available",
+            "opt_in_status": "",
+            "auto_applied_after": "2026-11-01T04:00:00Z",
+            "forced_apply": "",
+            "current_apply": "2026-11-01T04:00:00Z",
+            "selected": true
+          }
+        ]
+      }
+    ],
+    "cluster_actions": [
+      {
+        "action": "db-upgrade",
+        "description": "Cluster engine patch",
+        "opt_in_status": "",
+        "auto_applied_after": "2026-11-01T04:00:00Z",
+        "forced_apply": "",
+        "current_apply": "2026-11-01T04:00:00Z",
+        "selected": true
+      }
+    ],
+    "minor": {
+      "current": "15.4",
+      "auto_minor_upgrade": "true",
+      "lookup_ok": true,
+      "available": [
+        "15.5",
+        "15.6",
+        "15.10"
+      ],
+      "next": "15.5",
+      "latest": "15.10",
+      "up_to_date": false,
+      "mode": "latest",
+      "target": "15.10",
+      "note": ""
+    },
+    "not_selected": [],
+    "minor_to": "15.10",
+    "nothing_to_do": false,
+    "steps": [
+      {
+        "kind": "snapshot",
+        "target": "orders-prod",
+        "n": 1
+      },
+      {
+        "kind": "instance",
+        "role": "reader",
+        "target": "orders-prod-2",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-2",
+        "action": "system-update",
+        "phase": "system patch",
+        "n": 2
+      },
+      {
+        "kind": "instance",
+        "role": "reader",
+        "target": "orders-prod-2",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-2",
+        "action": "os-upgrade",
+        "phase": "OS update",
+        "n": 3
+      },
+      {
+        "kind": "instance",
+        "role": "reader",
+        "target": "orders-prod-3",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-3",
+        "action": "system-update",
+        "phase": "system patch",
+        "n": 4
+      },
+      {
+        "kind": "cluster",
+        "role": "cluster",
+        "target": "orders-prod",
+        "arn": "arn:aws:rds:us-east-1:123456789012:cluster:orders-prod",
+        "action": "db-upgrade",
+        "phase": "DB update",
+        "n": 5
+      },
+      {
+        "kind": "instance",
+        "role": "writer",
+        "target": "orders-prod-1",
+        "arn": "arn:aws:rds:us-east-1:123456789012:db:orders-prod-1",
+        "action": "system-update",
+        "phase": "system patch",
+        "n": 6
+      },
+      {
+        "kind": "verify",
+        "target": "orders-prod",
+        "n": 7
+      },
+      {
+        "kind": "minor-upgrade",
+        "target": "orders-prod",
+        "to": "15.10",
+        "from": "15.4",
+        "mode": "latest",
+        "n": 8
+      }
+    ]
+  }
+}

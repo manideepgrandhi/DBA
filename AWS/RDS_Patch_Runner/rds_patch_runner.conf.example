@@ -22,6 +22,7 @@ grace_sec   = 600                  # action still pending + status never changed
 # Output
 output_dir = ./rds_patch_runs
 html = true
+# no_save = false                  # true: dry runs print only and write no files
 # log_file = ./rds_patch_runs/custom.log
 # lock_dir = /tmp/rds_patch_runner_locks
 

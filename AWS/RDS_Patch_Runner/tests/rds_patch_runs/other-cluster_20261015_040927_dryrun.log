@@ -1,0 +1,4 @@
+2026-10-15 09:39:27 [INFO] rds_patch_runner.sh v1.1.1 DRY RUN for cluster other-cluster (read-only; add --execute to patch)
+2026-10-15 09:39:27 [INFO] Account 123456789012 (arn:aws:iam::123456789012:user/manideep), region us-east-1, cluster other-cluster
+2026-10-15 09:39:27 [ERROR] describe-db-clusters other-cluster failed: An error occurred (DBClusterNotFoundFault) when calling the describe-db-clusters operation: DBCluster other-cluster not found.
+2026-10-15 09:39:27 [INFO] Saved (aborted): /workspace/rds_patch_runner/tests/rds_patch_runs/other-cluster_20261015_040927_plan.json, /workspace/rds_patch_runner/tests/rds_patch_runs/other-cluster_20261015_040927_dryrun.log

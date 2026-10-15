@@ -48,7 +48,7 @@ check "jq library compiles" "jq -n --arg mode none -f '$ROOT/lib/runner.jq' >/de
 
 echo "== usage (exit 1)"
 "$RUNNER" -h >/dev/null 2>&1; check "-h exit 0" "[[ $? == 0 ]]"
-"$RUNNER" -V 2>&1 | grep -q '1.1.0'; check "-V shows version" "[[ $? == 0 ]]"
+"$RUNNER" -V 2>&1 | grep -q '1.1.1'; check "-V shows version" "[[ $? == 0 ]]"
 run ok --bogus;               check "unknown option -> 1" "[[ $RC == 1 ]]"
 "$RUNNER" -r us-east-1 >/dev/null 2>&1; check "missing --cluster -> 1" "[[ $? == 1 ]]"
 run ok --timeout-min 0;       check "timeout 0 -> 1" "[[ $RC == 1 ]]"
@@ -82,6 +82,32 @@ check "dry run shows snapshot skipped" "has 'SKIPPED (--skip-snapshot)'"
 run ok --action system-update
 check "--action filter marks others not selected" "has 'os-upgrade (not selected)' && has 'Not selected by --action (left pending): db-upgrade, os-upgrade'"
 check "--action plan has no cluster step" "nohas 'cluster    : orders-prod <-'"
+
+echo "== dry run saves its output (v1.1.1)"
+run ok
+check "dry run with -o: dryrun.log, plan.txt, plan.json, no html" "ls '$ODIR'/orders-prod_*_dryrun.log '$ODIR'/orders-prod_*_plan.txt '$ODIR'/orders-prod_*_plan.json >/dev/null && ! ls '$ODIR'/*_plan.html >/dev/null 2>&1"
+check "stamp is UTC YYYYMMDD_HHMMSS" "ls '$ODIR' | grep -Eq '^orders-prod_[0-9]{8}_[0-9]{6}_dryrun\.log$' && [[ \$(ls '$ODIR' | sed -E 's/^orders-prod_([0-9]{8})_.*/\1/' | sort -u) == \$(date -u +%Y%m%d) || \$(ls '$ODIR' | sed -E 's/^orders-prod_([0-9]{8})_.*/\1/' | sort -u) == \$(date -u -d '-1 min' +%Y%m%d) ]]"
+check "log has the full console output (preflight + plan)" "grep -q 'MINOR VERSION AVAILABILITY' '$ODIR'/*_dryrun.log && grep -q 'PLAN (exact execution order' '$ODIR'/*_dryrun.log && grep -q 'Dry run only' '$ODIR'/*_dryrun.log"
+check "plan.txt == printed plan; plan.json has meta + plan" "grep -q '^  8\.  minor upg' '$ODIR'/*_plan.txt && jq -e '.meta.mode == \"dry-run\" and .meta.result == \"dry-run\" and (.plan.steps | length) == 8' '$ODIR'/*_plan.json >/dev/null"
+check "final line lists absolute paths" "tail -1 '$OUT' | grep -q \"Saved (dry-run): $ODIR/orders-prod_\" && tail -1 '$OUT' | grep -q '_dryrun.log$'"
+check "dry run: zero write calls, no lock" "[[ \$(writes) == 0 ]] && { [[ ! -d '$T/case$N/locks' ]] || [[ -z \$(ls -A '$T/case$N/locks') ]]; }"
+run ok --html
+check "--html adds plan.html with preflight sections" "grep -q 'Minor version availability' '$ODIR'/*_plan.html && grep -q 'Pending maintenance' '$ODIR'/*_plan.html && grep -q '2026-12-01T04:00:00Z' '$ODIR'/*_plan.html && grep -q 'Plan (exact execution order)' '$ODIR'/*_plan.html && tail -1 '$OUT' | grep -q '_plan.html'"
+check "--html dry run: zero writes" "[[ \$(writes) == 0 ]]"
+run ok --no-save
+check "--no-save: no files at all" "[[ $RC == 0 ]] && [[ ! -e '$ODIR' ]] && nohas 'Saved ('"
+run nothing --minor-upgrade none --html
+check "nothing to do: still saved (plan.json result nothing-to-do)" "[[ $RC == 0 ]] && jq -e '.meta.result == \"nothing-to-do\"' '$ODIR'/*_plan.json >/dev/null && ls '$ODIR'/*_plan.html '$ODIR'/*_dryrun.log >/dev/null && [[ \$(writes) == 0 ]]"
+run notavailable
+check "preflight abort: log + plan.json with the error, exit 2" "[[ $RC == 2 ]] && jq -e '.meta.result == \"aborted\" and (.meta.message | test(\"modifying\")) and .plan == null' '$ODIR'/*_plan.json >/dev/null && grep -q \"status is 'modifying'\" '$ODIR'/*_dryrun.log && tail -1 '$OUT' | grep -q 'Saved (aborted)'"
+run ok -l "$T/custom_dry.log"
+check "-l custom log used for the dry run" "grep -q 'PLAN (exact' '$T/custom_dry.log' && ! ls '$ODIR'/*_dryrun.log >/dev/null 2>&1 && ls '$ODIR'/*_plan.txt >/dev/null"
+N=$(( N + 1 )); d="$T/case$N"; mkdir -p "$d/cwd"
+( cd "$d/cwd" && MOCK_SCENARIO=ok MOCK_STATE="$d/s.json" MOCK_CALLS="$d/c" RDS_PR_LOCK_DIR="$d/l" "$RUNNER" -P prod -r us-east-1 -c orders-prod --html </dev/null >"$d/out" 2>&1 ); R=$?
+check "default dir ./rds_patch_runs (absolute paths printed)" "[[ $R == 0 ]] && [[ \$(ls '$d/cwd/rds_patch_runs' | wc -l) == 4 ]] && tail -1 '$d/out' | grep -q \"$d/cwd/rds_patch_runs/orders-prod_\""
+touch "$d/c"; check "default dir run: zero writes" "[[ \$(jq -r '[.[] | select(test(\"^(apply-pending-maintenance-action|create-db-cluster-snapshot|modify-db-cluster)$\"))] | .[]' '$d/c' | wc -l) == 0 ]]"
+run ok "${EX[@]}" --html
+check "execute --html: summary.html + absolute paths in the last lines" "ls '$ODIR'/orders-prod_*.summary.html >/dev/null && grep -q \"Saved: $ODIR/orders-prod_.*summary.html\" '$OUT' && ! ls '$ODIR'/*_plan.json >/dev/null 2>&1"
 
 echo "== preflight aborts (exit 2)"
 run notavailable; check "cluster not available -> 2" "[[ $RC == 2 ]] && has \"status is 'modifying'\""

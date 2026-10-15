@@ -7,7 +7,7 @@ All examples assume AWS CloudShell or a shell with AWS CLI v2 and jq, run from t
 ```
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod
 ```
-This makes describe calls only. It prints the minor version availability, the members with role, status, version and pending actions, each pending action with its type, description and dates, and then the plan numbered in the exact execution order ([sample](samples/dry_run_plan.txt)):
+This makes describe calls only and saves the output to `./rds_patch_runs` (see example 11). It prints the minor version availability, the members with role, status, version and pending actions, each pending action with its type, description and dates, and then the plan numbered in the exact execution order ([sample](samples/dry_run_plan.txt)):
 
 ```
 MINOR VERSION AVAILABILITY (describe-db-engine-versions, non-major targets only)
@@ -123,3 +123,23 @@ $ cat ~/patch_runs/orders-prod_*.summary.txt
 * [A reader failure](samples/orders-prod_reader_failure_sample.log): the run stops before the writer, does not run the minor upgrade, exits 3, and the [summary](samples/orders-prod_reader_failure_sample.summary.txt) lists what is still pending.
 
 When a run stops (exit 3 or 130), fix the cause and then simply run the same command again. The tool re-reads what is still pending and continues from there. Steps whose actions are already done are skipped. A new pre-maintenance snapshot is taken on each run unless you pass `--skip-snapshot`.
+
+## 11. Where the files go, and downloading them from CloudShell
+
+```
+$ ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --html -o ~/patch_reports
+...
+[INFO] Saved (dry-run): /home/cloudshell-user/patch_reports/orders-prod_20261015_041241_plan.json, /home/cloudshell-user/patch_reports/orders-prod_20261015_041241_plan.txt, /home/cloudshell-user/patch_reports/orders-prod_20261015_041241_plan.html, /home/cloudshell-user/patch_reports/orders-prod_20261015_041241_dryrun.log
+$ ls -l ~/patch_reports
+orders-prod_20261015_041241_dryrun.log
+orders-prod_20261015_041241_plan.html
+orders-prod_20261015_041241_plan.json
+orders-prod_20261015_041241_plan.txt
+```
+* Without `-o`, the files go to `./rds_patch_runs` under the folder you ran the script from. `--no-save` prints only.
+* Execute runs write `<cluster>_<stamp>.log`, `.summary.txt`, `.summary.csv`, `.json` (+ `.summary.html` with `--html`) to the same folder.
+* `-l ~/orders_dry.log` writes the log there instead; the plan files still go to the output folder.
+* Download one file: CloudShell **Actions > Download file**, then paste the full path from the `Saved` line.
+* Download everything: `cd ~ && zip -r patch_runs.zip rds_patch_runs` (or zip the folder you passed to `-o`), then download `/home/cloudshell-user/patch_runs.zip`.
+
+See README "Output files" for the full table per mode (dry run / execute / failed / interrupted).

@@ -9,7 +9,7 @@ Applies the **pending maintenance of ONE Aurora cluster** in a safe, logged orde
 ./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --execute
 ```
 
-* **Dry run is the default.** Without `--execute` the tool only makes describe calls and prints the plan. A real run needs `--execute` and then a `Patch <cluster>? [y/N]` answer, or `--yes`.
+* **Dry run is the default.** Without `--execute` the tool only makes describe calls, prints the plan and saves it to `./rds_patch_runs` (see [Output files](#output-files)). A real run needs `--execute` and then a `Patch <cluster>? [y/N]` answer, or `--yes`.
 * **Order: ONE rolling pass, then the minor upgrade LAST.** preflight → confirm → cluster snapshot → **readers one at a time** (each reader gets all its actions back to back: `system-update` → `os-upgrade` → `db-upgrade` → other types) → cluster-level actions (same order) → **current writer last** (same order) → verify → **latest minor version upgrade** → summary. There is one failover pass overall, not one round per action type.
 * **Stops at the first failure.** If a reader fails or times out, the writer is never touched and there is **no minor upgrade**. Any failure in the rolling pass or its verification also means no minor upgrade.
 * **Requirements:** Bash 4.4+, AWS CLI v2, jq 1.6+, and `timeout` (coreutils). The tool is the main script plus `lib/runner.jq`; keep them together. It runs in AWS CloudShell as is.
@@ -118,7 +118,8 @@ Aurora can fail over while an instance is being patched, and the "writer" is a m
 | `--timeout-min N` | Per-step timeout in minutes (default 60; decimals allowed) |
 | `--poll-sec N` | Poll interval (default 30) |
 | `--grace-sec N` | "Not started by AWS" grace period (default 600) |
-| `-o DIR`, `--html`, `-l FILE` | Output directory (default `./rds_patch_runs`), extra HTML summary, log file |
+| `-o DIR`, `--html`, `-l FILE` | Output directory for dry runs and execute runs (default `./rds_patch_runs`), extra HTML file (`_plan.html` / `.summary.html`), log file. File names use the UTC start stamp; see "Output files" |
+| `--no-save` | Dry run: print only, write no files |
 | `--lock-dir DIR` | Lock directory |
 | `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack\|json`, `--alert-on always\|failure`, `--alert-from` | Alerts at the end of execute runs |
 | `--config FILE` | key=value file (see `rds_patch_runner.conf.example`). It is parsed, never sourced; CLI options win. `execute`/`yes` and credentials are refused in the file |
@@ -135,14 +136,43 @@ Aurora can fail over while an instance is being patched, and the "writer" is a m
 | 4 | Declined at the prompt, or no terminal and no `--yes`. Nothing changed |
 | 130 | Interrupted (SIGINT/SIGTERM) |
 
-## Output
+## Output files
 
-Each execute run writes these files to `-o DIR`:
+Every run saves its output, dry runs included. The default folder is `./rds_patch_runs`, relative to where you start the script; in CloudShell that is usually `~/DBA/AWS/RDS_Patch_Runner/rds_patch_runs`. `-o DIR` changes the folder. `<stamp>` is the run start time **in UTC**, `YYYYMMDD_HHMMSS`, for example `orders-prod_20261015_041241_plan.txt`. The last log line prints the **absolute path** of every file written. Dry runs take no lock and never write to AWS.
+
+| Mode | Files in `<output-dir>` | With `--html` |
+|---|---|---|
+| Dry run (default) | `<cluster>_<stamp>_dryrun.log` (the full console output: preflight + plan), `<cluster>_<stamp>_plan.txt`, `<cluster>_<stamp>_plan.json` (meta + plan) | + `<cluster>_<stamp>_plan.html` (minor version availability, members, pending actions with dates, numbered plan) |
+| Dry run, nothing to do | same three files; `plan.json` has `"result": "nothing-to-do"` | + `_plan.html` |
+| Dry run, preflight abort (exit 2) | `_dryrun.log` + `_plan.json` with `"result": "aborted"`, the error message and `"plan": null` (no plan was built, so no `_plan.txt`/`.html`) | no html |
+| Dry run with `--no-save` | nothing (print only, the pre-1.1.1 behaviour) | - |
+| Execute, success | `<cluster>_<stamp>.log`, `<cluster>_<stamp>.summary.txt`, `<cluster>_<stamp>.summary.csv`, `<cluster>_<stamp>.json` | + `<cluster>_<stamp>.summary.html` |
+| Execute, failed (exit 3) | same files; result `failed`, the steps run so far, and what is still pending | + `.summary.html` |
+| Execute, interrupted (Ctrl-C / SIGTERM, exit 130) | same files; result `interrupted`, the step that was running | + `.summary.html` |
+| Execute, preflight abort / declined | `<cluster>_<stamp>.log` only | - |
+
+`-l FILE` replaces the log file name in either mode; the other files still go to the output folder.
+
+```
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod                     # -> ./rds_patch_runs/orders-prod_<stamp>_dryrun.log, _plan.txt, _plan.json
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod -o ~/patch_reports  # -> ~/patch_reports/...
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --html              # + ./rds_patch_runs/orders-prod_<stamp>_plan.html
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod -l ~/orders_dry.log # log in ~/orders_dry.log, plan files in ./rds_patch_runs
+./rds_patch_runner.sh -P prod -r us-east-1 -c orders-prod --no-save           # print only
+```
+
+**Downloading from CloudShell:** copy the full path from the `Saved (...)` line, then choose **Actions > Download file** and paste that path, for example `/home/cloudshell-user/DBA/AWS/RDS_Patch_Runner/rds_patch_runs/orders-prod_20261015_041241_plan.html`. To get a whole folder, zip it first and download the zip: `cd ~ && zip -r patch_runs.zip rds_patch_runs` (adjust to the folder you used, e.g. `cd ~/DBA/AWS/RDS_Patch_Runner && zip -r ~/patch_runs.zip rds_patch_runs`, then download `/home/cloudshell-user/patch_runs.zip`).
+
+![Sample dry-run plan.html](docs/sample_plan_html.png)
+
+## Output (contents)
+
+Contents of the execute files (see the table above for the names):
 * `<cluster>_<UTCstamp>.log`: timestamped log including the plan.
 * `.summary.txt`, `.summary.csv`, and with `--html` also `.summary.html`: the BEFORE state (minor version availability and the pending maintenance with descriptions and dates), the minor upgrade result, one row per step (one per action) with start, end, duration, result, before → after version and detail; versions before → after per resource; pending actions left; failovers seen.
 * `.json`: everything above, for automation.
 
-See [samples/](samples/): [dry-run preflight + plan](samples/dry_run_plan.txt), [execute log](samples/orders-prod_sample.log), [summary txt](samples/orders-prod_sample.summary.txt) / [csv](samples/orders-prod_sample.summary.csv) / [html](samples/orders-prod_sample.summary.html) ([screenshot](samples/sample_summary.png)), and a [reader-failure run](samples/orders-prod_reader_failure_sample.log) ([summary](samples/orders-prod_reader_failure_sample.summary.txt)). All of them come from the mock, not from AWS.
+See [samples/](samples/): [dry-run log](samples/orders-prod_sample_dryrun.log), [plan.txt](samples/orders-prod_sample_plan.txt) / [plan.json](samples/orders-prod_sample_plan.json) / [plan.html](samples/orders-prod_sample_plan.html) ([screenshot](docs/sample_plan_html.png)), [execute log](samples/orders-prod_sample.log), [summary txt](samples/orders-prod_sample.summary.txt) / [csv](samples/orders-prod_sample.summary.csv) / [html](samples/orders-prod_sample.summary.html) ([screenshot](samples/sample_summary.png)), and a [reader-failure run](samples/orders-prod_reader_failure_sample.log) ([summary](samples/orders-prod_reader_failure_sample.summary.txt)). All of them come from the mock, not from AWS.
 
 ## IAM permissions
 
@@ -207,7 +237,7 @@ See [EXAMPLES.md](EXAMPLES.md) for dry run, execute, a cron/no-TTY run, action f
 ## Tests
 
 ```
-tests/run_tests.sh     # 124 checks against the stateful mock (no AWS)
+tests/run_tests.sh     # 139 checks against the stateful mock (no AWS)
 tests/validate_cli.sh  # replays every generated command through the REAL AWS CLI v2 with fake credentials
                        # and a dead endpoint/proxy, runs negative controls, and checks mock output shapes against the CLI's output skeletons
 ```
@@ -218,5 +248,6 @@ tests/validate_cli.sh  # replays every generated command through the REAL AWS CL
 
 ## Changelog
 
+* 1.1.1: dry runs now save their output (`_dryrun.log`, `_plan.txt`, `_plan.json`, `_plan.html` with `--html`) to the output folder, including the nothing-to-do and preflight-abort cases; `--no-save` keeps the print-only behaviour; the last log line prints the absolute paths of all files written (dry run and execute); the stamp in file names is UTC.
 * 1.1.0: ONE rolling pass for all pending maintenance, one step per action in the order `system-update` → `os-upgrade` → `db-upgrade` → other/unknown types (readers, then cluster-level, then the writer); the minor upgrade moved to the **end**, after verification, with the target recomputed after the pass (skip if already at latest); `--minor-upgrade` now defaults to `latest` and accepts `none`; the preflight summary and the summary files show minor version availability (current, auto minor upgrade, next, latest, available) and the pending actions with description and auto-applied/forced dates.
 * 1.0.0: first version.

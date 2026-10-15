@@ -6,7 +6,8 @@
 #   db-upgrade, other types) -> cluster-level actions (same order) -> current writer last (same order) -> verify
 #   -> latest minor version upgrade (re-checked after the pass; default --minor-upgrade latest).
 #
-# DRY RUN BY DEFAULT: without --execute it only reads (describe-*) and prints the plan.
+# DRY RUN BY DEFAULT: without --execute it only reads (describe-*), prints the plan and saves it (log, plan.txt,
+# plan.json, plan.html with --html) to the output directory; --no-save prints only.
 # Exit: 0 ok / nothing to do, 1 usage, 2 preflight abort, 3 step failure or timeout, 4 declined, 130 interrupted.
 # Rendering lives in lib/runner.jq.
 
@@ -14,7 +15,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.1.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PR_LIB:-$SCRIPT_DIR/lib}/runner.jq"
@@ -39,6 +40,9 @@ POLL_SEC=30
 GRACE_SEC=600
 OUTPUT_DIR=""
 HTML=0
+NO_SAVE=0
+DRY_SAVE=0
+DIE_MSG=""
 LOG_FILE=""
 CONFIG_FILE=""
 AWS_TIMEOUT=30
@@ -81,7 +85,7 @@ log_info()  { _log INFO "$@"; }
 log_warn()  { _log WARN "$@"; }
 log_error() { _log ERROR "$@"; }
 log_debug() { [[ "$VERBOSE" -eq 1 ]] && _log DEBUG "$@"; return 0; }
-die() { local code="$1"; shift; log_error "$@"; exit "$code"; }
+die() { local code="$1"; shift; DIE_MSG="$*"; log_error "$@"; exit "$code"; }
 
 usage() {
     cat <<USAGE
@@ -113,9 +117,13 @@ Run control:
       --poll-sec N          Seconds between status checks (default 30; decimals allowed)
       --grace-sec N         How long an applied action may stay pending with no status change before the
                             step fails as 'not started by AWS' (default 600)
-  -o, --output-dir DIR      Where log + summary go (default ./rds_patch_runs); --html adds an HTML summary
-      --html                Also write <cluster>_<stamp>_summary.html
-  -l, --log-file FILE       Log file (default <output-dir>/<cluster>_<stamp>.log)
+  -o, --output-dir DIR      Where files go, dry run AND execute (default ./rds_patch_runs). <stamp> is the run
+                            start in UTC, YYYYMMDD_HHMMSS. Dry run: <cluster>_<stamp>_dryrun.log,
+                            _plan.txt, _plan.json (+ _plan.html with --html). Execute: <cluster>_<stamp>.log,
+                            .summary.txt, .summary.csv, .json (+ .summary.html with --html)
+      --html                Also write the HTML file (dry run: _plan.html, execute: .summary.html)
+  -l, --log-file FILE       Log file (default <output-dir>/<cluster>_<stamp>_dryrun.log or _<stamp>.log)
+      --no-save             Dry run: print only, write no files (the pre-1.1.1 behaviour)
       --lock-dir DIR        Lock directory (default \$TMPDIR/rds_patch_runner_locks): one run per cluster
 
 Alerts (sent at the end of an --execute run):
@@ -160,6 +168,7 @@ redact_url() { if [[ "$1" =~ ^([a-zA-Z]+://[^/]+) ]]; then printf '%s/...' "${BA
 is_num() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 json_array() { if (( $# )); then printf '%s\n' "$@" | jq -R . | jq -cs .; else printf '[]'; fi; }
 now() { date +%s; }
+abs_path() { local d; d="$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P)" || { printf '%s' "$1"; return 0; }; printf '%s/%s' "$d" "${1##*/}"; }
 
 load_config() {
     local file="$1" line key val lineno=0
@@ -187,6 +196,7 @@ load_config() {
             grace_sec)              GRACE_SEC="$val" ;;
             output_dir)             OUTPUT_DIR="$val" ;;
             html)                   if is_true "$val"; then HTML=1; else HTML=0; fi ;;
+            no_save)                if is_true "$val"; then NO_SAVE=1; else NO_SAVE=0; fi ;;
             log_file)               LOG_FILE="$val" ;;
             lock_dir)               LOCK_DIR="$val" ;;
             aws_timeout)            AWS_TIMEOUT="$val" ;;
@@ -234,6 +244,7 @@ parse_args() {
             --grace-sec)        need_arg "$opt" $#; GRACE_SEC="$2"; shift 2 ;;
             -o|--output-dir)    need_arg "$opt" $#; OUTPUT_DIR="$2"; shift 2 ;;
             --html)             HTML=1; shift ;;
+            --no-save)          NO_SAVE=1; shift ;;
             -l|--log-file)      need_arg "$opt" $#; LOG_FILE="$2"; shift 2 ;;
             --lock-dir)         need_arg "$opt" $#; LOCK_DIR="$2"; shift 2 ;;
             --config)           shift 2 ;;
@@ -725,7 +736,8 @@ write_summary() {   # write_summary <result> <exit> <message>
     (( HTML )) && rjq summary_html -r "$base.json" >"$base.summary.html"
     chmod 0640 "$base".* 2>/dev/null || true
     SUMMARY_TXT="$base.summary.txt"
-    log_info "Summary: $base.summary.txt, $base.summary.csv$( (( HTML )) && echo ", $base.summary.html"), $base.json; log: $LOG_FILE"
+    local ab; ab="$(abs_path "$base")"
+    log_info "Saved: $ab.summary.txt, $ab.summary.csv$( (( HTML )) && echo ", $ab.summary.html"), $ab.json, log $(abs_path "$LOG_FILE")"
 }
 SUMMARY_TXT=""
 RUN_STARTED=""
@@ -760,6 +772,33 @@ send_alerts() {   # send_alerts <rc>
     fi
 }
 
+# dry run: save the log (already being written), plan.txt, plan.json and, with --html, plan.html
+save_dry() {   # save_dry <result: dry-run|nothing-to-do|aborted|interrupted> <message>
+    (( DRY_SAVE )) || return 0
+    DRY_SAVE=0
+    local base="${OUTPUT_DIR%/}/${CLUSTER}_${STAMP}" ab; local -a files=()
+    ab="$(abs_path "$base")"
+    local planf="$WORK/plan.json"; [[ -s "$planf" ]] || { planf="$WORK/noplan.json"; echo 'null' >"$planf"; }
+    if jq --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" --arg account "$ACCOUNT" --arg region "${REGION:-}" \
+          --arg profile "${PROFILE:-default}" --arg cluster "$CLUSTER" --arg created "$RUN_STARTED" --arg result "$1" --arg msg "$2" \
+          '{meta: {script: $script, version: $version, mode: "dry-run", cluster: $cluster, account: $account, region: $region,
+                   profile: $profile, created_utc: $created, result: $result, message: $msg}, plan: .}' "$planf" >"$base"_plan.json 2>/dev/null; then
+        files+=("${ab}_plan.json")
+    else log_warn "Writing ${base}_plan.json failed"; fi
+    if [[ -s "$WORK/plan.txt" ]]; then
+        cp -- "$WORK/plan.txt" "$base"_plan.txt && files+=("${ab}_plan.txt")
+        if (( HTML )); then
+            if rjq plan_html -r --arg account "$ACCOUNT" --arg profile "${PROFILE:-default}" --arg region "$REGION" \
+                   --arg skip_snapshot "$SKIP_SNAPSHOT" "$base"_plan.json >"$base"_plan.html 2>/dev/null; then files+=("${ab}_plan.html")
+            else log_warn "Writing ${base}_plan.html failed"; fi
+        fi
+    elif (( HTML )); then log_info "No plan was built ($1), so no plan.html"
+    fi
+    chmod 0640 "$base"_plan.* "$LOG_FILE" 2>/dev/null || true
+    files+=("$(abs_path "$LOG_FILE")")
+    log_info "Saved ($1): $(IFS=,; printf '%s' "${files[*]}" | sed 's/,/, /g')"
+}
+
 finish() {   # finish <rc> <result> <message>
     RUN_RC="$1"; RUN_MSG="$3"
     FINISHED=1
@@ -776,6 +815,7 @@ finish() {   # finish <rc> <result> <message>
 on_exit() {
     local rc=$?
     trap - EXIT INT TERM
+    if (( DRY_SAVE )); then save_dry aborted "${DIE_MSG:-exit $rc}" || true; fi
     release_lock
     if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi
     exit "$rc"
@@ -788,6 +828,7 @@ on_signal() {
     log_error "Steps done so far: ${DONE_IDS[*]:-none}; not started: ${TODO[*]:-none}"
     log_error "Check: aws rds describe-db-clusters --db-cluster-identifier $CLUSTER${REGION:+ --region $REGION}${PROFILE:+ --profile $PROFILE} and describe-pending-maintenance-actions; re-run this script to continue (it re-reads what is still pending)"
     if (( EXECUTE )) && [[ -n "$CURRENT_STEP" ]]; then step_end interrupted "${IN_FLIGHT:-stopped while waiting}" ""; fi
+    if (( ! EXECUTE )); then FINISHED=1; save_dry interrupted "interrupted during preflight"; exit 130; fi
     (( FINISHED )) || { FINISHED=1; RUN_MSG="interrupted during ${CURRENT_STEP:-preflight}"; write_summary interrupted 130 "$RUN_MSG"; send_alerts 130; }
     exit 130
 }
@@ -809,16 +850,28 @@ main() {
         log_info "$SCRIPT_NAME v$SCRIPT_VERSION EXECUTE run for cluster $CLUSTER (log $LOG_FILE)"
         take_lock
     else
-        if [[ -n "$OUTPUT_DIR" ]]; then mkdir -p -- "$OUTPUT_DIR" 2>/dev/null || die 1 "Output directory not writable: $OUTPUT_DIR"; fi
+        if (( NO_SAVE )); then
+            [[ -n "$LOG_FILE" ]] && log_warn "--no-save: ignoring --log-file"
+            LOG_FILE=""; OUTPUT_DIR=""
+        else   # no lock for a dry run
+            [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="./rds_patch_runs"
+            if ! { mkdir -p -- "$OUTPUT_DIR" 2>/dev/null && [[ -w "$OUTPUT_DIR" ]]; }; then die 1 "Output directory not writable: $OUTPUT_DIR"; fi
+            [[ -n "$LOG_FILE" ]] || LOG_FILE="${OUTPUT_DIR%/}/${CLUSTER}_${STAMP}_dryrun.log"
+            touch -- "$LOG_FILE" 2>/dev/null || die 1 "Cannot write log file: $LOG_FILE"
+            DRY_SAVE=1
+        fi
         log_info "$SCRIPT_NAME v$SCRIPT_VERSION DRY RUN for cluster $CLUSTER (read-only; add --execute to patch)"
     fi
     preflight
     print_plan
     if [[ "$(jq -r '.nothing_to_do' "$WORK/plan.json")" == true ]]; then
-        RUN_MSG="nothing to do for $CLUSTER"; log_info "$RUN_MSG"; FINISHED=1; exit 0
+        RUN_MSG="nothing to do for $CLUSTER"; log_info "$RUN_MSG"; FINISHED=1
+        (( EXECUTE )) || save_dry nothing-to-do "$RUN_MSG"
+        exit 0
     fi
     if (( ! EXECUTE )); then
-        FINISHED=1; log_info "Dry run only - nothing changed. Re-run with --execute to apply this plan."; exit 0
+        FINISHED=1; log_info "Dry run only - nothing changed. Re-run with --execute to apply this plan."
+        save_dry dry-run "dry run only - nothing changed"; exit 0
     fi
     if (( ! ASSUME_YES )); then
         if [[ -t 0 ]]; then

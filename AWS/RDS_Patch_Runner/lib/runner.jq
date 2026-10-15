@@ -1,5 +1,5 @@
 # lib/runner.jq - plan building and rendering for rds_patch_runner.sh
-# Modes ($mode): plan | plan_text | minor_targets | summary_text | summary_csv | summary_html
+# Modes ($mode): plan | plan_text | plan_html | minor_targets | summary_text | summary_csv | summary_html
 # plan inputs (--slurpfile): cluster (describe-db-clusters), members (describe-db-instances), pma (array of
 # {ResourceIdentifier, PendingMaintenanceActionDetails}), ev (describe-db-engine-versions or {});
 # --argjson actions ["all"] | [..]; --arg ev_ok 1|0; --arg minor_mode latest|<version>|none; --arg minor_target
@@ -149,13 +149,37 @@ def summary_csv:
   (.steps[] | [.n, .kind, .target, (.actions // ""), (.start_utc // ""), (.end_utc // ""), .duration_s, .result, (.version_before // ""), (.version_after // ""), (.detail // "")] | @csv);
 
 def h: tostring | @html;
-def summary_html:
-  . as $s
-  | "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>RDS patch runner - \($s.meta.cluster | h)</title><style>"
+def css: ""
   + "body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f5f6f8;color:#1f2933}header{background:#232f3e;color:#fff;padding:16px 26px}"
   + "header h1{margin:0;font-size:20px}header p{margin:4px 0 0;color:#c9d1d9;font-size:13px}main{padding:18px 26px}"
   + "table{border-collapse:collapse;background:#fff;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.12);margin-bottom:16px}th{background:#e9edf2;text-align:left;padding:6px 9px}td{padding:6px 9px;border-top:1px solid #e6e9ee;vertical-align:top}"
-  + ".ok{color:#2e7d32;font-weight:700}.fail{color:#c62828;font-weight:700}.other{color:#8d6e63;font-weight:700}h2{font-size:15px;margin:14px 0 6px}</style></head><body>"
+  + ".ok{color:#2e7d32;font-weight:700}.fail{color:#c62828;font-weight:700}.other{color:#8d6e63;font-weight:700}h2{font-size:15px;margin:14px 0 6px}" + ".mono{font-family:SFMono-Regular,Consolas,monospace;font-size:12px}.note{color:#52606d;font-size:13px}.warn{color:#b26a00;font-weight:700}";
+
+def plan_html:
+  . as $d | $d.plan as $p | $d.meta as $m
+  | ([$p | plan_text] | map(select(test("^  [0-9]+\\. +")) | sub("^  [0-9]+\\. +"; ""))) as $lines
+  | "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>RDS patch runner plan - \($p.cluster.id | h)</title><style>" + css + "</style></head><body>"
+  + "<header><h1>RDS patch runner: \($p.cluster.id | h) - DRY RUN plan (\($m.result | h))</h1><p>\($p.cluster.engine | h) \($p.cluster.version | h) &middot; account \($m.account | h) &middot; profile \($m.profile | h) &middot; \($m.region | h) &middot; created \($m.created_utc | h) UTC &middot; writer \($p.writer | h) &middot; window \($p.cluster.window | h) UTC</p></header><main>"
+  + "<p class=\"note\">Read-only dry run: nothing was changed. Re-run with <span class=\"mono\">--execute</span> to apply this plan.</p>"
+  + "<h2>Minor version availability</h2><table><tr><th>Current</th><th>Auto minor upgrade</th><th>Next minor</th><th>Latest minor</th><th>Available minors</th><th>--minor-upgrade</th></tr>"
+  + ($p.minor | "<tr><td>\(.current | h)</td><td>\(.auto_minor_upgrade | h)</td><td>\(if .up_to_date then "- (up to date)" else (.next | dash) end | h)</td><td>\(if .up_to_date then "- (already latest)" else (.latest | dash) end | h)</td><td>\(if .lookup_ok then (.available | join(", ") | if . == "" then "none" else . end) else "unknown (lookup failed)" end | h)</td><td>\(.mode | h) &rarr; \(if .target != null then (.target + " (runs LAST)") else ("no upgrade step: " + (.note | if . == "" then "none" else . end)) end | h)</td></tr></table>")
+  + "<h2>Members</h2><table><tr><th>Role</th><th>Instance</th><th>Status</th><th>Class</th><th>Version</th><th>Pending</th></tr>"
+  + ($p.members | map("<tr><td>\(if .writer then "writer" else "reader" end)</td><td>\(.id | h)</td><td>\(.status | h)</td><td>\(.class | h)</td><td>\(.version | h)</td><td>\(.actions | acts_txt | h)</td></tr>") | join(""))
+  + "<tr><td>cluster</td><td>\($p.cluster.id | h)</td><td>\($p.cluster.status | h)</td><td>-</td><td>\($p.cluster.version | h)</td><td>\($p.cluster_actions | acts_txt | h)</td></tr></table>"
+  + "<h2>Pending maintenance (per resource, in apply order)</h2>"
+  + ([($p.members[] | . as $mm | .actions[] | {role: (if $mm.writer then "writer" else "reader" end), r: $mm.id} + .), ($p.cluster_actions[] | {role: "cluster", r: $p.cluster.id} + .)]
+     | if length == 0 then "<p>none</p>" else "<table><tr><th>Role</th><th>Resource</th><th>Action</th><th>Type</th><th>Selected</th><th>Auto-applied after</th><th>Forced apply</th><th>Description</th></tr>"
+       + (map("<tr><td>\(.role)</td><td>\(.r | h)</td><td>\(.action | h)</td><td>\(.action | act_phase | h)</td><td>\(if .selected then "yes" else "<span class=\"warn\">no</span>" end)</td><td>\(.auto_applied_after | dash | h)</td><td>\(.forced_apply | dash | h)</td><td>\(.description | dash | h)</td></tr>") | join("")) + "</table>" end)
+  + "<h2>Plan (exact execution order)</h2>"
+  + (if $p.nothing_to_do then "<p>Nothing to do: no selected pending action and no minor upgrade.</p>"
+     else "<table><tr><th>#</th><th>Step</th></tr>" + ($lines | to_entries | map("<tr><td>\(.key + 1)</td><td class=\"mono\">\(.value | h)</td></tr>") | join("")) + "</table>" end)
+  + (if ($p.not_selected | length) > 0 then "<p class=\"note\">Not selected by --action (left pending): \($p.not_selected | join(", ") | h)</p>" else "" end)
+  + "<p class=\"note\">Generated by \($m.script | h) v\($m.version | h). Stops at the first failure: after a reader fails the writer is never touched and there is no minor upgrade.</p></main></body></html>";
+
+def summary_html:
+  . as $s
+  | "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>RDS patch runner - \($s.meta.cluster | h)</title><style>"
+  + css + "</style></head><body>"
   + "<header><h1>RDS patch runner: \($s.meta.cluster | h) - <span>\($s.meta.result | h)</span></h1><p>\($s.meta.engine | h) &middot; account \($s.meta.account | h) &middot; \($s.meta.region | h) &middot; \($s.meta.started_utc | h) - \($s.meta.finished_utc | h) &middot; exit \($s.meta.exit_code) &middot; snapshot \($s.meta.snapshot // "-" | h)</p></header><main>"
   + (if ($s.meta.message // "") != "" then "<p>\($s.meta.message | h)</p>" else "" end)
   + "<h2>Steps</h2><table><tr><th>#</th><th>Kind</th><th>Target</th><th>Actions</th><th>Start (UTC)</th><th>End (UTC)</th><th>Duration</th><th>Result</th><th>Before &rarr; after</th><th>Detail</th></tr>"
@@ -176,4 +200,4 @@ def summary_html:
   + "</main></body></html>";
 
 if $mode == "plan" then plan elif $mode == "minor_targets" then minor_targets($ARGS.named.cur)[] elif $mode == "plan_text" then plan_text elif $mode == "summary_text" then summary_text
-elif $mode == "summary_csv" then summary_csv elif $mode == "summary_html" then summary_html else . end
+elif $mode == "summary_csv" then summary_csv elif $mode == "summary_html" then summary_html elif $mode == "plan_html" then plan_html else . end
