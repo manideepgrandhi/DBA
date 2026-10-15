@@ -89,7 +89,7 @@ mj sqlserver-se 15.00.4410.1.v1 15.00; mj oracle-ee 19.0.0.0.ru-2025-01.rur-2025
 
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.0\.0'
+t version 0 fleet --version;         has version out '1\.1\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -123,7 +123,7 @@ chk "dry-run made no AWS calls" test ! -s "$MOCK_LOG"
 echo "== fleet (2 profiles x 2 regions)"
 : >"$MOCK_LOG"
 t fleet 0 fleet "${P2[@]}" -F json
-jqt fleet '.summary.total == 22 and .summary.compliant == 13 and .summary.non_compliant == 9 and .summary.unknown == 0'
+jqt fleet '.summary.total == 22 and .summary.compliant == 13 and .summary.non_compliant == 8 and .summary.unknown == 1'
 jqt fleet '.summary.pct_compliant == 59.1'
 jqt fleet '[.meta.accounts[].account] == ["111111111111","222222222222"]'
 jqt fleet '[.rows[].identifier] | index("unrelated-redis-like") == null'
@@ -133,38 +133,60 @@ chk "one inventory call per profile+region" test "$(jq -c 'select(index("describ
 chk "only describe/get calls were made" test "$(jq -r '.[] | select(test("^(modify|create|delete|apply|reboot|start|stop|failover)-"))' "$MOCK_LOG" | wc -l)" -eq 0
 echo "-- rule and boundaries"
 rowt fleet crm-aurora-pg15 '.versions_behind == 2 and .compliance_status == "COMPLIANT" and .newer_versions == ["15.12","15.13"]'
-rowt fleet orders-aurora-pg15 '.versions_behind == 3 and .compliance_status == "NON-COMPLIANT" and .newer_versions == ["15.10","15.12","15.13"]'
+rowt fleet orders-aurora-pg15 '.versions_behind == 2 and .compliance_status == "COMPLIANT" and .newer_versions == ["15.10","15.12"] and .latest_minor_version == "15.12"'
+rowt fleet reports-aurora-pg14 '.versions_behind == 3 and .compliance_status == "NON-COMPLIANT" and .newer_versions == ["14.13","14.15","14.17"]'
+echo "-- counts come ONLY from ValidUpgradeTarget of the current version (mock full list differs on purpose)"
+rowt fleet orders-aurora-pg15 '(.newer_versions | index("15.13")) == null and .major_upgrade_targets == 2'
+rowt fleet reports-aurora-pg14 '(.newer_versions | index("14.18")) == null and .latest_minor_version == "14.17"'
+rowt fleet shop-aurora-mysql '.newer_versions == ["8.0.mysql_aurora.3.06.0","8.0.mysql_aurora.3.07.1","8.0.mysql_aurora.3.08.2","8.0.mysql_aurora.3.09.0","8.0.mysql_aurora.3.10.0"]'
+rowt fleet inv-mysql '([.newer_versions[] | select(startswith("8.4"))] | length) == 0 and .major_upgrade_targets == 2'
+rowt fleet graph-neptune '.newer_versions == ["1.3.3.0","1.3.4.0"] and .default_auto_upgrade_target == "1.3.4.0"'
+rowt fleet analytics-pg '([.newer_versions[] | select(startswith("13.") | not)] | length) == 0'
+echo "-- default auto-upgrade target"
+rowt fleet orders-aurora-pg15 '.default_auto_upgrade_target == "15.12"'
+rowt fleet inv-mysql '.default_auto_upgrade_target == "8.0.40"'
+rowt fleet shop-aurora-mysql '.default_auto_upgrade_target == "8.0.mysql_aurora.3.08.2"'
+rowt fleet pay-aurora-pg16 '.default_auto_upgrade_target == null'
+chk "every engine-version call names --engine-version (no full-list call)" test "$(jq -c 'select(index("describe-db-engine-versions")) | select(index("--engine-version") | not)' "$MOCK_LOG" | wc -l)" -eq 0
+chk "engine-version calls = distinct engine+version+region" test "$(jq -c 'select(index("describe-db-engine-versions"))' "$MOCK_LOG" | wc -l)" -eq "$(jq '[.rows[] | [.engine, .current_version, .region]] | unique | length' "$OUT/fleet.out")"
 rowt fleet dev-aurora-pg15 '.versions_behind == 7 and .latest_minor_version == "15.13" and .account_id == "222222222222" and .region == "ap-south-1"'
 rowt fleet pay-aurora-pg16 '.versions_behind == 0 and .compliance_status == "COMPLIANT" and .upgrade_command == ""'
-rowt fleet shop-aurora-mysql '.versions_behind == 8 and .major_version == "8.0" and .latest_minor_version == "8.0.mysql_aurora.3.10.0"'
+rowt fleet shop-aurora-mysql '.versions_behind == 5 and .major_version == "8.0" and .latest_minor_version == "8.0.mysql_aurora.3.10.0"'
 rowt fleet cms-aurora-mysql '.versions_behind == 1 and .compliance_status == "COMPLIANT"'
 rowt fleet hr-sql '.versions_behind == 3 and .major_version == "15.00" and .latest_minor_version == "15.00.4430.1.v1" and .compliance_status == "NON-COMPLIANT"'
 rowt fleet erp-sql '.versions_behind == 1 and .major_version == "16.00"'
 rowt fleet fin-ora '.versions_behind == 2 and .major_version == "19" and .compliance_status == "COMPLIANT"'
-rowt fleet inv-mysql '.versions_behind == 6 and .auto_minor_upgrade == "false" and .pending_actions == 2'
+rowt fleet inv-mysql '.versions_behind == 6 and .auto_minor_upgrade == "false" and .pending_actions_count == 2'
 rowt fleet app-mysql84 '.versions_behind == 0 and .major_version == "8.4"'
 rowt fleet analytics-pg '.versions_behind == 3 and .newer_versions == ["13.20","13.21","13.22"]'
 rowt fleet billing-pg '.versions_behind == 2 and .resource_type == "instance" and .members == ""'
 rowt fleet dev-mariadb '.versions_behind == 2 and .major_version == "10.11"'
 rowt fleet qa-pg '.versions_behind == 2 and .latest_minor_version == "17.6"'
-rowt fleet catalog-docdb '.resource_type == "docdb-cluster" and .versions_behind == 0 and .pending_actions == 1 and .major_version == "5.0"'
+rowt fleet catalog-docdb '.resource_type == "docdb-cluster" and .versions_behind == 0 and .pending_actions_count == 1 and .major_version == "5.0"'
 rowt fleet graph-neptune '.resource_type == "neptune-cluster" and .versions_behind == 2 and .major_version == "1.3" and (.support_flag | startswith("n/a"))'
 rowt fleet ledger-maz '.resource_type == "multi-az-cluster" and .versions_behind == 3 and .member_count == 3 and .auto_minor_upgrade == "true"'
 echo "-- support / flags"
 rowt fleet legacy-aurora-pg12 '.support_flag == "past standard support (Extended Support charges)" and .past_standard_support and .extended_support_end != null'
-rowt fleet old-aurora-pg11 '.deprecated_version and .versions_behind == 1 and .major_version == "11" and (.note | test("deprecated"))'
+rowt fleet old-aurora-pg11 '.deprecated_version and .compliance_status == "UNKNOWN" and .versions_behind == null and .newer_versions == [] and .latest_minor_version == null and .upgrade_command == "" and (.note | test("current version not returned by describe-db-engine-versions"))'
 rowt fleet analytics-pg '.nearing_end_of_support and (.support_flag | test("^standard support ends in 1[0-9][0-9] days$"))'
 rowt fleet inv-mysql '.nearing_end_of_support'
 rowt fleet hr-sql '(.support_flag | startswith("unknown"))'
 rowt fleet reports-aurora-pg14 '.auto_minor_upgrade == "false"'
 rowt fleet shop-aurora-mysql '.auto_minor_upgrade == "mixed" and (.note | test("off on some members"))'
-rowt fleet orders-aurora-pg15 '.pending_actions == 1 and .members == "orders-pg15-1 (writer), orders-pg15-2, orders-pg15-3" and .member_count == 3'
+rowt fleet orders-aurora-pg15 '.pending_actions_count == 2 and .members == "orders-pg15-1 (writer), orders-pg15-2, orders-pg15-3" and .member_count == 3'
 rowt fleet orders-aurora-pg15 '.maint_window_utc == "sat:21:00-sat:21:30" and .maint_window_ist == "sun:02:30-sun:03:00"'
 rowt fleet hr-sql '.maint_window_ist == "sun:00:00-sun:00:30"'
 rowt fleet orders-aurora-pg15 '.tags.Owner == "orders" and (.arn | test("^arn:aws:rds:us-east-1:111111111111:cluster:orders-aurora-pg15$"))'
-jqt fleet '.summary.past_standard_support == 2 and .summary.nearing_end_of_support == 2 and .summary.auto_minor_off == 3 and .summary.with_pending == 3 and .summary.pending_total == 4 and .summary.deprecated == 1'
+jqt fleet '.summary.past_standard_support == 2 and .summary.nearing_end_of_support == 2 and .summary.auto_minor_off == 3 and .summary.with_pending == 3 and .summary.pending_total == 5 and .summary.deprecated == 1'
+jqt fleet '.summary.pending_by_action == {"os-upgrade":2,"system-update":2,"db-upgrade":1}'
+echo "-- pending maintenance text"
+rowt fleet orders-aurora-pg15 '(.pending_actions | test("^system-update on cluster \\(auto-apply [0-9]{4}-[0-9]{2}-[0-9]{2}, forced [0-9]{4}-[0-9]{2}-[0-9]{2}\\) - Upgrade to Aurora PostgreSQL 15.8.1 patch; os-upgrade on member orders-pg15-2 \\(opt-in: next-maintenance\\) - New Operating System update is available$"))'
+rowt fleet orders-aurora-pg15 '.pending_actions_detail[0].auto_applied_after_ist | test("^[0-9]{4}-[0-9]{2}-[0-9]{2} 01:30 IST$")'
+rowt fleet inv-mysql '(.pending_actions | test("^db-upgrade \\(auto-apply [0-9-]{10}\\) - Automatic minor version upgrade to 8.0.40; os-upgrade \\(no date, optional\\) - New Operating System update is available; it includes sec\\.\\.\\.$"))'
+rowt fleet catalog-docdb '(.pending_actions | startswith("system-update on member catalog-docdb-2 (auto-apply "))'
+rowt fleet pay-aurora-pg16 '.pending_actions == "" and .pending_actions_count == 0'
 echo "-- upgrade commands (printed only)"
-rowt fleet orders-aurora-pg15 '.upgrade_command == "aws rds modify-db-cluster --db-cluster-identifier orders-aurora-pg15 --engine-version 15.13 --region us-east-1 --profile prod"'
+rowt fleet orders-aurora-pg15 '.upgrade_command == "aws rds modify-db-cluster --db-cluster-identifier orders-aurora-pg15 --engine-version 15.12 --region us-east-1 --profile prod"'
 rowt fleet inv-mysql '.upgrade_command == "aws rds modify-db-instance --db-instance-identifier inv-mysql --engine-version 8.0.43 --region us-east-1 --profile prod"'
 rowt fleet graph-neptune '(.upgrade_command | startswith("aws neptune modify-db-cluster --db-cluster-identifier graph-neptune --engine-version 1.3.4.0"))'
 rowt fleet fin-ora '(.upgrade_command | test("--engine-version 19.0.0.0.ru-2025-07.rur-2025-07.r1 "))'
@@ -173,19 +195,20 @@ t noprofile 0 fleet -r us-east-1 -F json -e postgres
 jqt noprofile '[.rows[].upgrade_command | select(. != "" and test("--profile"))] | length == 0'
 jqt noprofile '[.rows[].profile] | unique == ["default"]'
 echo "-- sorting / summary"
-jqt fleet '[.rows[] | select(.engine == "aurora-postgresql") | .identifier] == ["dev-aurora-pg15","legacy-aurora-pg12","reports-aurora-pg14","orders-aurora-pg15","crm-aurora-pg15","old-aurora-pg11","pay-aurora-pg16"]'
-jqt fleet '.summary.top_behind[0].identifier == "shop-aurora-mysql" and (.summary.top_behind | length) == 10'
+jqt fleet '[.rows[] | select(.engine == "aurora-postgresql") | .identifier] == ["dev-aurora-pg15","legacy-aurora-pg12","reports-aurora-pg14","old-aurora-pg11","crm-aurora-pg15","orders-aurora-pg15","pay-aurora-pg16"]'
+jqt fleet '.summary.top_behind[0].identifier == "dev-aurora-pg15" and (.summary.top_behind | length) == 10'
 jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors | map(.major)) == ["16","15","14","12","11"]'
-jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors[] | select(.major == "15")) | .total == 3 and .compliant == 1 and .non_compliant == 2 and .latest_minor == "15.13"'
+jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors[] | select(.major == "15")) | .total == 3 and .compliant == 2 and .non_compliant == 1 and .latest_minor == "15.13"'
+jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors[] | select(.major == "14")) | .latest_minor == "14.17"'
 t top3 0 fleet "${P2[@]}" -F json --top 3;   jqt top3 '(.summary.top_behind | length) == 3'
 echo "-- options"
 t max3 0 fleet -P prod -r us-east-1 -F json --max-behind 3
-rowt max3 orders-aurora-pg15 '.compliance_status == "COMPLIANT"';  rowt max3 reports-aurora-pg14 '.compliance_status == "NON-COMPLIANT"'
+rowt max3 reports-aurora-pg14 '.compliance_status == "COMPLIANT"';  rowt max3 shop-aurora-mysql '.compliance_status == "NON-COMPLIANT"'
 t max0 0 fleet -P prod -r us-east-1 -F json --max-behind 0
 rowt max0 cms-aurora-mysql '.compliance_status == "NON-COMPLIANT"';  rowt max0 pay-aurora-pg16 '.compliance_status == "COMPLIANT"'
 t warn100 0 fleet -P prod -r us-east-1 -F json --warn-days 100;  jqt warn100 '.summary.nearing_end_of_support == 0'
 t nconly 0 fleet "${P2[@]}" -F json --non-compliant-only
-jqt nconly '(.rows | length) == 9 and all(.rows[]; .compliance_status == "NON-COMPLIANT") and .summary.total == 22'
+jqt nconly '(.rows | length) == 8 and all(.rows[]; .compliance_status == "NON-COMPLIANT") and .summary.total == 22'
 t failnc 5 fleet "${P2[@]}" --fail-on-noncompliant
 t failnc_ok 0 fleet -P prod -r us-east-1 -e docdb,neptune --fail-on-noncompliant
 t engglob 0 fleet -P prod -r us-east-1 -F json -e 'aurora-*' -e 'SQLSERVER-*'
@@ -198,13 +221,13 @@ t empty 0 empty -P prod -r us-east-1;  has empty out 'No servers matched'
 echo "-- failures"
 t lookupfail 0 lookupfail -P prod -r us-east-1 -F json
 rowt lookupfail shop-aurora-mysql '.compliance_status == "UNKNOWN" and .versions_behind == null and .upgrade_command == "" and (.note | test("Throttling"))'
-jqt lookupfail '.summary.unknown == 2 and .summary.errors == 0'
-has lookupfail err 'WARN.*aurora-mysql failed'
+jqt lookupfail '.summary.unknown == 3 and .summary.errors == 0'
+has lookupfail err 'WARN.*aurora-mysql .* failed'
 t nolc 0 nolc -P prod -r us-east-1 -F json
 jqt nolc '.meta.lifecycle_api == false and ([.rows[] | select(.engine == "postgres") | .support_flag] | unique) == ["unknown (lifecycle lookup unavailable)"]'
 chk "nolc: lifecycle API tried only once" test "$(grep -c 'describe-db-major-engine-versions' "$MOCK_LOG")" -ge 1
 t lcfail 0 lcfail -P prod -r us-east-1 -F json
-jqt lcfail '.summary.non_compliant == 8 and .summary.past_standard_support == 0'
+jqt lcfail '.summary.non_compliant == 7 and .summary.past_standard_support == 0'
 t denied 0 accessdenied -P prod -r us-east-1,eu-west-1
 has denied out 'ERRORS'; has denied out 'eu-west-1: rds describe-db-clusters: .*AccessDenied'
 t badcreds 2 badcreds -P prod -r us-east-1;  has badcreds err 'No profile could be used'
@@ -219,14 +242,14 @@ mapfile -t F < <(find "$OUT/rep" -type f | sort)
 chk "4 files written" test "${#F[@]}" -eq 4
 chk "files are 0640" test "$(stat -c %a "${F[@]}" | sort -u)" = 640
 CSV="$(find "$OUT/rep" -name '*.csv')"; HTML="$(find "$OUT/rep" -name '*.html')"; TXT="$(find "$OUT/rep" -name '*.txt')"
-chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note"'
+chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","default_auto_upgrade_target","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions_count","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note"'
 chk "csv rows = 22" test "$(python3 -c 'import csv,sys; print(sum(1 for _ in csv.reader(open(sys.argv[1])))-1)' "$CSV")" -eq 22
-chk "csv parses with 26 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{26}"
-for p in 'id="q"' 'class="cp"' 'table class="main"' 'st bad' 'st ok' 'Extended Support' 'Top 10 most behind' 'Per engine and major version' 'localeCompare' 'href="#eng-aurora-postgresql"'; do
+chk "csv parses with 28 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{28}"
+for p in 'id="q"' 'class="cp"' 'class="badge">2<' 'details class="pend"' '01:30 IST' "haven't been applied yet" 'Valid minor targets' 'Auto-upgrade default' 'table class="main"' 'st bad' 'st ok' 'Extended Support' 'Top 10 most behind' 'Per engine and major version' 'localeCompare' 'href="#eng-aurora-postgresql"'; do
     if grep -qF -- "$p" "$HTML"; then ok "html has $p"; else bad "html lacks $p"; fi
 done
 chk "html is well-formed enough (python html.parser)" python3 -c 'import html.parser,sys; html.parser.HTMLParser().feed(open(sys.argv[1]).read())' "$HTML"
-for p in '^SUMMARY' '^PER ENGINE / MAJOR VERSION' '^TOP 10 MOST BEHIND' '^=== aurora-postgresql: 7' '59.1% compliant' 'past standard support'; do
+for p in '^SUMMARY' '^PER ENGINE / MAJOR VERSION' '^TOP 10 MOST BEHIND' '^=== aurora-postgresql: 7' '59.1% compliant' 'past standard support' 'Pending maint\.   : on 3 server\(s\): os-upgrade 2, system-update 2, db-upgrade 1' '^      pending: os-upgrade on member orders-pg15-2'; do
     if grep -qE -- "$p" "$TXT"; then ok "txt has /$p/"; else bad "txt lacks /$p/"; fi
 done
 chk "summary is at the top of the txt" test "$(grep -n '^SUMMARY' "$TXT" | cut -d: -f1)" -lt 8
@@ -244,13 +267,13 @@ hasnt large err 'Argument list too long'
 
 echo "== alerts (local stubs only)"
 t al_mail 0 fleet "${P2[@]}" --alert-email dba@example.com
-chk "mail sent (subject)" grep -qF 'NON-COMPLIANT:\ 9\ non-compliant\ of\ 22' "$MAIL_SINK"
+chk "mail sent (subject)" grep -qF 'NON-COMPLIANT:\ 8\ non-compliant\ of\ 22' "$MAIL_SINK"
 chk "mail body is the text report" grep -q '^PER ENGINE / MAJOR VERSION' "$MAIL_SINK"
 : >"$MAIL_SINK"
 t al_none 0 fleet -P prod -r us-east-1 -e docdb --alert-email dba@example.com
 chk "no alert when all compliant (alert-on noncompliant)" test ! -s "$MAIL_SINK"
 t al_hook 0 fleet "${P2[@]}" --alert-webhook "$HOOK" --alert-webhook-format json
-chk "json webhook payload" bash -c "grep . '$OUT/webhook.txt' | tail -1 | jq -e '.status == \"NON-COMPLIANT\" and (.non_compliant | length) == 9' >/dev/null"
+chk "json webhook payload" bash -c "grep . '$OUT/webhook.txt' | tail -1 | jq -e '.status == \"NON-COMPLIANT\" and (.non_compliant | length) == 8' >/dev/null"
 t al_slack 0 fleet "${P2[@]}" --alert-webhook "$HOOK"
 chk "slack webhook payload" bash -c "grep . '$OUT/webhook.txt' | tail -1 | jq -e '.text | startswith(\"*[rds_patch_compliance]\")' >/dev/null"
 hasnt al_slack err 'SECRET'

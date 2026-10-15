@@ -3,9 +3,10 @@
 # rds_patch_compliance_report.sh - minor-version patch compliance of Aurora / RDS / Multi-AZ DB cluster /
 # DocumentDB / Neptune databases, across profiles (accounts) and regions. READ-ONLY: describe-* only.
 #
-# Rule: versions_behind = number of minor versions AWS offers in the same major line that are newer than the
-# current one (real releases from describe-db-engine-versions, not number gaps). COMPLIANT if <= --max-behind
-# (default 2), NON-COMPLIANT otherwise, UNKNOWN if the version lookup failed. Clusters are judged per cluster.
+# Rule: versions_behind = number of valid MINOR upgrade targets RDS returns for the current version
+# (describe-db-engine-versions --engine E --engine-version V: ValidUpgradeTarget[] with IsMajorVersionUpgrade=false).
+# COMPLIANT if <= --max-behind (default 2), NON-COMPLIANT otherwise, UNKNOWN if the lookup failed or the current
+# version is not returned (deprecated). Clusters are judged per cluster.
 #
 # Output: text | csv | json | html (several at once with -F csv,html -o DIR).
 # Exit:   0 report produced, 5 NON-COMPLIANT found with --fail-on-noncompliant, 1 usage, 2 pre-check /
@@ -16,7 +17,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PCR_LIB:-$SCRIPT_DIR/lib}/compliance.jq"
@@ -91,8 +92,8 @@ Scope:
   -i, --identifier GLOB     cluster / instance identifier (a cluster also matches by member) [repeatable]
 
 Compliance:
-      --max-behind N        COMPLIANT when at most N minor versions behind the newest minor in the
-                            same major line (default: 2; N+1 or more = NON-COMPLIANT)
+      --max-behind N        COMPLIANT when RDS lists at most N valid minor upgrade targets for the
+                            current version (default: 2; N+1 or more = NON-COMPLIANT)
       --warn-days N         Flag majors whose standard support ends within N days (default: 180)
       --non-compliant-only  Show only NON-COMPLIANT rows (the summary still counts everything)
       --fail-on-noncompliant  Exit 5 when any NON-COMPLIANT server is found (default: exit 0)
@@ -363,25 +364,32 @@ engine_wanted() {
 }
 svc_of() { case "$1" in docdb) echo docdb ;; neptune) echo neptune ;; *) echo rds ;; esac; }
 
-# Engine versions AWS offers, ONE describe-db-engine-versions per (engine, region) - all versions of the
-# engine, every page (CLI auto-pagination) - cached in $WORK/ev/<region>/ and shared by all profiles.
+# Valid upgrade targets from RDS metadata ONLY: one describe-db-engine-versions --engine E --engine-version V per
+# (engine, current version, region) - docdb / neptune through their own CLI - cached in $WORK/ev/<region>/ and
+# shared by all profiles. Only that version's ValidUpgradeTarget[] is kept; the full version list is never read.
 # Lifecycle dates (rds describe-db-major-engine-versions) are cached the same way; docdb / neptune have none.
 collect_versions() {   # collect_versions <profile> <region> <dir>
-    local profile="$1" region="$2" d="$3" engine svc cache lc
+    local profile="$1" region="$2" d="$3" engine ver svc cache lc key
     local -a evs=() lcs=()
     mkdir -p "$WORK/ev/$region"
-    while IFS= read -r engine; do
+    while IFS=$'\t' read -r engine ver; do
         svc="$(svc_of "$engine")"
-        cache="$WORK/ev/$region/ev_$engine.json"
+        key="$(printf '%s_%s' "$engine" "$ver" | tr -c 'A-Za-z0-9._-' '_')"
+        cache="$WORK/ev/$region/ev_$key.json"
         if [[ ! -s "$cache" ]]; then
             AWS_SOFT=1
-            if aws_call "$cache.raw" "$profile" "$region" "$svc" describe-db-engine-versions --engine "$engine"; then
-                jq -c --arg e "$engine" '{key: $e, value: {ok: true, error: null,
-                        versions: [.DBEngineVersions[]? | select(.Engine == $e) | {EngineVersion, MajorEngineVersion, Status}]}}' \
-                    "$cache.raw" >"$cache" || die 4 "Parsing describe-db-engine-versions failed for $engine"
+            if aws_call "$cache.raw" "$profile" "$region" "$svc" describe-db-engine-versions --engine "$engine" --engine-version "$ver"; then
+                jq -c --arg e "$engine" --arg v "$ver" '[.DBEngineVersions[]? | select(.Engine == $e and .EngineVersion == $v)][0] as $x
+                    | {key: ($e + "|" + $v), value: {ok: true, error: null, returned: ($x != null),
+                       major: ($x.MajorEngineVersion // (($x.DBParameterGroupFamily // "") | sub("^[A-Za-z-]+"; "") | if . == "" then null else . end)),
+                       targets: [($x.ValidUpgradeTarget // [])[] | {Engine, EngineVersion, IsMajorVersionUpgrade, AutoUpgrade}]}}' \
+                    "$cache.raw" >"$cache" || die 4 "Parsing describe-db-engine-versions failed for $engine $ver"
+                if [[ "$(jq -r '.value.returned' "$cache")" != true ]]; then
+                    log_warn "[${profile:-default}/$region] $engine $ver is not returned by describe-db-engine-versions (deprecated / not offered here); its servers are UNKNOWN"
+                fi
             else
-                log_warn "[${profile:-default}/$region] engine-version lookup for $engine failed ($LAST_ERR); its servers are UNKNOWN"
-                jq -cn --arg e "$engine" --arg m "$LAST_ERR" '{key: $e, value: {ok: false, error: $m, versions: []}}' >"$cache"
+                log_warn "[${profile:-default}/$region] engine-version lookup for $engine $ver failed ($LAST_ERR); its servers are UNKNOWN"
+                jq -cn --arg e "$engine" --arg v "$ver" --arg m "$LAST_ERR" '{key: ($e + "|" + $v), value: {ok: false, error: $m, returned: false, major: null, targets: []}}' >"$cache"
             fi
             AWS_SOFT=0
         fi
@@ -405,9 +413,9 @@ collect_versions() {   # collect_versions <profile> <region> <dir>
             AWS_SOFT=0
         fi
         [[ -s "$lc" ]] && lcs+=("$lc")
-    done < <(jq -r -s '[.[0][], .[1][]] | map(.Engine // empty) | unique[]
-                       | select(test("^(aurora-postgresql|aurora-mysql|postgres|mysql|mariadb|sqlserver-(ee|se|ex|web)|oracle-(ee|se2|ee-cdb|se2-cdb)|docdb|neptune)$"))' \
-                 "$d/instances.json" "$d/clusters.json" | while IFS= read -r e; do if engine_wanted "$e"; then echo "$e"; fi; done)
+    done < <(jq -r -s '[.[0][], .[1][]] | map(select((.Engine // "") != "" and (.EngineVersion // "") != "") | [.Engine, .EngineVersion]) | unique[]
+                       | select(.[0] | test("^(aurora-postgresql|aurora-mysql|postgres|mysql|mariadb|sqlserver-(ee|se|ex|web)|oracle-(ee|se2|ee-cdb|se2-cdb)|docdb|neptune)$")) | @tsv' \
+                 "$d/instances.json" "$d/clusters.json" | while IFS=$'\t' read -r e v; do if engine_wanted "$e"; then printf '%s\t%s\n' "$e" "$v"; fi; done)
     if (( ${#evs[@]} )); then jq -cs 'from_entries' -- "${evs[@]}" >"$d/ev.json"; else printf '{}' >"$d/ev.json"; fi
     if (( ${#lcs[@]} )); then jq -cs 'map(select(has("key"))) | from_entries' -- "${lcs[@]}" >"$d/lc.json"; else printf '{}' >"$d/lc.json"; fi
 }
@@ -597,7 +605,7 @@ dry_run_plan() {
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-clusters)"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-instances)"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-pending-maintenance-actions)"
-            printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-engine-versions --engine "<engine>") (once per engine+region; docdb / neptune CLI for those)"
+            printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-engine-versions --engine "<engine>" --engine-version "<current>") (once per engine+version+region; docdb / neptune CLI for those)"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-major-engine-versions --engine "<engine>") (once per RDS engine+region)"
         done
     done

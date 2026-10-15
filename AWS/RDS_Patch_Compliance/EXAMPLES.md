@@ -47,19 +47,31 @@ All examples are read-only. Run them in AWS CloudShell (or anywhere with AWS CLI
 ./rds_patch_compliance_report.sh -e aurora-mysql -F json | jq -r '.rows[].upgrade_command | select(. != "")'
 ```
 
+# 15. Pending maintenance per server, readable
+./rds_patch_compliance_report.sh -F json | jq -r '.rows[] | select(.pending_actions_count > 0) | "\(.identifier): \(.pending_actions)"'
+
+# 16. Servers whose auto minor upgrade would move them, and to what
+./rds_patch_compliance_report.sh -F json | jq -r '.rows[] | select(.default_auto_upgrade_target != null) | "\(.identifier) \(.current_version) -> \(.default_auto_upgrade_target) (auto minor upgrade: \(.auto_minor_upgrade))"'
+
+# 17. Check one server's valid minor targets yourself (the exact source the report uses)
+aws rds describe-db-engine-versions --engine aurora-postgresql --engine-version 15.8 --region us-east-1 \
+  --query 'DBEngineVersions[].ValidUpgradeTarget[?IsMajorVersionUpgrade==`false`].[EngineVersion,AutoUpgrade]' --output table
+```
+
 Sample text summary (from the test mock, see `samples/sample_report.txt`):
 
 ```
-RDS PATCH COMPLIANCE REPORT - 2026-10-15 10:17 UTC (2026-10-15 15:47 IST)
+RDS PATCH COMPLIANCE REPORT - 2026-10-15 10:53 UTC (2026-10-15 16:23 IST)
 Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, us-east-1
-Rule     : COMPLIANT when the server is at most 2 minor version(s) behind the newest minor AWS offers in its major line (NON-COMPLIANT = 3+ behind; UNKNOWN = version lookup failed)
+Rule     : COMPLIANT when RDS lists at most 2 valid minor upgrade target(s) for the current version (NON-COMPLIANT = 3+; UNKNOWN = lookup failed or current version not returned)
+Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)
 
 SUMMARY
-  Servers/clusters : 22   COMPLIANT 13   NON-COMPLIANT 9   UNKNOWN 0   -> 59.1% compliant
+  Servers/clusters : 22   COMPLIANT 13   NON-COMPLIANT 8   UNKNOWN 1   -> 59.1% compliant
   Support          : 2 past standard support (Extended Support charges), 2 ending within 180 days
-  Other flags      : auto minor upgrade off 3, pending maintenance on 3 (4 action(s)), deprecated version 1
+  Pending maint.   : on 3 server(s): os-upgrade 2, system-update 2, db-upgrade 1 (5 action(s))
+  Other flags      : auto minor upgrade off 3, current version not returned / deprecated 1
 
 PER ENGINE / MAJOR VERSION
   ENGINE                MAJOR      TOTAL  COMPL  NON-C  UNKN  LATEST MINOR                        SUPPORT
-  aurora-mysql          8.0            2      1      1     0  8.0.mysql_aurora.3.10.0             ok (standard end 2029-04-02)
 ```

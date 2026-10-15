@@ -6,6 +6,7 @@
 #  2. negative control: deliberately broken command lines must be rejected.
 #  3. shape check: every key the mock returns exists in `--generate-cli-skeleton output`.
 #  4. every printed upgrade_command is accepted by the real CLI (rds / docdb / neptune, cluster / instance).
+#     The replayed calls include describe-db-engine-versions --engine E --engine-version V for every engine.
 #  5. pagination end-to-end: the real CLI, with the script's exact options, against a local fake endpoint that
 #     pages every list with Marker; the report must contain everything.
 # Guard: fake credentials, AWS_CONFIG_FILE=/dev/null, every real-CLI call gets a 127.0.0.1 --endpoint-url,
@@ -79,8 +80,8 @@ if [[ "$grc" == 99 ]]; then echo "guard: real call without loopback endpoint ref
 
 shape_ok=0; n_shapes=0
 for spec in "rds describe-db-clusters" "rds describe-db-instances" "rds describe-pending-maintenance-actions" \
-            "rds describe-db-engine-versions|--engine aurora-mysql" "rds describe-db-engine-versions|--engine sqlserver-se" \
-            "docdb describe-db-engine-versions|--engine docdb" "neptune describe-db-engine-versions|--engine neptune" \
+            "rds describe-db-engine-versions|--engine aurora-mysql --engine-version 8.0.mysql_aurora.3.05.2" "rds describe-db-engine-versions|--engine sqlserver-se --engine-version 15.00.4410.1.v1" \
+            "docdb describe-db-engine-versions|--engine docdb --engine-version 5.0.0" "neptune describe-db-engine-versions|--engine neptune --engine-version 1.3.2.1" \
             "rds describe-db-major-engine-versions|--engine aurora-postgresql" "sts get-caller-identity" "ec2 describe-regions"; do
     n_shapes=$((n_shapes + 1))
     cmd="${spec%%|*}"; extra=""; [[ "$spec" == *"|"* ]] && extra="${spec#*|}"
@@ -140,8 +141,9 @@ summ="$(jq -sc 'group_by(.action) | map({key: .[0].action, value: {requests: len
 echo "fake endpoint requests: $summ"
 pg_ok=1
 jq -e '.DescribeDBInstances.requests == 12 and .DescribeDBClusters.requests == 2 and .DescribePendingMaintenanceActions.requests == 3
-       and .DescribeDBEngineVersions.requests == 6 and .DescribeDBMajorEngineVersions.requests == 6' <<<"$summ" >/dev/null || pg_ok=0
-jq -e '.summary.total == 230 and .summary.errors == 0 and .summary.with_pending == 50
+       and .DescribeDBEngineVersions.requests == 2 and .DescribeDBMajorEngineVersions.requests == 6' <<<"$summ" >/dev/null || pg_ok=0
+jq -e '.summary.total == 230 and .summary.errors == 0 and .summary.with_pending == 50 and .summary.pending_by_action == {"system-update": 50}
+       and ([.rows[] | select(.engine == "postgres")][0].default_auto_upgrade_target == "16.11")
        and ([.rows[] | select(.engine == "postgres")] | length == 200 and all(.versions_behind == 5 and .latest_minor_version == "16.11" and .compliance_status == "NON-COMPLIANT"))
        and ([.rows[] | select(.engine == "aurora-postgresql")] | length == 30 and all(.versions_behind == 1 and .members == "\(.identifier)-1 (writer)" and .standard_support_end == "2029-02-28"))
        and ([.rows[] | select(.engine == "postgres" and .tags.Environment != "prod & test")] | length == 0)' "$OUT/pag.json" >/dev/null 2>&1 || pg_ok=0

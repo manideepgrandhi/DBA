@@ -67,8 +67,17 @@ class H(http.server.BaseHTTPRequestHandler):
         elif action == "DescribePendingMaintenanceActions":
             body = wrap(action, "PendingMaintenanceActions", *page(PMA, marker, PAGE))
         elif action == "DescribeDBEngineVersions":
-            vs = ["<DBEngineVersion><Engine>%s</Engine><EngineVersion>%s</EngineVersion><MajorEngineVersion>16</MajorEngineVersion><Status>available</Status></DBEngineVersion>"
-                  % (eng, v) for v in EV.get(eng, [])]
+            ver = q.get("EngineVersion", [None])[0]
+            allv = EV.get(eng, [])
+            vs = []
+            for v in allv:
+                if ver is not None and v != ver:
+                    continue
+                tg = "".join("<UpgradeTarget><Engine>%s</Engine><EngineVersion>%s</EngineVersion><IsMajorVersionUpgrade>false</IsMajorVersionUpgrade>"
+                             "<AutoUpgrade>%s</AutoUpgrade></UpgradeTarget>" % (eng, t, "true" if t == allv[-1] else "false") for t in allv[allv.index(v) + 1:])
+                tg += "<UpgradeTarget><Engine>%s</Engine><EngineVersion>17.4</EngineVersion><IsMajorVersionUpgrade>true</IsMajorVersionUpgrade></UpgradeTarget>" % eng
+                vs.append("<DBEngineVersion><Engine>%s</Engine><EngineVersion>%s</EngineVersion><MajorEngineVersion>16</MajorEngineVersion><Status>available</Status>"
+                          "<ValidUpgradeTarget>%s</ValidUpgradeTarget></DBEngineVersion>" % (eng, v, tg))
             body = wrap(action, "DBEngineVersions", *page(vs, marker, 2))
         elif action == "DescribeDBMajorEngineVersions":
             ms = ["<DBMajorEngineVersion><Engine>%s</Engine><MajorEngineVersion>%s</MajorEngineVersion><SupportedEngineLifecycles>"

@@ -1,6 +1,6 @@
 # rds_patch_compliance_report.sh
 
-A **read-only** patch compliance report for AWS databases. For every Aurora cluster, RDS instance, Multi-AZ DB cluster, DocumentDB cluster and Neptune cluster it shows how many **minor versions** the database is behind the newest minor AWS offers in its major line, and marks it **COMPLIANT** or **NON-COMPLIANT**. It also flags majors past (or near) the end of standard support (Extended Support charges), auto minor upgrade switched off, pending maintenance and deprecated versions. It works across several accounts (profiles) and regions. Output formats are text, CSV, JSON and a single-file HTML report.
+A **read-only** patch compliance report for AWS databases. For every Aurora cluster, RDS instance, Multi-AZ DB cluster, DocumentDB cluster and Neptune cluster it shows how many **minor versions** the database is behind, and marks it **COMPLIANT** or **NON-COMPLIANT**. Versions behind are the **valid minor upgrade targets RDS returns for the current version** (v1.1.0). It also flags majors past (or near) the end of standard support (Extended Support charges), auto minor upgrade switched off, pending maintenance and deprecated versions. It works across several accounts (profiles) and regions. Output formats are text, CSV, JSON and a single-file HTML report.
 
 ```
 ./rds_patch_compliance_report.sh -P prod,nonprod -r us-east-1,ap-south-1 -F csv,html,txt -o ~/compliance
@@ -12,38 +12,58 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
   * DocumentDB and Neptune clusters: per cluster.
   * Standalone RDS instances: `postgres`, `mysql`, `mariadb`, `sqlserver-ee/se/ex/web`, `oracle-ee/se2/ee-cdb/se2-cdb`. Judged **per instance** (read replicas are their own rows).
   * Instances that belong to a cluster are not separate rows. Other engines (e.g. RDS Custom, Db2) are ignored.
-* **Strictly read-only.** Calls: `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds describe-db-clusters`, `rds describe-db-instances`, `rds describe-pending-maintenance-actions`, `rds|docdb|neptune describe-db-engine-versions` and `rds describe-db-major-engine-versions`. The `upgrade_command` column is **printed only**, never run.
+* **Strictly read-only.** Calls: `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds describe-db-clusters`, `rds describe-db-instances`, `rds describe-pending-maintenance-actions`, `rds|docdb|neptune describe-db-engine-versions --engine E --engine-version V` and `rds describe-db-major-engine-versions`. The `upgrade_command` column is **printed only**, never run.
 * **Requirements:** Bash 4.4+, AWS CLI v2 (2.15+ recommended, for `describe-db-major-engine-versions`), jq 1.6+. Keep `lib/compliance.jq` next to the script. curl and mail/mailx/sendmail only for the optional alerts.
 * **Siblings:** [RDS_Pending_Maintenance](../RDS_Pending_Maintenance/README.md) shows *what maintenance is pending and when*; [RDS_Patch_Runner](../RDS_Patch_Runner/README.md) *applies* it to one cluster safely. This tool answers *how far behind are we on minor versions*.
 
 ![HTML report: summary cards, per-engine/major table and most-behind list](docs/sample_report_html.png)
 
+![HTML detail rows: valid minor targets, auto-upgrade default and the pending-maintenance badge expanded](docs/sample_report_pending.png)
+
 ## The compliance rule
 
-`versions_behind` = the number of minor versions **AWS actually offers** (`describe-db-engine-versions --engine <engine>`) in the **same major line** that are **newer** than the current version.
+For **each server** the report asks RDS which upgrades are valid **from its current version**:
+
+```
+aws rds describe-db-engine-versions --engine <engine> --engine-version <current> --region <region>
+```
+
+(`aws docdb ...` / `aws neptune ...` for those engines; they support the same call and return the same `ValidUpgradeTarget` list.) Only that version's `ValidUpgradeTarget[]` entries with **`IsMajorVersionUpgrade == false`** and the same `Engine` are used:
+
+* `newer_versions` = those targets, sorted; `latest_minor_version` = the highest; **`versions_behind` = their count**.
+* `default_auto_upgrade_target` = the target RDS marks `AutoUpgrade=true` (the version auto minor upgrade would move to), if any.
+* Major targets are never counted or suggested (`major_upgrade_targets` in JSON only shows how many exist).
+* Nothing is derived from the full engine version list any more (v1.1.0). Lookups are cached per engine + version + region.
 
 | versions_behind | status |
 |---|---|
 | 0, 1 or 2 (`<= --max-behind`, default 2) | **COMPLIANT** |
 | 3 or more | **NON-COMPLIANT** |
-| version list could not be read | **UNKNOWN** (the lookup error is in `note`) |
+| lookup failed, or the current version is **not returned** by `describe-db-engine-versions` | **UNKNOWN** |
 
-**Releases are counted, not number gaps.** Worked example (Aurora PostgreSQL 15, AWS offers `15.4 15.5 15.6 15.7 15.8 15.10 15.12 15.13`):
+Not returned = deprecated or not offered in that region: `deprecated_version=true`, no targets, note `current version not returned by describe-db-engine-versions`. There is no fallback to another method.
 
-| current | newer versions AWS offers | versions_behind | status |
-|---|---|---|---|
-| 15.13 | - | 0 | COMPLIANT |
-| 15.10 | 15.12, 15.13 | **2** | COMPLIANT (boundary) |
-| 15.8 | 15.10, 15.12, 15.13 | **3** | NON-COMPLIANT (boundary) |
-| 15.4 | 15.5 ... 15.13 | 7 | NON-COMPLIANT |
+**Worked example** (Aurora PostgreSQL 15.8; the engine offers `15.4 ... 15.8 15.10 15.12 15.13`, but RDS returns as valid targets from 15.8 only `15.10`, `15.12` (minor, AutoUpgrade on 15.12) and `16.4`, `16.8` (major)):
 
-15.8 → 15.13 is 5 by number but only 3 real releases (15.9 and 15.11 were never released on Aurora), so it is 3 behind.
+| | v1.0.0 (full engine list) | v1.1.0 (ValidUpgradeTarget of 15.8) |
+|---|---|---|
+| newer_versions | 15.10, 15.12, 15.13 | 15.10, 15.12 |
+| latest_minor_version | 15.13 | 15.12 (default auto-upgrade target 15.12) |
+| versions_behind | 3 → NON-COMPLIANT | **2 → COMPLIANT** |
+| upgrade_command | `--engine-version 15.13` | `--engine-version 15.12` |
 
-* **Major line** = AWS's `MajorEngineVersion` for the current version: `16` for PostgreSQL 16.x, `8.0` for MySQL 8.0 and Aurora MySQL 3 (`8.0.mysql_aurora.3.x`), `15.00` for SQL Server 2019, `19` for Oracle 19c. DocumentDB / Neptune have no such field, so the first two numbers are used (`5.0`, `1.3`). Major upgrades are never counted or suggested.
-* **Version compare** (per engine, one rule): the version string is split into runs of digits and letters; digits compare as numbers. So `15.10 > 15.9`, `8.0.mysql_aurora.3.10.0 > 8.0.mysql_aurora.3.9.0` (`3.05.2` = `3.5.2`), `15.00.4430.1.v1 > 15.00.4415.2.v1`, `19.0.0.0.ru-2025-07.rur-2025-07.r1 > 19.0.0.0.ru-2025-04...`.
-* **Deprecated version:** if the current version is no longer in AWS's list, it is flagged `deprecated_version=true` (it can no longer be used for new servers); behind is still counted against the versions offered.
-* Lookups are cached: one `describe-db-engine-versions` and one `describe-db-major-engine-versions` call per engine and region (shared by all profiles). The CLI follows every page.
-* Change the threshold with `--max-behind N`.
+Boundary: 2 valid minor targets = COMPLIANT, 3 = NON-COMPLIANT (e.g. 14.12 with targets 14.13, 14.15, 14.17).
+
+**Latest minor per major** (summary) = the highest valid minor target seen among that major's servers, or the current version when a server is up to date.
+
+### Why v1.0.0 (full engine list) could differ from RDS's own upgrade metadata
+
+* **Not a valid target from this version:** a release can be listed for the engine but not be an allowed upgrade *from* your version (upgrade paths are per source version; some need an intermediate hop, some newer patch levels are not yet enabled from older ones).
+* **Status / lifecycle:** the full list contains versions with other statuses or limited availability (preview, deprecated-but-still-listed, versions only for new creates, Babelfish / limitless / serverless-only builds) that are not upgrade targets.
+* **Regional availability:** a version can exist in AWS's catalogue but not (yet) be a target in your region; the per-version call is made in the server's region.
+* **Release numbering:** "versions behind" by number gaps vs real releases (15.9 / 15.11 never shipped on Aurora) and odd naming such as Aurora MySQL `8.0.mysql_aurora.3.05.2` (Aurora release, not the MySQL patch level), SQL Server `15.00.4410.1.v1`, Oracle RU strings; deriving the major line from such strings can group wrongly.
+* **Deprecated current version:** v1.0.0 still counted newer versions for a version AWS no longer returns; v1.1.0 shows UNKNOWN instead.
+* **Major targets:** a target list can contain major upgrades (e.g. 15.8 → 16.x); only `IsMajorVersionUpgrade=false` entries are counted.
 
 ## Other flags (shown; they do not change the status)
 
@@ -54,8 +74,8 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
   * `unknown (...)` - AWS lists no dates for that major (e.g. SQL Server, Oracle), the call failed / was denied, or the CLI is too old (logged once, the report still runs);
   * `n/a (no lifecycle API for docdb|neptune)`.
 * **Auto minor upgrade:** `true`, `false`, or `mixed` (some cluster members off). For Aurora it is read from the member instances, for Multi-AZ DB clusters from the cluster.
-* **Pending maintenance:** number of pending actions on the cluster, its members, or the instance.
-* **Deprecated current version** (see above).
+* **Pending maintenance** (`pending_actions_count`, `pending_actions`): maintenance actions AWS has scheduled or offered for this server that haven't been applied yet (from `describe-pending-maintenance-actions`). Cluster rows include their member instances' actions, tagged with the member name. Format per action: `<action>[ on cluster | on member <instance>] (auto-apply <UTC date>, forced <UTC date>, opt-in: <status>) - <short description>`, actions separated by `; `; `(no date, optional)` when AWS gives no date. Example: `system-update on cluster (auto-apply 2026-11-01, forced 2026-12-01) - Upgrade to Aurora PostgreSQL 15.8.1 patch; os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available`. The HTML shows a count badge (click to expand, hover for UTC and IST times); the text report lists each action under its row with the IST time; JSON has the structured `pending_actions_detail`. The summary says e.g. `pending maintenance on 3 server(s): os-upgrade 2, system-update 2, db-upgrade 1`.
+* **Current version not returned / deprecated** (see above).
 
 ## Report
 
@@ -66,11 +86,12 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
 
 ### Columns (CSV; the same fields are in JSON, HTML and text)
 
-`account_id, profile, region, resource_type, identifier, members, engine, major_version, current_version, latest_minor_version, versions_behind, newer_versions, compliance_status, auto_minor_upgrade, standard_support_end, extended_support_end, support_flag, pending_actions, deprecated_version, maint_window_utc, maint_window_ist, tag:<key>..., arn, upgrade_command, note`
+`account_id, profile, region, resource_type, identifier, members, engine, major_version, current_version, latest_minor_version, versions_behind, newer_versions, default_auto_upgrade_target, compliance_status, auto_minor_upgrade, standard_support_end, extended_support_end, support_flag, pending_actions_count, pending_actions, deprecated_version, maint_window_utc, maint_window_ist, tag:<key>..., arn, upgrade_command, note`
 
 * `resource_type`: `aurora-cluster`, `multi-az-cluster`, `docdb-cluster`, `neptune-cluster`, `instance`.
 * `members`: cluster member instances, writer marked, e.g. `orders-pg15-1 (writer), orders-pg15-2`.
-* `newer_versions`: the releases counted, space-separated in CSV.
+* `newer_versions`: the valid minor upgrade targets counted, space-separated in CSV. `default_auto_upgrade_target`: the `AutoUpgrade=true` target.
+* `pending_actions_count` / `pending_actions`: see "Pending maintenance" above.
 * `maint_window_ist`: the preferred maintenance window converted to IST (UTC+5:30), e.g. `sat:21:00-sat:21:30` → `sun:02:30-sun:03:00`.
 * Tag columns: `-T Environment,Owner,Application` (default); `-T ''` for none.
 * `upgrade_command` (only when behind > 0): `aws rds modify-db-cluster --db-cluster-identifier X --engine-version <latest minor> --region R [--profile P]` for clusters (`aws docdb` / `aws neptune` for those engines), `modify-db-instance --db-instance-identifier` for instances. **No `--apply-immediately`**, so the upgrade waits for the next maintenance window. Review it before running it yourself; an Aurora minor upgrade restarts all instances of the cluster together.
@@ -149,12 +170,17 @@ See [rds_patch_compliance_report.conf.example](rds_patch_compliance_report.conf.
 
 No AWS account is used and nothing can reach AWS.
 
-* `tests/run_tests.sh` - 200+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), a 3000-instance fleet (no ARG_MAX issues) and that no file is written into the tool folder. **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
+* `tests/run_tests.sh` - 230+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers counting only from ValidUpgradeTarget (the mock's full list differs on purpose), major targets excluded, the default auto-upgrade target, current version not returned, pending-actions text, version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), a 3000-instance fleet (no ARG_MAX issues) and that no file is written into the tool folder. **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
 * `tests/validate_cli.sh` - replays every command line the script issues, and every printed `upgrade_command`, through the **real** AWS CLI v2 with fake credentials and a dead endpoint (`127.0.0.1:9`); checks mock output shapes against `--generate-cli-skeleton output`; and runs the script with the real CLI against a local fake endpoint that pages every list (Marker) to prove pagination. A wrapper refuses any real-CLI call without a loopback endpoint.
+
+## Changelog
+
+* **1.1.0** - Counting source is now RDS metadata only: per server `describe-db-engine-versions --engine E --engine-version <current>`, `ValidUpgradeTarget[]` with `IsMajorVersionUpgrade=false` (no more full-list counting or own derivation); new column `default_auto_upgrade_target`; current version not returned → UNKNOWN + deprecated note; cache per engine+version+region; summary latest minor = highest valid target seen. Pending maintenance is now `pending_actions_count` + readable `pending_actions` (action, on cluster / member, auto-apply / forced dates, opt-in status, short description), HTML badge with expandable list and IST tooltip, summary by action type, legend.
+* **1.0.0** - First version.
 
 ## Caveats
 
-* AWS's version list is per region; the report compares in the server's own region.
-* `latest_minor_version` is the newest minor in the major line, which is what the printed command targets. Some old versions need an intermediate hop; if `modify` refuses, check `aws rds describe-db-engine-versions --engine <e> --engine-version <current> --query 'DBEngineVersions[].ValidUpgradeTarget[?IsMajorVersionUpgrade==\`false\`].EngineVersion'`.
+* Valid targets are per region; the report asks in the server's own region.
+* `latest_minor_version` is the highest valid minor target from the current version, which is what the printed command targets. A newer minor that exists for the engine but is not a valid target yet will appear once RDS allows it (or after an intermediate upgrade).
 * Aurora MySQL 2 (`5.7.mysql_aurora.2.x`) and 3 (`8.0.mysql_aurora.3.x`) are different majors.
 * Engines without lifecycle data (DocumentDB, Neptune, and majors AWS does not list) show `unknown` / `n/a`, never `ok`.
