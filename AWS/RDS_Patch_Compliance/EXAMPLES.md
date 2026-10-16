@@ -75,3 +75,23 @@ SUMMARY
 PER ENGINE / MAJOR VERSION
   ENGINE                MAJOR      TOTAL  COMPL  NON-C  UNKN  LATEST MINOR                        SUPPORT
 ```
+
+## Summary script (rds_patch_compliance_summary.sh)
+
+High-level summary plus the NON-COMPLIANT servers only (same scan and counting rules as the full report).
+
+```bash
+# 18. Summary on the screen (txt)
+./rds_patch_compliance_summary.sh -P prod,nonprod -r us-east-1,ap-south-1
+
+# 19. Summary as txt + one-page HTML + CSVs (non-compliant rows, and a summary CSV) into ~/compliance
+./rds_patch_compliance_summary.sh -P prod --all-regions -F txt,html,csv -o ~/compliance
+
+# 20. Only Oracle, stricter rule (non-compliant when 2 or more behind)
+./rds_patch_compliance_summary.sh -P prod -r ap-south-1 -e 'oracle-*' --max-behind 1
+
+# 21. Weekly job: e-mail the team only when something is non-compliant, non-zero exit for the scheduler
+./rds_patch_compliance_summary.sh -P prod --all-regions --alert-email dba-team@example.com --fail-on-noncompliant
+```
+
+Sample output: [samples/sample_summary.txt](samples/sample_summary.txt), [samples/sample_summary.html](samples/sample_summary.html), screenshot [samples/sample_summary.png](samples/sample_summary.png).

@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2054  # jq programs are single-quoted; comma lists are CLI args
+# Tests for rds_patch_compliance_summary.sh against the mock AWS CLI (tests/mock/aws).
+# Guard: the mock must be `aws` on PATH, fake credentials, dead endpoint, temp output only - nothing reaches AWS.
+# Usage: tests/run_summary_tests.sh [-k]
+set -uo pipefail
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+S="$HERE/../rds_patch_compliance_summary.sh"
+FULL="$HERE/../rds_patch_compliance_report.sh"
+OUT="$(mktemp -d /tmp/rpcs_tests.XXXXXX)"
+KEEP=0; [[ "${1:-}" == -k ]] && KEEP=1
+PASS=0; FAIL=0; LISTENER_PID=""
+export MOCK_LOG="$OUT/aws_calls.jsonl"
+STUB="$OUT/stubbin"; mkdir -p "$STUB"
+export PATH="$HERE/mock:$STUB:$PATH"
+unset AWS_REGION AWS_DEFAULT_REGION AWS_PROFILE MOCK_DEFAULT_REGION MOCK_SCENARIO
+export AWS_ACCESS_KEY_ID=fake-test-key-id AWS_SECRET_ACCESS_KEY=fake-test-secret AWS_SESSION_TOKEN=fake \
+       AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+       AWS_ENDPOINT_URL=http://127.0.0.1:9 TMPDIR="$OUT"
+if [[ "$(command -v aws)" != "$HERE/mock/aws" || "$(aws --version 2>&1)" != *.mock* ]]; then
+    echo "GUARD: 'aws' on PATH is not tests/mock/aws - refusing to run (would risk real AWS)"; exit 2
+fi
+BEFORE="$(cd "$HERE/.." && find . -path ./.git -prune -o -print | sort)"
+cleanup() { [[ -n "$LISTENER_PID" ]] && kill "$LISTENER_PID" 2>/dev/null; if (( KEEP )); then echo "output kept in $OUT"; else rm -rf -- "$OUT"; fi; }
+trap cleanup EXIT
+
+ok()  { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
+t() {   # t <name> <rc> <scenario> [args...]
+    local name="$1" exp="$2" scen="$3"; shift 3
+    MOCK_SCENARIO="$scen" "$S" "$@" >"$OUT/$name.out" 2>"$OUT/$name.err"; local rc=$?
+    if [[ "$rc" == "$exp" ]]; then ok "$name (rc=$rc)"; else bad "$name: rc=$rc expected $exp"; tail -5 "$OUT/$name.err" | sed 's/^/       /'; fi
+}
+has()   { if grep -qF -- "$3" "$OUT/$1.$2"; then ok "$1 $2 has '$3'"; else bad "$1 $2 lacks '$3'"; fi; }
+hasnt() { if grep -qF -- "$3" "$OUT/$1.$2"; then bad "$1 $2 unexpectedly has '$3'"; else ok "$1 $2 lacks '$3'"; fi; }
+chk()   { local d="$1"; shift; if "$@"; then ok "$d"; else bad "$d"; fi; }
+ncline() { grep -E "^!! .* $2 " "$OUT/$1.out"; }
+P2=(-P prod,nonprod -r us-east-1,ap-south-1)
+
+echo "== usage"
+t help 0 fleet --help; has help out 'versions_behind > --max-behind'
+t version 0 fleet --version; has version out '1.0.0'
+t badopt 1 fleet --bogus
+t badfmt 1 fleet -r us-east-1 -F xml
+t htmlnoout 1 fleet -r us-east-1 -F html
+t badmax 1 fleet -r us-east-1 --max-behind x
+t badhook 1 fleet -r us-east-1 --alert-webhook ftp://x
+t bothreg 1 fleet -r us-east-1 --all-regions
+
+echo "== fleet summary (txt to screen)"
+: >"$MOCK_LOG"
+t fleet 0 fleet "${P2[@]}"
+has fleet out 'Rule     : NON-COMPLIANT when the current version is more than 2 valid minor versions behind the latest (3 or more)'
+has fleet out 'UTC / '; has fleet out ' IST'
+has fleet out 'accounts 111111111111 (prod), 222222222222 (nonprod); regions ap-south-1, us-east-1'
+has fleet out 'OVERALL  : 22 servers/clusters | COMPLIANT 13 | NON-COMPLIANT 8 | UNKNOWN 1 | 59.1% compliant'
+has fleet out '!!! NON-COMPLIANT SERVERS (8) - most behind first'
+has fleet out 'KEY FLAGS: past standard support (Extended Support charges) 2 | standard support ending within 180 days 2 | auto minor upgrade off 3 | pending maintenance 3'
+chk "boundary: 3 behind (reports-aurora-pg14) listed" ncline fleet reports-aurora-pg14
+chk "boundary: 2 behind (crm-aurora-pg15, orders-aurora-pg15) not listed" bash -c "! grep -qE 'crm-aurora-pg15|orders-aurora-pg15' '$OUT/fleet.out'"
+chk "compliant servers not listed" bash -c "! grep -qE 'pay-aurora-pg16|cms-aurora-mysql|catalog-docdb' '$OUT/fleet.out'"
+chk "sorted most behind first, then name" bash -c "[[ \"\$(grep '^!! ' '$OUT/fleet.out' | awk '{print \$5}' | paste -sd,)\" == dev-aurora-pg15,inv-mysql,legacy-aurora-pg12,shop-aurora-mysql,analytics-pg,hr-sql,ledger-maz,reports-aurora-pg14 ]]"
+has fleet out '15.4 -> 15.13'
+has fleet out 'UNKNOWN (1)'; has fleet out 'old-aurora-pg11  11.9: current version not returned by RDS'
+chk "only read-only AWS calls" test "$(jq -r '.[] | select(test("^(modify|create|delete|apply|reboot|start|stop|failover)-"))' "$MOCK_LOG" | wc -l)" -eq 0
+
+echo "== consistency with the full report (same mock data)"
+MOCK_SCENARIO=fleet "$FULL" "${P2[@]}" -F json >"$OUT/full.json" 2>/dev/null
+MOCK_SCENARIO=fleet "$S" "${P2[@]}" -F csv -o "$OUT/cmp" >/dev/null 2>&1
+SC="$(ls "$OUT"/cmp/*_summary.csv)"
+chk "overall row = full report summary" test "$(jq -r '.summary | "\"overall\",\"\",\"\",\(.total),\(.compliant),\(.non_compliant),\(.unknown),\(.pct_compliant),\"\""' "$OUT/full.json")" == "$(grep '^"overall"' "$SC")"
+chk "per engine/major rows = full report" test "$(jq -r '.summary.engines[] | . as $e | ("engine|\($e.engine)|\($e.total)|\($e.compliant)|\($e.non_compliant)|\($e.unknown)"), (.majors[] | "major|\($e.engine)|\(.major)|\(.total)|\(.compliant)|\(.non_compliant)|\(.unknown)|\(.latest_minor // "")")' "$OUT/full.json")" \
+    == "$(jq -Rr 'fromjson? // (split(",") | map(ltrimstr("\"") | rtrimstr("\""))) | select(.[0] == "engine" or .[0] == "major") | if .[0] == "engine" then "engine|\(.[1])|\(.[3])|\(.[4])|\(.[5])|\(.[6])" else "major|\(.[1])|\(.[2])|\(.[3])|\(.[4])|\(.[5])|\(.[6])|\(.[8])" end' "$SC")"
+chk "non-compliant CSV = full report NON-COMPLIANT rows" test "$(jq -r '[.rows[] | select(.compliance_status == "NON-COMPLIANT") | .identifier] | sort | join(",")' "$OUT/full.json")" \
+    == "$(tail -n +2 "$(ls "$OUT"/cmp/*_noncompliant.csv)" | cut -d, -f5 | tr -d '"' | sort | paste -sd,)"
+chk "csv: only non-compliant rows (8 + header)" test "$(wc -l <"$(ls "$OUT"/cmp/*_noncompliant.csv)")" -eq 9
+
+echo "== --max-behind / all compliant / unknown"
+t max3 0 fleet "${P2[@]}" --max-behind 3
+has max3 out 'more than 3 valid minor versions behind the latest (4 or more)'
+chk "max3: 3-behind servers now compliant" bash -c "! grep -q reports-aurora-pg14 '$OUT/max3.out'"
+has max3 out 'NON-COMPLIANT SERVERS (4)'
+t allok 0 fleet -P prod -r us-east-1 -e docdb,neptune
+has allok out '*** All servers compliant'; hasnt allok out 'NON-COMPLIANT SERVERS'; hasnt allok out 'UNKNOWN ('
+t lookupfail 0 lookupfail -P prod -r us-east-1
+has lookupfail out 'UNKNOWN (3)'; has lookupfail out 'version lookup failed'
+
+echo "== Oracle same patch line"
+t ora 0 oracle -P prod -r us-east-1 -e 'oracle-*' --max-behind 1
+chk "ora: mrp r1 -> mrp r2 is 1 behind (compliant at max 1)" bash -c "! grep -q 'ora-mrp' '$OUT/ora.out'"
+chk "ora: r9 listed 2 behind with mrp target" bash -c "grep -E '^!! .*ora-r9 .*mrp-2026-07.r9 -> 19.0.0.0.ru-2026-10.mrp-2026-10.r1 +2 ' '$OUT/ora.out' >/dev/null"
+has ora out 'mrp: 19.0.0.0.ru-2026-10.mrp-2026-10.r1'
+t ora_any 0 oracle -P prod -r us-east-1 -e 'oracle-*' --max-behind 1 --oracle-any-patch-line
+has ora_any out 'ora-mrp'
+
+echo "== outputs"
+t files 0 fleet "${P2[@]}" -F txt,html,csv -o "$OUT/files"
+chk "4 files written (txt, html, summary csv, noncompliant csv)" test "$(find "$OUT/files" -type f | wc -l)" -eq 4
+has files out 'OVERALL  :'
+H="$(ls "$OUT"/files/*.html)"; cp "$H" "$OUT/h.out"
+has h out 'table class="nc"'; has h out 'Non-compliant servers (8)'; has h out 'Rule:'; has h out '59.1%'
+chk "html: compliant servers absent" bash -c "! grep -q 'pay-aurora-pg16' '$H'"
+t allokh 0 fleet -P prod -r us-east-1 -e docdb,neptune -F html -o "$OUT/okh"; cp "$(ls "$OUT"/okh/*.html)" "$OUT/okh.out"; has okh out 'All servers compliant'
+t failnc 5 fleet "${P2[@]}" --fail-on-noncompliant
+t failok 0 fleet -P prod -r us-east-1 -e docdb,neptune --fail-on-noncompliant
+t badcreds 2 badcreds -P prod -r us-east-1
+
+echo "== alerts (local stubs only)"
+cat >"$STUB/mail" <<'MAIL'
+#!/usr/bin/env bash
+{ printf 'ARGS:'; printf ' %q' "$@"; printf '\n'; cat; } >>"${MAIL_SINK:?}"
+MAIL
+chmod +x "$STUB/mail"; export MAIL_SINK="$OUT/mail.txt"
+python3 - "$OUT/hook.txt" "$OUT/port" <<'PY' &
+import http.server, sys
+sink, pf = sys.argv[1], sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        b = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        open(sink, "ab").write(b + b"\n"); self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H); open(pf, "w").write(str(s.server_port)); s.serve_forever()
+PY
+LISTENER_PID=$!
+for _ in $(seq 50); do [[ -s "$OUT/port" ]] && break; sleep 0.1; done
+HOOK="http://127.0.0.1:$(cat "$OUT/port")/hooks/T000/SECRET"
+t al_mail 0 fleet "${P2[@]}" --alert-email dba@example.com
+chk "e-mail subject + summary body" bash -c "grep -q 'NON-COMPLIANT:' '$MAIL_SINK' && grep -q 'OVERALL  : 22 servers' '$MAIL_SINK' && grep -q 'NON-COMPLIANT SERVERS (8)' '$MAIL_SINK'"
+: >"$MAIL_SINK"
+t al_none 0 fleet -P prod -r us-east-1 -e docdb,neptune --alert-email dba@example.com
+chk "no alert when all compliant (alert-on noncompliant)" test ! -s "$MAIL_SINK"
+t al_json 0 fleet "${P2[@]}" --alert-webhook "$HOOK" --alert-webhook-format json
+chk "json webhook payload" bash -c "grep . '$OUT/hook.txt' | tail -1 | jq -e '.status == \"NON-COMPLIANT\" and (.non_compliant | length) == 8 and .summary.total == 22' >/dev/null"
+t al_slack 0 fleet -P prod -r us-east-1 -e docdb,neptune --alert-on always --alert-webhook "$HOOK"
+chk "slack payload" bash -c "grep . '$OUT/hook.txt' | tail -1 | jq -e '.text | contains(\"All servers compliant\")' >/dev/null"
+hasnt al_slack err '/SECRET'
+
+echo "== hygiene"
+chk "shellcheck summary script" shellcheck "$S"
+chk "shellcheck this test" shellcheck "$HERE/run_summary_tests.sh"
+AFTER="$(cd "$HERE/.." && find . -path ./.git -prune -o -print | sort)"
+chk "no files written into the tool folder" test "$BEFORE" == "$AFTER"
+
+echo; echo "passed: $PASS  failed: $FAIL"
+(( FAIL == 0 ))

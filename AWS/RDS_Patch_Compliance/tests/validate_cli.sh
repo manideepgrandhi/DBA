@@ -136,8 +136,16 @@ exec "$REAL_AWS" "\$@" --endpoint-url "http://127.0.0.1:$(cat "$OUT/fport")"
 WRAP
 chmod +x "$OUT/realbin/aws"
 PATH="$OUT/realbin:$PATH" "$S" -r us-east-1 -F json >"$OUT/pag.json" 2>"$OUT/pag.err"; prc=$?
-kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null
 summ="$(jq -sc 'group_by(.action) | map({key: .[0].action, value: {requests: length, pages_after_first: (map(select(.marker != null)) | length)}}) | from_entries' "$OUT/freq.jsonl")"
+# the summary script through the same real CLI + fake endpoint: same numbers as the full report
+PATH="$OUT/realbin:$PATH" "$HERE/../rds_patch_compliance_summary.sh" -r us-east-1 >"$OUT/sum.txt" 2>"$OUT/sum.err"; src=$?
+kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null
+want="$(jq -r '.summary | "OVERALL  : \(.total) servers/clusters | COMPLIANT \(.compliant) | NON-COMPLIANT \(.non_compliant) | UNKNOWN \(.unknown) | \(.pct_compliant)% compliant"' "$OUT/pag.json")"
+if [[ "$src" == 0 ]] && grep -qxF -- "$want" "$OUT/sum.txt" && grep -q '^!!! NON-COMPLIANT SERVERS (200)' "$OUT/sum.txt"; then
+    echo "summary script via real CLI: OK ($want)"
+else
+    echo "summary script via real CLI: FAIL (rc=$src)"; tail -5 "$OUT/sum.err"; fail=$((fail + 1))
+fi
 echo "fake endpoint requests: $summ"
 pg_ok=1
 jq -e '.DescribeDBInstances.requests == 12 and .DescribeDBClusters.requests == 2 and .DescribePendingMaintenanceActions.requests == 3

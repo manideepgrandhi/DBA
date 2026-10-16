@@ -20,6 +20,23 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
 
 ![HTML detail rows: valid minor targets, auto-upgrade default and the pending-maintenance badge expanded](docs/sample_report_pending.png)
 
+## Summary script (managers / teams)
+
+`rds_patch_compliance_summary.sh` is a separate, read-only script that shows **only the high-level picture and the NON-COMPLIANT servers**. It runs the full report (`rds_patch_compliance_report.sh -F json`) for the scan, so the counting is identical: valid RDS minor upgrade targets only, same major line, Oracle same patch line, deprecated versions as UNKNOWN (`lib/compliance.jq` + `lib/versions.jq`); `lib/summary.jq` only renders.
+
+```bash
+./rds_patch_compliance_summary.sh -P prod,nonprod -r us-east-1,ap-south-1              # txt to the screen
+./rds_patch_compliance_summary.sh -P prod --all-regions -F txt,html,csv -o ~/compliance  # files (+ txt on screen)
+```
+
+Options: `-P` (repeatable), `-r` / `--all-regions`, `-e`, `-i`, `--max-behind N` (default 2: NON-COMPLIANT when versions_behind > 2, i.e. 3 or more), `--warn-days`, `--oracle-any-patch-line`, `-F txt,html,csv` (default txt to the screen; html / csv / several formats need `-o`), `--prefix`, `--fail-on-noncompliant` (exit 5), `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-from`, `-v`.
+
+Output: header (run time UTC + IST, accounts / regions, the rule), overall totals and % compliant, per engine the major-version breakdown with compliant / non-compliant / unknown and % plus the latest minor per major (Oracle per patch line), key flags as counts (past standard support, support ending within N days, auto minor upgrade off, pending maintenance), then the **NON-COMPLIANT servers** (`!!` lines in txt, red table in HTML; account, region, engine, identifier, current -> latest minor, behind, support flag; most behind first, then name) or `*** All servers compliant ***`, and the UNKNOWN servers with the reason. Compliant servers are not listed. CSV: `<prefix>_<UTC stamp>_noncompliant.csv` (non-compliant rows only) + `<prefix>_<UTC stamp>_summary.csv` (overall, engine, major and flag rows). Exit codes: 0, 1 usage, 2 pre-check / scan failed, 4 output, 5 non-compliant with `--fail-on-noncompliant`.
+
+Samples: [txt](samples/sample_summary.txt), [html](samples/sample_summary.html). Tests: `tests/run_summary_tests.sh` (mock AWS; boundaries 2/3, `--max-behind`, all-compliant, unknown, Oracle, multi-profile, numbers equal to the full report, alerts, shellcheck); `tests/validate_cli.sh` also runs it through the real AWS CLI against the local fake endpoint.
+
+![Summary HTML](samples/sample_summary.png)
+
 ## The compliance rule
 
 For **each server** the report asks RDS which upgrades are valid **from its current version**:
@@ -196,6 +213,7 @@ No AWS account is used and nothing can reach AWS.
 
 ## Changelog
 
+* **summary 1.0.0** - New `rds_patch_compliance_summary.sh` (+ `lib/summary.jq`, `tests/run_summary_tests.sh`): high-level summary and the NON-COMPLIANT servers only; reuses the full report for the scan and all counting.
 * **1.1.1** - Oracle: upgrade targets count only on the SAME patch line as the current version (mrp/rur/plain RU/spb; numeric ru date, line date, rN ordering); other lines are excluded with a note. Fixes `...mrp-2026-07.r1` showing `...spb-2026-07.r1` as latest (console offers `...mrp-2026-07.r2`). Same-major safety net for every engine (a target AWS marks as minor but in another major line is excluded and noted). New `--oracle-any-patch-line` / `oracle_any_patch_line`. JSON rows gain `excluded_targets`, `version_warnings`; meta gains `oracle_any_patch_line`. Shared logic in `lib/versions.jq` (same file in RDS_Pending_Maintenance and RDS_Patch_Runner). Mock scenario `oracle`.
 * **1.1.0** - Counting source is now RDS metadata only: per server `describe-db-engine-versions --engine E --engine-version <current>`, `ValidUpgradeTarget[]` with `IsMajorVersionUpgrade=false` (no more full-list counting or own derivation); new column `default_auto_upgrade_target`; current version not returned → UNKNOWN + deprecated note; cache per engine+version+region; summary latest minor = highest valid target seen. Pending maintenance is now `pending_actions_count` + readable `pending_actions` (action, on cluster / member, auto-apply / forced dates, opt-in status, short description), HTML badge with expandable list and IST tooltip, summary by action type, legend.
 * **1.0.0** - First version.
