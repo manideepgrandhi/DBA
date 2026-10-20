@@ -1,0 +1,83 @@
+RDS BACKUP COMPLIANCE REPORT  (rds_backup_compliance_report.sh v1.0.0, read-only)
+Generated: 2026-10-17 12:00 IST | 2026-10-17 06:30 UTC
+Accounts : 111111111111 (prod), 222222222222 (nonprod)
+Regions  : ap-south-1, us-east-1
+
+== SUMMARY
+OVERALL  : 8 servers/clusters | COMPLIANT 2 | NON-COMPLIANT 6 | UNKNOWN 0 | 25% compliant
+Checks   : daily PASS 4/8 | weekly PASS 5/8 (borderline 1) | monthly PASS 4/8 | no AWS Backup coverage: 2
+Skipped  : 1 read replica(s) (use --include-replicas)
+
+By engine:
+  aurora-mysql         total 1    compliant 0    non-compliant 1    unknown 0   0%
+  aurora-postgresql    total 1    compliant 1    non-compliant 0    unknown 0   100%
+  mysql                total 1    compliant 0    non-compliant 1    unknown 0   0%
+  postgres             total 4    compliant 0    non-compliant 4    unknown 0   0%
+  sqlserver-se         total 1    compliant 1    non-compliant 0    unknown 0   100%
+By account:
+  111111111111 (prod)          total 7    compliant 2    non-compliant 5    unknown 0   28.6%
+  222222222222 (nonprod)       total 1    compliant 0    non-compliant 1    unknown 0   0%
+Top failures:
+  DAILY_MISSING    4    server(s)  e.g. billing-pg, ledger-maz, shop-aurora-mysql, dev-pg
+  MONTHLY_COUNT    4    server(s)  e.g. billing-pg, inv-mysql, shop-aurora-mysql, dev-pg
+  MONTHLY_GAP      4    server(s)  e.g. billing-pg, inv-mysql, shop-aurora-mysql, dev-pg
+  DAILY_RETENTION  3    server(s)  e.g. billing-pg, ledger-maz, dev-pg
+  WEEKLY_COUNT     3    server(s)  e.g. crm-pg, inv-mysql, dev-pg
+  WEEKLY_GAP       3    server(s)  e.g. crm-pg, inv-mysql, dev-pg
+  NO_AWS_BACKUP    2    server(s)  e.g. inv-mysql, dev-pg
+Old manual snapshots (> 90d): 5 | 950 GB | ~$90.25/month (approximate, $0.095/GB-month) | orphaned 2 (580 GB) | oldest 400d
+
+== RULES
+  Daily  : RDS automated backups - BackupRetentionPeriod >= 7 AND an automated snapshot in each of the last 7 x 24h (labelled by UTC date)
+  Weekly : AWS Backup points with 28-35d retention - >= 4 COMPLETED in last 30d, one per 7-day week
+  Monthly: AWS Backup points with 360-370d retention - >= 12 COMPLETED, one per calendar month (UTC) over the last 12 months (current month may be pending until day 7)
+  COMPLIANT only if daily + weekly + monthly all PASS. Aurora / Multi-AZ clusters are judged per cluster (members not separate).
+  Note: weekly points keep ~30 days, so a server with exactly 4 in the window is BORDERLINE - the oldest expires soon and, depending on schedule timing, a 5th week's point may be needed to stay at 4. Points are counted only inside the 30-day window.
+
+== SERVERS (8)  status | daily | weekly | monthly
+!! NON-COMPLIANT 111111111111/us-east-1 RDS instance: billing-pg [postgres 16.8]
+     daily   FAIL retention 3d, 3/7 days, newest 2026-10-16 20:37 UTC, oldest 2026-10-14 20:37 UTC, MISSING 2026-10-10,2026-10-11,2026-10-12,2026-10-13
+     weekly  ok   5 in 30d (need >= 4), newest 2026-10-16 04:30 UTC, oldest 2026-09-18 04:30 UTC, vault rds-weekly-vault
+     monthly FAIL 0 (need >= 12), 0/12 month(s), newest -, oldest -, vault -, GAPS 2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
+!! NON-COMPLIANT 111111111111/us-east-1 RDS instance: crm-pg [postgres 15.10]
+     daily   ok   retention 7d, 7/7 days, newest 2026-10-16 20:37 UTC, oldest 2026-10-09 20:37 UTC
+     weekly  FAIL 3 in 30d (need >= 4), newest 2026-10-16 04:30 UTC, oldest 2026-09-25 04:30 UTC, vault rds-weekly-vault, GAPS 2026-10-03..2026-10-10
+     monthly ok   12 (need >= 12), 12/12 month(s), newest 2026-10-02 01:00 UTC, oldest 2025-11-02 01:00 UTC, vault rds-monthly-vault
+!! NON-COMPLIANT 111111111111/us-east-1 RDS instance: inv-mysql [mysql 8.0.40]
+     daily   ok   retention 7d, 7/7 days, newest 2026-10-16 20:37 UTC, oldest 2026-10-09 20:37 UTC
+     weekly  FAIL 0 in 30d (need >= 4), newest -, oldest -, vault -, GAPS 2026-09-19..2026-09-26,2026-09-26..2026-10-03,2026-10-03..2026-10-10,2026-10-10..2026-10-17
+     monthly FAIL 0 (need >= 12), 0/12 month(s), newest -, oldest -, vault -, GAPS 2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
+     !! NO AWS Backup coverage
+!! NON-COMPLIANT 111111111111/us-east-1 Multi-AZ DB cluster: ledger-maz [postgres 16.6]
+     daily   FAIL retention 0d, 0/7 days, newest -, oldest -, MISSING 2026-10-10,2026-10-11,2026-10-12,2026-10-13,2026-10-14,2026-10-15,2026-10-16
+     weekly  ok   5 in 30d (need >= 4), newest 2026-10-16 04:30 UTC, oldest 2026-09-18 04:30 UTC, vault rds-weekly-vault
+     monthly ok   12 (need >= 12), 12/12 month(s), newest 2026-10-02 01:00 UTC, oldest 2025-11-02 01:00 UTC, vault rds-monthly-vault
+!! NON-COMPLIANT 111111111111/us-east-1 Aurora cluster: shop-aurora-mysql [aurora-mysql 8.0.mysql_aurora.3.08.2]
+     daily   FAIL retention 7d, 5/7 days, newest 2026-10-16 19:07 UTC, oldest 2026-10-09 19:07 UTC, MISSING 2026-10-11,2026-10-14
+     weekly  ok   4 in 30d (need >= 4), newest 2026-10-15 04:30 UTC, oldest 2026-09-24 04:30 UTC, vault rds-weekly-vault, BORDERLINE (next expiry 2026-10-24 04:30 UTC)
+     monthly FAIL 11 (need >= 12), 11/12 month(s), newest 2026-10-02 01:00 UTC, oldest 2025-11-02 01:00 UTC, vault rds-monthly-vault, GAPS 2026-06
+!! NON-COMPLIANT 222222222222/ap-south-1 RDS instance: dev-pg [postgres 17.4]
+     daily   FAIL retention 1d, 1/7 days, newest 2026-10-16 20:37 UTC, oldest 2026-10-16 20:37 UTC, MISSING 2026-10-10,2026-10-11,2026-10-12,2026-10-13,2026-10-14,2026-10-15
+     weekly  FAIL 0 in 30d (need >= 4), newest -, oldest -, vault -, GAPS 2026-09-19..2026-09-26,2026-09-26..2026-10-03,2026-10-03..2026-10-10,2026-10-10..2026-10-17
+     monthly FAIL 0 (need >= 12), 0/12 month(s), newest -, oldest -, vault -, GAPS 2025-11,2025-12,2026-01,2026-02,2026-03,2026-04,2026-05,2026-06,2026-07,2026-08,2026-09,2026-10
+     !! NO AWS Backup coverage
+   COMPLIANT     111111111111/us-east-1 RDS instance: hr-sql [sqlserver-se 15.00.4430.1.v1]
+     daily   ok   retention 14d, 7/7 days, newest 2026-10-17 03:07 UTC, oldest 2026-10-03 03:07 UTC
+     weekly  ok   5 in 30d (need >= 4), newest 2026-10-17 04:30 UTC, oldest 2026-09-19 04:30 UTC, vault rds-weekly-vault
+     monthly ok   12 (need >= 12), 12/12 month(s), newest 2026-10-02 01:00 UTC, oldest 2025-11-02 01:00 UTC, vault rds-monthly-vault
+   COMPLIANT     111111111111/us-east-1 Aurora cluster: pay-aurora-pg [aurora-postgresql 16.9]
+     daily   ok   retention 7d, 7/7 days, newest 2026-10-16 19:07 UTC, oldest 2026-10-09 19:07 UTC
+     weekly  ok   5 in 30d (need >= 4), newest 2026-10-16 04:30 UTC, oldest 2026-09-18 04:30 UTC, vault rds-weekly-vault
+     monthly ok   12 (need >= 12), 12/12 month(s), newest 2026-10-02 01:00 UTC, oldest 2025-11-02 01:00 UTC, vault rds-monthly-vault
+
+== OLD MANUAL SNAPSHOTS (> 90 days; delete commands are PRINTED ONLY, never run)
+  111111111111/us-east-1 instance old-app-final <- old-app [ORPHAN: source deleted] | mysql | 400d | 500 GB | ~$47.5/mo
+      aws rds delete-db-snapshot --db-snapshot-identifier 'old-app-final' --region us-east-1 --profile 'prod'
+  111111111111/us-east-1 instance billing-pg-before-upgrade <- billing-pg | postgres | 200d | 100 GB | ~$9.5/mo
+      aws rds delete-db-snapshot --db-snapshot-identifier 'billing-pg-before-upgrade' --region us-east-1 --profile 'prod'
+  111111111111/us-east-1 cluster pay-aurora-pg-before-v16 <- pay-aurora-pg | aurora-postgresql | 120d | 250 GB | ~$23.75/mo
+      aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier 'pay-aurora-pg-before-v16' --region us-east-1 --profile 'prod'
+  111111111111/us-east-1 cluster retired-aurora-final <- retired-aurora [ORPHAN: source deleted] | aurora-mysql | 95d | 80 GB | ~$7.6/mo
+      aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier 'retired-aurora-final' --region us-east-1 --profile 'prod'
+  222222222222/ap-south-1 instance dev-pg-copy-2025 <- dev-pg | postgres | 300d | 20 GB | ~$1.9/mo
+      aws rds delete-db-snapshot --db-snapshot-identifier 'dev-pg-copy-2025' --region ap-south-1 --profile 'nonprod'

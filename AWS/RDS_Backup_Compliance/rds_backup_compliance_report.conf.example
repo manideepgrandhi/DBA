@@ -1,0 +1,40 @@
+# rds_backup_compliance_report.sh settings - key = value, parsed (never sourced). CLI options override.
+# Credentials are NOT accepted here: use AWS CLI profiles / SSO / instance roles.
+
+profiles = prod,nonprod
+regions  = us-east-1,ap-south-1
+# all_regions = true
+
+# engines     = postgres,mysql,aurora-*
+# identifiers = pay-*
+# include_replicas = false
+
+# Daily: RDS automated backups
+min_retention = 7
+daily_days    = 7
+
+# Weekly / monthly: AWS Backup recovery points, classified by retention days (DeleteAfterDays or DeleteAt - creation)
+weekly_retention   = 28-35
+weekly_window      = 30
+weekly_required    = 4
+monthly_retention  = 360-370
+monthly_required   = 12
+monthly_grace_days = 7
+# rule_name_fallback = true
+# weekly_rule_regex  = "(?i)week"
+# monthly_rule_regex = "(?i)month"
+
+# Manual snapshots
+max_manual_age = 90
+price_per_gb   = 0.095   # USD per GB-month, approximate - check your region's snapshot price
+
+format     = txt,csv,html,json
+output_dir = ~/backup_compliance
+# prefix   = rds_backup_compliance
+# tz       = Asia/Kolkata
+# top      = 10
+# non_compliant_only   = false
+# fail_on_noncompliant = false
+# log_file = ~/backup_compliance/run.log
+# aws_timeout  = 30
+# max_attempts = 5

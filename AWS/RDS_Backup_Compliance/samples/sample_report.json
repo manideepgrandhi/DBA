@@ -1,0 +1,1094 @@
+{
+  "meta": {
+    "script": "rds_backup_compliance_report.sh",
+    "version": "1.0.0",
+    "generated_utc": "2026-10-17 06:30 UTC",
+    "generated_local": "2026-10-17 12:00 IST",
+    "tz": "Asia/Kolkata",
+    "host": "dba-host",
+    "accounts": [
+      {
+        "account": "111111111111",
+        "profile": "prod"
+      },
+      {
+        "account": "222222222222",
+        "profile": "nonprod"
+      }
+    ],
+    "regions": [
+      "ap-south-1",
+      "us-east-1"
+    ],
+    "filters_text": "",
+    "rules": {
+      "engines": [],
+      "identifiers": [],
+      "tagcols": [
+        "Environment",
+        "Owner",
+        "Application"
+      ],
+      "min_retention": 7,
+      "daily_days": 7,
+      "weekly_min_days": 28,
+      "weekly_max_days": 35,
+      "weekly_window_days": 30,
+      "weekly_required": 4,
+      "monthly_min_days": 360,
+      "monthly_max_days": 370,
+      "monthly_required": 12,
+      "monthly_grace_days": 7,
+      "rule_name_fallback": false,
+      "weekly_rule_regex": "(?i)week",
+      "monthly_rule_regex": "(?i)month",
+      "include_replicas": false,
+      "max_manual_age": 90,
+      "price_per_gb_month": 0.095,
+      "top_n": 10,
+      "nc_only": false
+    },
+    "aws_calls": 38,
+    "aws_failures": 0
+  },
+  "servers": [
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "type": "RDS instance",
+      "engine": "postgres",
+      "engine_version": "16.8",
+      "identifier": "billing-pg",
+      "arn": "arn:aws:rds:us-east-1:111111111111:db:billing-pg",
+      "members": [],
+      "db_status": "available",
+      "backup_window": "20:30-21:00",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "billing",
+        "Application": "billing"
+      },
+      "daily": {
+        "retention": 3,
+        "required_days": 7,
+        "snapshots": 3,
+        "days_ok": 3,
+        "missing_dates": [
+          "2026-10-10",
+          "2026-10-11",
+          "2026-10-12",
+          "2026-10-13"
+        ],
+        "newest": "2026-10-16 20:37 UTC",
+        "oldest": "2026-10-14 20:37 UTC",
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "DAILY_RETENTION",
+            "detail": "BackupRetentionPeriod 3 < 7"
+          },
+          {
+            "code": "DAILY_MISSING",
+            "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13"
+          }
+        ]
+      },
+      "weekly": {
+        "count": 5,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-16 04:30 UTC",
+        "oldest": "2026-09-18 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": "2026-10-18 04:30 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "monthly": {
+        "count": 0,
+        "required": 12,
+        "months_covered": 0,
+        "current_month_pending": false,
+        "newest": null,
+        "oldest": null,
+        "vaults": [],
+        "gaps": [
+          "2025-11",
+          "2025-12",
+          "2026-01",
+          "2026-02",
+          "2026-03",
+          "2026-04",
+          "2026-05",
+          "2026-06",
+          "2026-07",
+          "2026-08",
+          "2026-09",
+          "2026-10"
+        ],
+        "by_rule_name": 0,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "MONTHLY_COUNT",
+            "detail": "0 monthly recovery point(s) in last 12 months < 12"
+          },
+          {
+            "code": "MONTHLY_GAP",
+            "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+          }
+        ]
+      },
+      "aws_backup_points": 17,
+      "no_aws_backup": false,
+      "failures": [
+        {
+          "code": "DAILY_RETENTION",
+          "detail": "BackupRetentionPeriod 3 < 7"
+        },
+        {
+          "code": "DAILY_MISSING",
+          "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13"
+        },
+        {
+          "code": "MONTHLY_COUNT",
+          "detail": "0 monthly recovery point(s) in last 12 months < 12"
+        },
+        {
+          "code": "MONTHLY_GAP",
+          "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT",
+      "read_replica": false
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "type": "RDS instance",
+      "engine": "postgres",
+      "engine_version": "15.10",
+      "identifier": "crm-pg",
+      "arn": "arn:aws:rds:us-east-1:111111111111:db:crm-pg",
+      "members": [],
+      "db_status": "available",
+      "backup_window": "20:30-21:00",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "crm",
+        "Application": "crm"
+      },
+      "daily": {
+        "retention": 7,
+        "required_days": 7,
+        "snapshots": 8,
+        "days_ok": 7,
+        "missing_dates": [],
+        "newest": "2026-10-16 20:37 UTC",
+        "oldest": "2026-10-09 20:37 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "weekly": {
+        "count": 3,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-16 04:30 UTC",
+        "oldest": "2026-09-25 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [
+          "2026-10-03..2026-10-10"
+        ],
+        "by_rule_name": 0,
+        "not_completed": 1,
+        "borderline": false,
+        "next_expiry": "2026-10-25 04:30 UTC",
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "WEEKLY_COUNT",
+            "detail": "3 weekly recovery point(s) in 30d < 4"
+          },
+          {
+            "code": "WEEKLY_GAP",
+            "detail": "no weekly point in 2026-10-03..2026-10-10"
+          }
+        ]
+      },
+      "monthly": {
+        "count": 12,
+        "required": 12,
+        "months_covered": 12,
+        "current_month_pending": false,
+        "newest": "2026-10-02 01:00 UTC",
+        "oldest": "2025-11-02 01:00 UTC",
+        "vaults": [
+          "rds-monthly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "status": "PASS",
+        "failures": []
+      },
+      "aws_backup_points": 17,
+      "no_aws_backup": false,
+      "failures": [
+        {
+          "code": "WEEKLY_COUNT",
+          "detail": "3 weekly recovery point(s) in 30d < 4"
+        },
+        {
+          "code": "WEEKLY_GAP",
+          "detail": "no weekly point in 2026-10-03..2026-10-10"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT",
+      "read_replica": false
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "type": "RDS instance",
+      "engine": "mysql",
+      "engine_version": "8.0.40",
+      "identifier": "inv-mysql",
+      "arn": "arn:aws:rds:us-east-1:111111111111:db:inv-mysql",
+      "members": [],
+      "db_status": "available",
+      "backup_window": "20:30-21:00",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "ops",
+        "Application": "inventory"
+      },
+      "daily": {
+        "retention": 7,
+        "required_days": 7,
+        "snapshots": 8,
+        "days_ok": 7,
+        "missing_dates": [],
+        "newest": "2026-10-16 20:37 UTC",
+        "oldest": "2026-10-09 20:37 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "weekly": {
+        "count": 0,
+        "required": 4,
+        "window_days": 30,
+        "newest": null,
+        "oldest": null,
+        "vaults": [],
+        "gaps": [
+          "2026-09-19..2026-09-26",
+          "2026-09-26..2026-10-03",
+          "2026-10-03..2026-10-10",
+          "2026-10-10..2026-10-17"
+        ],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": null,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "WEEKLY_COUNT",
+            "detail": "0 weekly recovery point(s) in 30d < 4"
+          },
+          {
+            "code": "WEEKLY_GAP",
+            "detail": "no weekly point in 2026-09-19..2026-09-26, 2026-09-26..2026-10-03, 2026-10-03..2026-10-10, 2026-10-10..2026-10-17"
+          }
+        ]
+      },
+      "monthly": {
+        "count": 0,
+        "required": 12,
+        "months_covered": 0,
+        "current_month_pending": false,
+        "newest": null,
+        "oldest": null,
+        "vaults": [],
+        "gaps": [
+          "2025-11",
+          "2025-12",
+          "2026-01",
+          "2026-02",
+          "2026-03",
+          "2026-04",
+          "2026-05",
+          "2026-06",
+          "2026-07",
+          "2026-08",
+          "2026-09",
+          "2026-10"
+        ],
+        "by_rule_name": 0,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "MONTHLY_COUNT",
+            "detail": "0 monthly recovery point(s) in last 12 months < 12"
+          },
+          {
+            "code": "MONTHLY_GAP",
+            "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+          }
+        ]
+      },
+      "aws_backup_points": 0,
+      "no_aws_backup": true,
+      "failures": [
+        {
+          "code": "WEEKLY_COUNT",
+          "detail": "0 weekly recovery point(s) in 30d < 4"
+        },
+        {
+          "code": "WEEKLY_GAP",
+          "detail": "no weekly point in 2026-09-19..2026-09-26, 2026-09-26..2026-10-03, 2026-10-03..2026-10-10, 2026-10-10..2026-10-17"
+        },
+        {
+          "code": "MONTHLY_COUNT",
+          "detail": "0 monthly recovery point(s) in last 12 months < 12"
+        },
+        {
+          "code": "MONTHLY_GAP",
+          "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+        },
+        {
+          "code": "NO_AWS_BACKUP",
+          "detail": "no AWS Backup recovery points in a same-region vault"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT",
+      "read_replica": false
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "cluster",
+      "type": "Multi-AZ DB cluster",
+      "engine": "postgres",
+      "engine_version": "16.6",
+      "identifier": "ledger-maz",
+      "arn": "arn:aws:rds:us-east-1:111111111111:cluster:ledger-maz",
+      "members": [
+        "ledger-maz-1",
+        "ledger-maz-2",
+        "ledger-maz-3"
+      ],
+      "db_status": "available",
+      "backup_window": "19:00-19:30",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "finance",
+        "Application": "ledger"
+      },
+      "daily": {
+        "retention": 0,
+        "required_days": 7,
+        "snapshots": 0,
+        "days_ok": 0,
+        "missing_dates": [
+          "2026-10-10",
+          "2026-10-11",
+          "2026-10-12",
+          "2026-10-13",
+          "2026-10-14",
+          "2026-10-15",
+          "2026-10-16"
+        ],
+        "newest": null,
+        "oldest": null,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "DAILY_RETENTION",
+            "detail": "BackupRetentionPeriod 0 < 7 (automated backups OFF)"
+          },
+          {
+            "code": "DAILY_MISSING",
+            "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16"
+          }
+        ]
+      },
+      "weekly": {
+        "count": 5,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-16 04:30 UTC",
+        "oldest": "2026-09-18 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": "2026-10-18 04:30 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "monthly": {
+        "count": 12,
+        "required": 12,
+        "months_covered": 12,
+        "current_month_pending": false,
+        "newest": "2026-10-02 01:00 UTC",
+        "oldest": "2025-11-02 01:00 UTC",
+        "vaults": [
+          "rds-monthly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "status": "PASS",
+        "failures": []
+      },
+      "aws_backup_points": 17,
+      "no_aws_backup": false,
+      "failures": [
+        {
+          "code": "DAILY_RETENTION",
+          "detail": "BackupRetentionPeriod 0 < 7 (automated backups OFF)"
+        },
+        {
+          "code": "DAILY_MISSING",
+          "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT"
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "cluster",
+      "type": "Aurora cluster",
+      "engine": "aurora-mysql",
+      "engine_version": "8.0.mysql_aurora.3.08.2",
+      "identifier": "shop-aurora-mysql",
+      "arn": "arn:aws:rds:us-east-1:111111111111:cluster:shop-aurora-mysql",
+      "members": [
+        "shop-mysql-1"
+      ],
+      "db_status": "available",
+      "backup_window": "19:00-19:30",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "shop",
+        "Application": "storefront"
+      },
+      "daily": {
+        "retention": 7,
+        "required_days": 7,
+        "snapshots": 6,
+        "days_ok": 5,
+        "missing_dates": [
+          "2026-10-11",
+          "2026-10-14"
+        ],
+        "newest": "2026-10-16 19:07 UTC",
+        "oldest": "2026-10-09 19:07 UTC",
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "DAILY_MISSING",
+            "detail": "no automated snapshot for 2026-10-11, 2026-10-14"
+          }
+        ]
+      },
+      "weekly": {
+        "count": 4,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-15 04:30 UTC",
+        "oldest": "2026-09-24 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": true,
+        "next_expiry": "2026-10-24 04:30 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "monthly": {
+        "count": 11,
+        "required": 12,
+        "months_covered": 11,
+        "current_month_pending": false,
+        "newest": "2026-10-02 01:00 UTC",
+        "oldest": "2025-11-02 01:00 UTC",
+        "vaults": [
+          "rds-monthly-vault"
+        ],
+        "gaps": [
+          "2026-06"
+        ],
+        "by_rule_name": 0,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "MONTHLY_COUNT",
+            "detail": "11 monthly recovery point(s) in last 12 months < 12"
+          },
+          {
+            "code": "MONTHLY_GAP",
+            "detail": "no monthly point in 2026-06"
+          }
+        ]
+      },
+      "aws_backup_points": 15,
+      "no_aws_backup": false,
+      "failures": [
+        {
+          "code": "DAILY_MISSING",
+          "detail": "no automated snapshot for 2026-10-11, 2026-10-14"
+        },
+        {
+          "code": "MONTHLY_COUNT",
+          "detail": "11 monthly recovery point(s) in last 12 months < 12"
+        },
+        {
+          "code": "MONTHLY_GAP",
+          "detail": "no monthly point in 2026-06"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT"
+    },
+    {
+      "account": "222222222222",
+      "profile": "nonprod",
+      "region": "ap-south-1",
+      "kind": "instance",
+      "type": "RDS instance",
+      "engine": "postgres",
+      "engine_version": "17.4",
+      "identifier": "dev-pg",
+      "arn": "arn:aws:rds:ap-south-1:222222222222:db:dev-pg",
+      "members": [],
+      "db_status": "available",
+      "backup_window": "20:30-21:00",
+      "tags": {
+        "Environment": "dev",
+        "Owner": "platform",
+        "Application": "dev"
+      },
+      "daily": {
+        "retention": 1,
+        "required_days": 7,
+        "snapshots": 1,
+        "days_ok": 1,
+        "missing_dates": [
+          "2026-10-10",
+          "2026-10-11",
+          "2026-10-12",
+          "2026-10-13",
+          "2026-10-14",
+          "2026-10-15"
+        ],
+        "newest": "2026-10-16 20:37 UTC",
+        "oldest": "2026-10-16 20:37 UTC",
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "DAILY_RETENTION",
+            "detail": "BackupRetentionPeriod 1 < 7"
+          },
+          {
+            "code": "DAILY_MISSING",
+            "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15"
+          }
+        ]
+      },
+      "weekly": {
+        "count": 0,
+        "required": 4,
+        "window_days": 30,
+        "newest": null,
+        "oldest": null,
+        "vaults": [],
+        "gaps": [
+          "2026-09-19..2026-09-26",
+          "2026-09-26..2026-10-03",
+          "2026-10-03..2026-10-10",
+          "2026-10-10..2026-10-17"
+        ],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": null,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "WEEKLY_COUNT",
+            "detail": "0 weekly recovery point(s) in 30d < 4"
+          },
+          {
+            "code": "WEEKLY_GAP",
+            "detail": "no weekly point in 2026-09-19..2026-09-26, 2026-09-26..2026-10-03, 2026-10-03..2026-10-10, 2026-10-10..2026-10-17"
+          }
+        ]
+      },
+      "monthly": {
+        "count": 0,
+        "required": 12,
+        "months_covered": 0,
+        "current_month_pending": false,
+        "newest": null,
+        "oldest": null,
+        "vaults": [],
+        "gaps": [
+          "2025-11",
+          "2025-12",
+          "2026-01",
+          "2026-02",
+          "2026-03",
+          "2026-04",
+          "2026-05",
+          "2026-06",
+          "2026-07",
+          "2026-08",
+          "2026-09",
+          "2026-10"
+        ],
+        "by_rule_name": 0,
+        "status": "FAIL",
+        "failures": [
+          {
+            "code": "MONTHLY_COUNT",
+            "detail": "0 monthly recovery point(s) in last 12 months < 12"
+          },
+          {
+            "code": "MONTHLY_GAP",
+            "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+          }
+        ]
+      },
+      "aws_backup_points": 0,
+      "no_aws_backup": true,
+      "failures": [
+        {
+          "code": "DAILY_RETENTION",
+          "detail": "BackupRetentionPeriod 1 < 7"
+        },
+        {
+          "code": "DAILY_MISSING",
+          "detail": "no automated snapshot for 2026-10-10, 2026-10-11, 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15"
+        },
+        {
+          "code": "WEEKLY_COUNT",
+          "detail": "0 weekly recovery point(s) in 30d < 4"
+        },
+        {
+          "code": "WEEKLY_GAP",
+          "detail": "no weekly point in 2026-09-19..2026-09-26, 2026-09-26..2026-10-03, 2026-10-03..2026-10-10, 2026-10-10..2026-10-17"
+        },
+        {
+          "code": "MONTHLY_COUNT",
+          "detail": "0 monthly recovery point(s) in last 12 months < 12"
+        },
+        {
+          "code": "MONTHLY_GAP",
+          "detail": "no monthly point in 2025-11, 2025-12, 2026-01, 2026-02, 2026-03, 2026-04, 2026-05, 2026-06, 2026-07, 2026-08, 2026-09, 2026-10"
+        },
+        {
+          "code": "NO_AWS_BACKUP",
+          "detail": "no AWS Backup recovery points in a same-region vault"
+        }
+      ],
+      "compliance_status": "NON-COMPLIANT",
+      "read_replica": false
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "type": "RDS instance",
+      "engine": "sqlserver-se",
+      "engine_version": "15.00.4430.1.v1",
+      "identifier": "hr-sql",
+      "arn": "arn:aws:rds:us-east-1:111111111111:db:hr-sql",
+      "members": [],
+      "db_status": "available",
+      "backup_window": "03:00-03:30",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "hr",
+        "Application": "hrms"
+      },
+      "daily": {
+        "retention": 14,
+        "required_days": 7,
+        "snapshots": 15,
+        "days_ok": 7,
+        "missing_dates": [],
+        "newest": "2026-10-17 03:07 UTC",
+        "oldest": "2026-10-03 03:07 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "weekly": {
+        "count": 5,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-17 04:30 UTC",
+        "oldest": "2026-09-19 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": "2026-10-20 04:30 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "monthly": {
+        "count": 12,
+        "required": 12,
+        "months_covered": 12,
+        "current_month_pending": false,
+        "newest": "2026-10-02 01:00 UTC",
+        "oldest": "2025-11-02 01:00 UTC",
+        "vaults": [
+          "rds-monthly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "status": "PASS",
+        "failures": []
+      },
+      "aws_backup_points": 17,
+      "no_aws_backup": false,
+      "failures": [],
+      "compliance_status": "COMPLIANT",
+      "read_replica": false
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "cluster",
+      "type": "Aurora cluster",
+      "engine": "aurora-postgresql",
+      "engine_version": "16.9",
+      "identifier": "pay-aurora-pg",
+      "arn": "arn:aws:rds:us-east-1:111111111111:cluster:pay-aurora-pg",
+      "members": [
+        "pay-aurora-pg-1",
+        "pay-aurora-pg-2"
+      ],
+      "db_status": "available",
+      "backup_window": "19:00-19:30",
+      "tags": {
+        "Environment": "prod",
+        "Owner": "payments",
+        "Application": "pay"
+      },
+      "daily": {
+        "retention": 7,
+        "required_days": 7,
+        "snapshots": 8,
+        "days_ok": 7,
+        "missing_dates": [],
+        "newest": "2026-10-16 19:07 UTC",
+        "oldest": "2026-10-09 19:07 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "weekly": {
+        "count": 5,
+        "required": 4,
+        "window_days": 30,
+        "newest": "2026-10-16 04:30 UTC",
+        "oldest": "2026-09-18 04:30 UTC",
+        "vaults": [
+          "rds-weekly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "not_completed": 0,
+        "borderline": false,
+        "next_expiry": "2026-10-18 04:30 UTC",
+        "status": "PASS",
+        "failures": []
+      },
+      "monthly": {
+        "count": 12,
+        "required": 12,
+        "months_covered": 12,
+        "current_month_pending": false,
+        "newest": "2026-10-02 01:00 UTC",
+        "oldest": "2025-11-02 01:00 UTC",
+        "vaults": [
+          "rds-monthly-vault"
+        ],
+        "gaps": [],
+        "by_rule_name": 0,
+        "status": "PASS",
+        "failures": []
+      },
+      "aws_backup_points": 17,
+      "no_aws_backup": false,
+      "failures": [],
+      "compliance_status": "COMPLIANT"
+    }
+  ],
+  "manual": [
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "snapshot": "old-app-final",
+      "source": "old-app",
+      "engine": "mysql",
+      "created": "2025-09-12 03:30 UTC",
+      "age_days": 400,
+      "size_gb": 500,
+      "status": "available",
+      "est_monthly_usd": 47.5,
+      "orphan": true,
+      "delete_command": "aws rds delete-db-snapshot --db-snapshot-identifier 'old-app-final' --region us-east-1 --profile 'prod'"
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "instance",
+      "snapshot": "billing-pg-before-upgrade",
+      "source": "billing-pg",
+      "engine": "postgres",
+      "created": "2026-03-31 03:30 UTC",
+      "age_days": 200,
+      "size_gb": 100,
+      "status": "available",
+      "est_monthly_usd": 9.5,
+      "orphan": false,
+      "delete_command": "aws rds delete-db-snapshot --db-snapshot-identifier 'billing-pg-before-upgrade' --region us-east-1 --profile 'prod'"
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "cluster",
+      "snapshot": "pay-aurora-pg-before-v16",
+      "source": "pay-aurora-pg",
+      "engine": "aurora-postgresql",
+      "created": "2026-06-19 03:30 UTC",
+      "age_days": 120,
+      "size_gb": 250,
+      "status": "available",
+      "est_monthly_usd": 23.75,
+      "orphan": false,
+      "delete_command": "aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier 'pay-aurora-pg-before-v16' --region us-east-1 --profile 'prod'"
+    },
+    {
+      "account": "111111111111",
+      "profile": "prod",
+      "region": "us-east-1",
+      "kind": "cluster",
+      "snapshot": "retired-aurora-final",
+      "source": "retired-aurora",
+      "engine": "aurora-mysql",
+      "created": "2026-07-14 03:30 UTC",
+      "age_days": 95,
+      "size_gb": 80,
+      "status": "available",
+      "est_monthly_usd": 7.6,
+      "orphan": true,
+      "delete_command": "aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier 'retired-aurora-final' --region us-east-1 --profile 'prod'"
+    },
+    {
+      "account": "222222222222",
+      "profile": "nonprod",
+      "region": "ap-south-1",
+      "kind": "instance",
+      "snapshot": "dev-pg-copy-2025",
+      "source": "dev-pg",
+      "engine": "postgres",
+      "created": "2025-12-21 03:30 UTC",
+      "age_days": 300,
+      "size_gb": 20,
+      "status": "available",
+      "est_monthly_usd": 1.9,
+      "orphan": false,
+      "delete_command": "aws rds delete-db-snapshot --db-snapshot-identifier 'dev-pg-copy-2025' --region ap-south-1 --profile 'nonprod'"
+    }
+  ],
+  "skipped_replicas": [
+    "billing-pg-replica"
+  ],
+  "errors": [],
+  "summary": {
+    "total": 8,
+    "compliant": 2,
+    "non_compliant": 6,
+    "unknown": 0,
+    "pct_compliant": 25,
+    "daily_pass": 4,
+    "weekly_pass": 5,
+    "monthly_pass": 4,
+    "weekly_borderline": 1,
+    "no_aws_backup": 2,
+    "skipped_replicas": 1,
+    "errors": 0,
+    "by_engine": [
+      {
+        "engine": "aurora-mysql",
+        "total": 1,
+        "compliant": 0,
+        "non_compliant": 1,
+        "unknown": 0,
+        "pct_compliant": 0
+      },
+      {
+        "engine": "aurora-postgresql",
+        "total": 1,
+        "compliant": 1,
+        "non_compliant": 0,
+        "unknown": 0,
+        "pct_compliant": 100
+      },
+      {
+        "engine": "mysql",
+        "total": 1,
+        "compliant": 0,
+        "non_compliant": 1,
+        "unknown": 0,
+        "pct_compliant": 0
+      },
+      {
+        "engine": "postgres",
+        "total": 4,
+        "compliant": 0,
+        "non_compliant": 4,
+        "unknown": 0,
+        "pct_compliant": 0
+      },
+      {
+        "engine": "sqlserver-se",
+        "total": 1,
+        "compliant": 1,
+        "non_compliant": 0,
+        "unknown": 0,
+        "pct_compliant": 100
+      }
+    ],
+    "by_account": [
+      {
+        "account": "111111111111",
+        "profile": "prod",
+        "total": 7,
+        "compliant": 2,
+        "non_compliant": 5,
+        "unknown": 0,
+        "pct_compliant": 28.6
+      },
+      {
+        "account": "222222222222",
+        "profile": "nonprod",
+        "total": 1,
+        "compliant": 0,
+        "non_compliant": 1,
+        "unknown": 0,
+        "pct_compliant": 0
+      }
+    ],
+    "top_failures": [
+      {
+        "code": "DAILY_MISSING",
+        "servers": 4,
+        "examples": [
+          "billing-pg",
+          "ledger-maz",
+          "shop-aurora-mysql",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "MONTHLY_COUNT",
+        "servers": 4,
+        "examples": [
+          "billing-pg",
+          "inv-mysql",
+          "shop-aurora-mysql",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "MONTHLY_GAP",
+        "servers": 4,
+        "examples": [
+          "billing-pg",
+          "inv-mysql",
+          "shop-aurora-mysql",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "DAILY_RETENTION",
+        "servers": 3,
+        "examples": [
+          "billing-pg",
+          "ledger-maz",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "WEEKLY_COUNT",
+        "servers": 3,
+        "examples": [
+          "crm-pg",
+          "inv-mysql",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "WEEKLY_GAP",
+        "servers": 3,
+        "examples": [
+          "crm-pg",
+          "inv-mysql",
+          "dev-pg"
+        ]
+      },
+      {
+        "code": "NO_AWS_BACKUP",
+        "servers": 2,
+        "examples": [
+          "inv-mysql",
+          "dev-pg"
+        ]
+      }
+    ],
+    "manual": {
+      "count": 5,
+      "total_gb": 950,
+      "est_monthly_usd": 90.25,
+      "orphans": 2,
+      "orphan_gb": 580,
+      "oldest_days": 400
+    }
+  }
+}

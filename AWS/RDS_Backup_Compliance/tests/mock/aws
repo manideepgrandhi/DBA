@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Stub `aws` for testing rds_backup_compliance_report.sh. It never talks to AWS (no network code at all).
+
+Output shapes follow `aws <svc> <op> --generate-cli-skeleton output` (AWS CLI v2.38); validate_cli.sh checks that.
+All times are relative to now (or MOCK_NOW epoch). Env:
+  MOCK_SCENARIO = fleet (default) | empty | backupdenied | snapfail | badcreds | large
+  MOCK_LARGE_N  = instances for 'large' (default 1500) ; MOCK_LOG = JSONL of argv
+  MOCK_DEFAULT_REGION = answer for `aws configure get region`
+Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1), (none) -> prod,
+          broken -> invalid credentials. Other regions are empty.
+"""
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+NOW = datetime.fromtimestamp(int(os.environ["MOCK_NOW"]), timezone.utc) if os.environ.get("MOCK_NOW") else datetime.now(timezone.utc)
+SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+
+
+def fail(code, op, msg, rc=254):
+    sys.stderr.write("\naws: [ERROR]: An error occurred (%s) when calling the %s operation: %s\n\n" % (code, op, msg))
+    sys.exit(rc)
+
+
+argv = sys.argv[1:]
+if os.environ.get("MOCK_LOG"):
+    with open(os.environ["MOCK_LOG"], "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+if argv[:1] == ["--version"]:
+    print("aws-cli/2.38.2 Python/3.14.6 Linux/6.12 exe/x86_64.mock"); sys.exit(0)
+if argv[:3] == ["configure", "get", "region"]:
+    r = os.environ.get("MOCK_DEFAULT_REGION", "")
+    if r:
+        print(r); sys.exit(0)
+    sys.exit(1)
+
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout"}
+ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
+           ("rds", "describe-db-clusters"): set(), ("rds", "describe-db-instances"): set(),
+           ("rds", "describe-db-snapshots"): {"--snapshot-type"}, ("rds", "describe-db-cluster-snapshots"): {"--snapshot-type"},
+           ("backup", "list-backup-vaults"): set(),
+           ("backup", "list-recovery-points-by-backup-vault"): {"--backup-vault-name", "--by-created-after"}}
+WRITE_WORDS = ("delete", "modify", "create", "start", "stop", "put", "update", "tag", "restore", "copy")
+g, o, pos, i = {}, {}, [], 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--no-cli-pager":
+        g[a] = True
+    elif a in GLOBAL_VAL:
+        g[a] = argv[i + 1]; i += 1
+    elif a.startswith("--"):
+        o[a] = argv[i + 1] if i + 1 < len(argv) else ""; i += 1
+    else:
+        pos.append(a)
+    i += 1
+if len(pos) == 2 and pos[1].split("-")[0] in WRITE_WORDS:
+    sys.stderr.write("mock: WRITE OPERATION ATTEMPTED: %s\n" % " ".join(pos)); sys.exit(99)
+if len(pos) != 2 or tuple(pos) not in ALLOWED:
+    sys.stderr.write("\naws: [ERROR]: mock does not implement: %s\n" % " ".join(pos)); sys.exit(252)
+bad = set(o) - ALLOWED[tuple(pos)]
+if bad:
+    sys.stderr.write("\naws: [ERROR]: Unknown options: %s\n" % ", ".join(sorted(bad))); sys.exit(252)
+if g.get("--output") != "json" or "--no-cli-pager" not in g:
+    sys.stderr.write("mock: script must pass --output json --no-cli-pager\n"); sys.exit(252)
+REGION = g.get("--region") or os.environ.get("AWS_REGION", "")
+if not REGION:
+    sys.stderr.write("\naws: [ERROR]: An error occurred (NoRegion): You must specify a region.\n"); sys.exit(253)
+PROFILE = g.get("--profile", "")
+SVC, OP = pos
+if PROFILE == "broken" or SCEN == "badcreds":
+    fail("InvalidClientTokenId", "GetCallerIdentity", "The security token included in the request is invalid.")
+ACCT = {"": "111111111111", "prod": "111111111111", "nonprod": "222222222222"}.get(PROFILE)
+if ACCT is None:
+    sys.stderr.write("\nThe config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
+
+
+def out(d):
+    print(json.dumps(d, indent=2)); sys.exit(0)
+
+
+def t(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+
+if (SVC, OP) == ("sts", "get-caller-identity"):
+    out({"UserId": "AIDAMOCKUSER", "Account": ACCT, "Arn": "arn:aws:iam::%s:user/dba" % ACCT})
+if (SVC, OP) == ("ec2", "describe-regions"):
+    out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": "opt-in-not-required"} for r in ("us-east-1", "ap-south-1", "eu-west-1")]})
+if SCEN == "backupdenied" and SVC == "backup":
+    fail("AccessDeniedException", "ListBackupVaults", "User is not authorized to perform: backup:ListBackupVaults")
+if SCEN == "snapfail" and OP == "describe-db-snapshots" and o.get("--snapshot-type") == "automated":
+    fail("Throttling", "DescribeDBSnapshots", "Rate exceeded")
+
+INS, CL, SNAP, CSNAP, RP = [], [], [], [], []
+VAULTS = ["Default", "rds-weekly-vault", "rds-monthly-vault"]
+
+
+def arn(kind, ident):
+    return "arn:aws:rds:%s:%s:%s:%s" % (REGION, ACCT, kind, ident)
+
+
+def tags(env, owner, app):
+    return [{"Key": "Environment", "Value": env}, {"Key": "Owner", "Value": owner}, {"Key": "Application", "Value": app}]
+
+
+def inst(ident, engine, ver, ret=7, cluster=None, replica_of=None, tg=None, window="20:30-21:00", gb=100):
+    d = {"DBInstanceIdentifier": ident, "DBInstanceClass": "db.r6g.large", "Engine": engine, "DBInstanceStatus": "available",
+         "EngineVersion": ver, "BackupRetentionPeriod": ret, "PreferredBackupWindow": window, "AllocatedStorage": gb,
+         "DBInstanceArn": arn("db", ident), "TagList": tg or []}
+    if cluster:
+        d["DBClusterIdentifier"] = cluster
+    if replica_of:
+        d["ReadReplicaSourceDBInstanceIdentifier"] = replica_of
+    INS.append(d); return d
+
+
+def cluster(ident, engine, ver, members, ret=7, tg=None, window="19:00-19:30"):
+    d = {"DBClusterIdentifier": ident, "Engine": engine, "EngineVersion": ver, "Status": "available", "BackupRetentionPeriod": ret,
+         "PreferredBackupWindow": window, "DBClusterArn": arn("cluster", ident), "AllocatedStorage": 1, "TagList": tg or [],
+         "DBClusterMembers": [{"DBInstanceIdentifier": m, "IsClusterWriter": k == 0, "DBClusterParameterGroupStatus": "in-sync", "PromotionTier": 1} for k, m in enumerate(members)]}
+    CL.append(d)
+    for m in members:
+        inst(m, engine, ver, ret=1, cluster=ident, tg=tg)
+    return d
+
+
+def at_hm(days_ago, hm):
+    h, m = (int(x) for x in hm.split(":"))
+    d = (NOW - timedelta(days=days_ago)).replace(hour=h, minute=m, second=0, microsecond=0)
+    return d + timedelta(minutes=7)
+
+
+def daily(ident, kind, window, ages, engine, gb=100):
+    hm = window.split("-")[0]
+    for a in ages:
+        when = at_hm(a, hm)
+        if when > NOW:
+            continue
+        sid = "rds:%s-%s" % (ident, when.strftime("%Y-%m-%d-%H-%M"))
+        if kind == "cluster":
+            CSNAP.append({"DBClusterSnapshotIdentifier": sid, "DBClusterIdentifier": ident, "SnapshotCreateTime": t(when), "Engine": engine,
+                          "AllocatedStorage": gb, "Status": "available", "SnapshotType": "automated",
+                          "DBClusterSnapshotArn": arn("cluster-snapshot", sid), "TagList": []})
+        else:
+            SNAP.append({"DBSnapshotIdentifier": sid, "DBInstanceIdentifier": ident, "SnapshotCreateTime": t(when), "Engine": engine,
+                         "AllocatedStorage": gb, "Status": "available", "SnapshotType": "automated", "DBSnapshotArn": arn("snapshot", sid)})
+
+
+def manual(ident, src, kind, age, engine, gb, stype="manual"):
+    when = NOW - timedelta(days=age, hours=3)
+    if kind == "cluster":
+        CSNAP.append({"DBClusterSnapshotIdentifier": ident, "DBClusterIdentifier": src, "SnapshotCreateTime": t(when), "Engine": engine,
+                      "AllocatedStorage": gb, "Status": "available", "SnapshotType": stype, "DBClusterSnapshotArn": arn("cluster-snapshot", ident), "TagList": []})
+    else:
+        SNAP.append({"DBSnapshotIdentifier": ident, "DBInstanceIdentifier": src, "SnapshotCreateTime": t(when), "Engine": engine,
+                     "AllocatedStorage": gb, "Status": "available", "SnapshotType": stype, "DBSnapshotArn": arn("snapshot", ident)})
+
+
+def rp(res_arn, rtype, created, ret, vault, rule, status="COMPLETED", calc_only=False):
+    d = {"RecoveryPointArn": "arn:aws:backup:%s:%s:recovery-point:%s" % (REGION, ACCT, abs(hash((res_arn, created))) % 10**12),
+         "BackupVaultName": vault, "BackupVaultArn": "arn:aws:backup:%s:%s:backup-vault:%s" % (REGION, ACCT, vault),
+         "ResourceArn": res_arn, "ResourceType": rtype, "Status": status, "CreationDate": t(created),
+         "CompletionDate": t(created + timedelta(minutes=20)), "BackupSizeInBytes": 0, "IsEncrypted": True,
+         "CreatedBy": {"BackupPlanId": "plan-1", "BackupPlanArn": "arn:aws:backup:%s:%s:backup-plan:plan-1" % (REGION, ACCT),
+                       "BackupPlanVersion": "v1", "BackupRuleId": "rule-" + rule, "BackupRuleName": rule},
+         "CalculatedLifecycle": {"DeleteAt": t(created + timedelta(days=ret))}}
+    if not calc_only:
+        d["Lifecycle"] = {"DeleteAfterDays": ret}
+    RP.append(d)
+
+
+def weekly(res_arn, rtype, ages, ret=30, rule="Weekly", **kw):
+    for a in ages:
+        rp(res_arn, rtype, NOW - timedelta(days=a, hours=2), ret, "rds-weekly-vault", rule, **kw)
+
+
+def month_start(k, day=2):
+    y, m = NOW.year, NOW.month - k
+    while m <= 0:
+        m += 12; y -= 1
+    return datetime(y, m, day, 1, 0, tzinfo=timezone.utc)
+
+
+def monthly(res_arn, rtype, ks, ret=365, rule="Monthly", **kw):
+    for k in ks:
+        when = month_start(k)
+        if when < NOW:
+            rp(res_arn, rtype, when, ret, "rds-monthly-vault", rule, **kw)
+
+
+ALL7 = range(0, 9)          # automated snapshots for today and the last 8 days
+W5 = [1, 8, 15, 22, 29]
+M12 = range(0, 12)
+
+if SCEN == "large" and REGION == "us-east-1" and PROFILE in ("", "prod"):
+    n = int(os.environ.get("MOCK_LARGE_N", "1500"))
+    for k in range(n):
+        d = inst("bulk-pg-%05d" % k, "postgres", "16.8", tg=tags("prod", "team-%d" % (k % 7), "bulk"))
+        daily(d["DBInstanceIdentifier"], "instance", d["PreferredBackupWindow"], ALL7, "postgres")
+        weekly(d["DBInstanceArn"], "RDS", W5)
+        monthly(d["DBInstanceArn"], "RDS", M12)
+elif SCEN != "empty" and REGION == "us-east-1" and PROFILE in ("", "prod"):
+    c = cluster("pay-aurora-pg", "aurora-postgresql", "16.9", ["pay-aurora-pg-1", "pay-aurora-pg-2"], tg=tags("prod", "payments", "pay"))
+    daily("pay-aurora-pg", "cluster", c["PreferredBackupWindow"], ALL7, "aurora-postgresql", gb=400)
+    weekly(c["DBClusterArn"], "Aurora", W5); monthly(c["DBClusterArn"], "Aurora", M12)
+    c = cluster("shop-aurora-mysql", "aurora-mysql", "8.0.mysql_aurora.3.08.2", ["shop-mysql-1"], tg=tags("prod", "shop", "storefront"))
+    daily("shop-aurora-mysql", "cluster", c["PreferredBackupWindow"], [0, 1, 2, 4, 5, 7, 8], "aurora-mysql")       # 2 days missing
+    weekly(c["DBClusterArn"], "Aurora", [2, 9, 16, 23])                                                              # exactly 4: borderline
+    monthly(c["DBClusterArn"], "Aurora", [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11])                                         # one month missing
+    d = inst("billing-pg", "postgres", "16.8", ret=3, tg=tags("prod", "billing", "billing"))
+    daily("billing-pg", "instance", d["PreferredBackupWindow"], [0, 1, 2, 3], "postgres")
+    weekly(d["DBInstanceArn"], "RDS", W5)
+    monthly(d["DBInstanceArn"], "RDS", M12, ret=400, rule="Monthly-1yr")                                              # retention outside 360-370
+    inst("billing-pg-replica", "postgres", "16.8", ret=0, replica_of="billing-pg", tg=tags("prod", "billing", "billing"))
+    d = inst("inv-mysql", "mysql", "8.0.40", tg=tags("prod", "ops", "inventory"))
+    daily("inv-mysql", "instance", d["PreferredBackupWindow"], ALL7, "mysql")                                          # no AWS Backup at all
+    d = inst("hr-sql", "sqlserver-se", "15.00.4430.1.v1", ret=14, tg=tags("prod", "hr", "hrms"), window="03:00-03:30")
+    daily("hr-sql", "instance", d["PreferredBackupWindow"], range(0, 15), "sqlserver-se")
+    weekly(d["DBInstanceArn"], "RDS", [0, 7, 14, 21, 28], ret=31, calc_only=True)                                   # CalculatedLifecycle only
+    monthly(d["DBInstanceArn"], "RDS", M12, ret=366, calc_only=True)
+    d = inst("crm-pg", "postgres", "15.10", tg=tags("prod", "crm", "crm"))
+    daily("crm-pg", "instance", d["PreferredBackupWindow"], ALL7, "postgres")
+    weekly(d["DBInstanceArn"], "RDS", [1, 15, 22]); weekly(d["DBInstanceArn"], "RDS", [8], status="PARTIAL")        # gap + failed job
+    monthly(d["DBInstanceArn"], "RDS", M12)
+    weekly(d["DBInstanceArn"], "RDS", [3], ret=7, rule="Daily")                                                       # 7-day point: ignored
+    c = cluster("ledger-maz", "postgres", "16.6", ["ledger-maz-1", "ledger-maz-2", "ledger-maz-3"], ret=0, tg=tags("prod", "finance", "ledger"))
+    weekly(c["DBClusterArn"], "RDS", W5); monthly(c["DBClusterArn"], "RDS", M12)
+    CL.append({"DBClusterIdentifier": "catalog-docdb", "Engine": "docdb", "EngineVersion": "5.0.0", "Status": "available", "BackupRetentionPeriod": 1,
+               "DBClusterArn": arn("cluster", "catalog-docdb"), "DBClusterMembers": [], "TagList": []})                # out of scope
+    manual("billing-pg-before-upgrade", "billing-pg", "instance", 200, "postgres", 100)
+    manual("old-app-final", "old-app", "instance", 400, "mysql", 500)                                                 # orphan
+    manual("pay-aurora-pg-before-v16", "pay-aurora-pg", "cluster", 120, "aurora-postgresql", 250)
+    manual("retired-aurora-final", "retired-aurora", "cluster", 95, "aurora-mysql", 80)                              # orphan
+    manual("crm-pg-adhoc", "crm-pg", "instance", 10, "postgres", 100)                                                 # too new
+    manual("awsbackup:job-0a1b2c3d", "crm-pg", "instance", 150, "postgres", 100)                                      # AWS Backup copy: excluded
+elif SCEN != "empty" and REGION == "ap-south-1" and PROFILE == "nonprod":
+    d = inst("dev-pg", "postgres", "17.4", ret=1, tg=tags("dev", "platform", "dev"))
+    daily("dev-pg", "instance", d["PreferredBackupWindow"], [0, 1], "postgres")
+    manual("dev-pg-copy-2025", "dev-pg", "instance", 300, "postgres", 20)
+
+if OP == "describe-db-clusters":
+    out({"DBClusters": CL})
+if OP == "describe-db-instances":
+    out({"DBInstances": INS})
+if OP == "describe-db-snapshots":
+    out({"DBSnapshots": [s for s in SNAP if s["SnapshotType"] == o.get("--snapshot-type", s["SnapshotType"])]})
+if OP == "describe-db-cluster-snapshots":
+    out({"DBClusterSnapshots": [s for s in CSNAP if s["SnapshotType"] == o.get("--snapshot-type", s["SnapshotType"])]})
+if OP == "list-backup-vaults":
+    out({"BackupVaultList": [{"BackupVaultName": v, "BackupVaultArn": "arn:aws:backup:%s:%s:backup-vault:%s" % (REGION, ACCT, v),
+                              "NumberOfRecoveryPoints": 0, "Locked": False} for v in (VAULTS if (INS or CL) else ["Default"])]})
+if OP == "list-recovery-points-by-backup-vault":
+    after = o.get("--by-created-after")
+    lim = datetime.fromisoformat(after.replace("Z", "+00:00")) if after else None
+    out({"RecoveryPoints": [r for r in RP if r["BackupVaultName"] == o.get("--backup-vault-name")
+                            and (lim is None or datetime.fromisoformat(r["CreationDate"]) >= lim)]})
+sys.stderr.write("mock: unhandled\n"); sys.exit(252)
