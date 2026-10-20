@@ -1,0 +1,27 @@
+# rds_inventory_report.sh settings - key = value, parsed (never sourced). CLI options override.
+# Credentials are NOT accepted here: use AWS CLI profiles / SSO / instance roles.
+
+profiles = prod,nonprod
+regions  = us-east-1,ap-south-1
+# all_regions = true
+
+# engines       = postgres,mysql,aurora-*
+# identifiers   = pay-*
+# include_docdb = false
+# fast          = false        # true = skip parameter-group lookups (rds.force_ssl)
+
+# Risk flags
+prod_tag_key = Environment
+prod_regex   = (?i)^prod
+ca_days      = 90
+support_warn_days = 180
+
+tags       = Environment,Owner,Application
+format     = text,csv,html,json
+output_dir = ~/rds_inventory
+# prefix   = rds_inventory
+# tz       = Asia/Kolkata
+# top      = 10
+# log_file = ~/rds_inventory/run.log
+# aws_timeout  = 30
+# max_attempts = 5

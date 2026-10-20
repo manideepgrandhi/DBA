@@ -1,0 +1,235 @@
+RDS INVENTORY REPORT  (rds_inventory_report.sh v1.0.0, read-only, no CloudWatch)
+Generated: 2026-10-17 12:00 IST | 2026-10-17 06:30 UTC
+Accounts : 111111111111 (prod), 222222222222 (nonprod)
+Regions  : ap-south-1, us-east-1
+
+== SUMMARY
+Totals   : 9 group(s) | 1 global cluster(s) | 5 cluster(s) | 16 instance(s) | allocated 2500 GB (instances + Multi-AZ clusters; Aurora storage is dynamic and not included) | 68 vCPU / 392 GiB (static class table, provisioned only)
+By type  : Cluster member instance 9 | Standalone instance 5 | Aurora cluster 4 | Read replica 2 | Global cluster 1 | Multi-AZ DB cluster 1
+Account  (resources): 111111111111 18 | 222222222222 3
+Region   (resources): us-east-1 15 | ap-south-1 6
+Engine   : postgres 9 | aurora-postgresql 8 | aurora-mysql 2 | mysql 1 | sqlserver-se 1
+Major    : postgres 16 8 | aurora-postgresql 16 6 | aurora-mysql 8.0 2 | aurora-postgresql 15 2 | mysql 5.7 1 | postgres 17 1 | sqlserver-se 15.00 1
+Class    : db.r6g.xlarge 4 | db.m6gd.large 3 | db.m6i.2xlarge 2 | db.m5.xlarge 1 | db.m6i.xlarge 1 | db.r6g.4xlarge 1 | db.serverless 1 | db.t3.medium 1 | db.t4g.large 1 | db.t4g.medium 1
+Risk flags:
+  NO_DELETION_PROTECTION 3    deletion protection off  e.g. 222222222222/ap-south-1/dev-aurora, 111111111111/us-east-1/legacy-mysql, 222222222222/ap-south-1/dev-pg
+  SINGLE_AZ_PROD         3    single-AZ while tagged prod  e.g. 111111111111/ap-south-1/pay-aurora-aps1, 111111111111/us-east-1/crm-sv2, 111111111111/us-east-1/legacy-mysql
+  CA_EXPIRING            2    CA certificate expires within 90 days  e.g. 111111111111/us-east-1/hr-sql, 111111111111/us-east-1/legacy-mysql
+  PI_OFF                 2    Performance Insights off  e.g. 111111111111/us-east-1/legacy-mysql, 222222222222/ap-south-1/dev-pg
+  EXTENDED_SUPPORT       1    major past end of standard support (RDS Extended Support charges)  e.g. 111111111111/us-east-1/legacy-mysql
+  PUBLIC                 1    publicly accessible  e.g. 111111111111/us-east-1/legacy-mysql
+  RETENTION_LT_7         1    backup retention < 7 days  e.g. 111111111111/us-east-1/legacy-mysql
+  STOPPED_AUTO_RESTART   1    stopped - RDS restarts it automatically after 7 days  e.g. 111111111111/us-east-1/report-pg
+  SUPPORT_ENDING         1    standard support ends within 180 days  e.g. 222222222222/ap-south-1/dev-aurora
+  UNENCRYPTED            1    storage not encrypted  e.g. 111111111111/us-east-1/legacy-mysql
+
+== GROUPS (global cluster -> regional clusters -> member instances; standalone primary -> replicas)
+
+#### [GLOBAL] pay-global  (111111111111 us-east-1,ap-south-1,eu-west-1)  8 resource(s)  !! SINGLE_AZ_PROD
+■ GLOBAL CLUSTER: pay-global  [aurora-postgresql 16.9, us-east-1,ap-south-1,eu-west-1]  available
+     Major: 16 | Endpoint: pay-global.global-cxyzabc123.global.rds.amazonaws.com | Public: no | Encrypted: yes
+     Deletion protection: yes | Lifecycle: open-source-rds-extended-support | Primary region: us-east-1 | Secondary regions: ap-south-1, eu-west-1
+     Member clusters: pay-aurora-use1, pay-aurora-aps1, pay-aurora-euw1 | ARN: arn:aws:rds::111111111111:global-cluster:pay-global | Tags: Environment=prod, Owner=payments, Application=pay
+    └─ Aurora cluster [primary]: pay-aurora-use1  [aurora-postgresql 16.9, db.r6g.xlarge, us-east-1]  available
+         Major: 16 | Mode: provisioned | Storage: aurora | Multi-AZ: yes
+         AZs: us-east-1a, us-east-1b, us-east-1c | Member AZs: us-east-1a, us-east-1b, us-east-1c | Readers: 2 | Endpoint: pay-aurora-use1.cluster-cxyzabc123.us-east-1.rds.amazonaws.com
+         Reader endpoint: pay-aurora-use1.cluster-ro-cxyzabc123.us-east-1.rds.amazonaws.com | Custom endpoints: pay-reporting.cluster-custom-cxyzabc123.us-east-1.rds.amazonaws.com (READER; static: pay-use1-3) | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000002 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: yes | Deletion protection: yes | SSL enforcement (param group): rds.force_ssl=1
+         Backup retention: 7 days | Backup window: 19:00-19:30 | Maintenance window: sat:21:00-sat:21:30 | Auto minor upgrade: yes
+         Parameter group: pay-apg16 | Performance Insights: off | Enhanced monitoring: off | Log exports: postgresql
+         Database Insights: standard | Created: 2024-08-08 (800 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | Global cluster: pay-global
+         ARN: arn:aws:rds:us-east-1:111111111111:cluster:pay-aurora-use1 | Tags: Environment=prod, Owner=payments, Application=pay
+        └─ instance [writer]: pay-use1-1  [aurora-postgresql 16.9, db.r6g.xlarge, us-east-1]  available
+             Major: 16 | vCPU / memory (static table): 4 vCPU / 32 GiB | Multi-AZ: no | AZ: us-east-1a
+             Promotion tier: 1 | Endpoint: pay-use1-1.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+             Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+             KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+             SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: pay-apg16-inst (in-sync)
+             Option group: default:aurora-postgresql | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+             Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:pay-use1-1 | Tags: Environment=prod, Owner=payments, Application=pay
+        └─ instance [reader]: pay-use1-2  [aurora-postgresql 16.9, db.r6g.xlarge, us-east-1]  available
+             Major: 16 | vCPU / memory (static table): 4 vCPU / 32 GiB | Multi-AZ: no | AZ: us-east-1b
+             Promotion tier: 2 | Endpoint: pay-use1-2.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+             Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+             KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+             SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Pending maintenance: system-update @2026-10-29
+             Parameter group: pay-apg16-inst (in-sync) | Option group: default:aurora-postgresql | Performance Insights: on (7 days) | Enhanced monitoring: 60s
+             Database Insights: standard | Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:pay-use1-2
+             Tags: Environment=prod, Owner=payments, Application=pay
+        └─ instance [reader]: pay-use1-3  [aurora-postgresql 16.9, db.r6g.xlarge, us-east-1]  available
+             Major: 16 | vCPU / memory (static table): 4 vCPU / 32 GiB | Multi-AZ: no | AZ: us-east-1c
+             Promotion tier: 3 | Endpoint: pay-use1-3.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+             Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+             KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+             SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: pay-apg16-inst (in-sync)
+             Option group: default:aurora-postgresql | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+             Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:pay-use1-3 | Tags: Environment=prod, Owner=payments, Application=pay
+    └─ Aurora cluster [secondary]: pay-aurora-aps1  [aurora-postgresql 16.9, db.r6g.xlarge, ap-south-1]  available  !! SINGLE_AZ_PROD
+         Major: 16 | Mode: provisioned | Storage: aurora | Multi-AZ: no
+         AZs: ap-south-1a, ap-south-1b, ap-south-1c | Member AZs: ap-south-1a | Readers: 1 | Endpoint: pay-aurora-aps1.cluster-cxyzabc123.ap-south-1.rds.amazonaws.com
+         Reader endpoint: pay-aurora-aps1.cluster-ro-cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718 | Subnet group: db-private
+         Security groups: sg-0db0000000000002 | Public: no | Encrypted: yes | KMS key: arn:aws:kms:ap-south-1:111111111111:key/00000000-1111-2222-3333-444444444444
+         IAM auth: yes | Deletion protection: yes | SSL enforcement (param group): rds.force_ssl=1 | Backup retention: 7 days
+         Backup window: 19:00-19:30 | Maintenance window: sat:21:00-sat:21:30 | Auto minor upgrade: yes | Parameter group: pay-apg16
+         Performance Insights: off | Enhanced monitoring: off | Database Insights: standard | Created: 2024-08-08 (800 days)
+         Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | Global cluster: pay-global | Replication source: arn:aws:rds:us-east-1:111111111111:cluster:pay-aurora-use1 | ARN: arn:aws:rds:ap-south-1:111111111111:cluster:pay-aurora-aps1
+         Tags: Environment=prod, Owner=payments, Application=pay
+        └─ instance [reader]: pay-aps1-1  [aurora-postgresql 16.9, db.r6g.xlarge, ap-south-1]  available
+             Major: 16 | vCPU / memory (static table): 4 vCPU / 32 GiB | Multi-AZ: no | AZ: ap-south-1a
+             Promotion tier: 1 | Endpoint: pay-aps1-1.cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+             Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+             KMS key: arn:aws:kms:ap-south-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+             SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.aurora-postgresql (in-sync)
+             Option group: default:aurora-postgresql | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+             Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:ap-south-1:111111111111:db:pay-aps1-1 | Tags: Environment=prod, Owner=payments, Application=pay
+    └─ cluster [secondary]: pay-aurora-euw1  [aurora-postgresql , eu-west-1]  not scanned (region/account not in scope)
+         Performance Insights: off | Enhanced monitoring: off | ARN: arn:aws:rds:eu-west-1:111111111111:cluster:pay-aurora-euw1
+
+#### [CLUSTER] crm-sv2  (111111111111 us-east-1)  2 resource(s)  !! SINGLE_AZ_PROD
+■ Aurora cluster [cluster]: crm-sv2  [aurora-mysql 8.0.mysql_aurora.3.08.2, us-east-1]  available  !! SINGLE_AZ_PROD
+     Major: 8.0 | Mode: provisioned + serverless v2 | ACU min/max: 0.5 / 16 | Storage: aurora
+     Multi-AZ: no | AZs: us-east-1a, us-east-1b, us-east-1c | Member AZs: us-east-1a | Readers: 0
+     Endpoint: crm-sv2.cluster-cxyzabc123.us-east-1.rds.amazonaws.com | Reader endpoint: crm-sv2.cluster-ro-cxyzabc123.us-east-1.rds.amazonaws.com | Custom endpoints: crm-analytics.cluster-custom-cxyzabc123.us-east-1.rds.amazonaws.com (ANY; static: ) excl: crm-sv2-1 | Port: 3306
+     VPC: vpc-0a1b2c3d4e5f60718 | Subnet group: db-private | Security groups: sg-0db0000000000002 | Public: no
+     Encrypted: yes | KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: yes | Deletion protection: yes
+     SSL enforcement (param group): require_secure_transport=engine-default | Backup retention: 7 days | Backup window: 19:00-19:30 | Maintenance window: sat:21:00-sat:21:30
+     Auto minor upgrade: yes | Parameter group: default.aurora-mysql | Performance Insights: off | Enhanced monitoring: off
+     Database Insights: standard | Created: 2024-08-08 (800 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2029-04-04 · ext end 2032-04-08 | ARN: arn:aws:rds:us-east-1:111111111111:cluster:crm-sv2
+     Tags: Environment=prod, Owner=crm, Application=crm
+    └─ instance [writer]: crm-sv2-1  [aurora-mysql 8.0.mysql_aurora.3.08.2, db.serverless, us-east-1]  available
+         Major: 8.0 | Multi-AZ: no | AZ: us-east-1a | Promotion tier: 1
+         Endpoint: crm-sv2-1.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 3306 | VPC: vpc-0a1b2c3d4e5f60718 | Subnet group: db-private
+         Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes | KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444
+         IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03) | SSL enforcement (param group): (cluster parameter group)
+         Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.aurora-mysql (in-sync) | Option group: default:aurora-mysql
+         Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard | Created: 2025-09-12 (400 days)
+         Lifecycle: open-source-rds-extended-support · standard · std end 2029-04-04 · ext end 2032-04-08 | ARN: arn:aws:rds:us-east-1:111111111111:db:crm-sv2-1 | Tags: Environment=prod, Owner=crm, Application=crm
+
+#### [CLUSTER] ledger-maz  (111111111111 us-east-1)  4 resource(s)
+■ Multi-AZ DB cluster [cluster]: ledger-maz  [postgres 16.6, db.m6gd.large, us-east-1]  available
+     Major: 16 | Mode: provisioned | Storage: io1 · 400 GB · 3000 IOPS | Multi-AZ: yes
+     AZs: us-east-1a, us-east-1b, us-east-1c | Member AZs: us-east-1a, us-east-1b, us-east-1c | Readers: 2 | Endpoint: ledger-maz.cluster-cxyzabc123.us-east-1.rds.amazonaws.com
+     Reader endpoint: ledger-maz.cluster-ro-cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718 | Subnet group: db-private
+     Security groups: sg-0db0000000000002 | Public: no | Encrypted: yes | KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444
+     IAM auth: yes | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03) | SSL enforcement (param group): rds.force_ssl=1
+     Backup retention: 7 days | Backup window: 19:00-19:30 | Maintenance window: sat:21:00-sat:21:30 | Auto minor upgrade: yes
+     Parameter group: ledger-pg16 | Performance Insights: off | Enhanced monitoring: off | Database Insights: standard
+     Created: 2024-08-08 (800 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:cluster:ledger-maz | Tags: Environment=prod, Owner=finance, Application=ledger
+    └─ instance [writer]: ledger-maz-1  [postgres 16.6, db.m6gd.large, us-east-1]  available
+         Major: 16 | vCPU / memory (static table): 2 vCPU / 8 GiB | Multi-AZ: no | AZ: us-east-1a
+         Promotion tier: 1 | Endpoint: ledger-maz-1.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.postgres (in-sync)
+         Option group: default:postgres | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+         Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:ledger-maz-1 | Tags: Environment=prod, Owner=finance, Application=ledger
+    └─ instance [reader]: ledger-maz-2  [postgres 16.6, db.m6gd.large, us-east-1]  available
+         Major: 16 | vCPU / memory (static table): 2 vCPU / 8 GiB | Multi-AZ: no | AZ: us-east-1b
+         Promotion tier: 2 | Endpoint: ledger-maz-2.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.postgres (in-sync)
+         Option group: default:postgres | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+         Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:ledger-maz-2 | Tags: Environment=prod, Owner=finance, Application=ledger
+    └─ instance [reader]: ledger-maz-3  [postgres 16.6, db.m6gd.large, us-east-1]  available
+         Major: 16 | vCPU / memory (static table): 2 vCPU / 8 GiB | Multi-AZ: no | AZ: us-east-1c
+         Promotion tier: 3 | Endpoint: ledger-maz-3.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.postgres (in-sync)
+         Option group: default:postgres | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+         Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:ledger-maz-3 | Tags: Environment=prod, Owner=finance, Application=ledger
+
+#### [CLUSTER] dev-aurora  (222222222222 ap-south-1)  2 resource(s)  !! NO_DELETION_PROTECTION,SUPPORT_ENDING
+■ Aurora cluster [cluster]: dev-aurora  [aurora-postgresql 15.4, db.t4g.large, ap-south-1]  available  !! NO_DELETION_PROTECTION,SUPPORT_ENDING
+     Major: 15 | Mode: provisioned | Storage: aurora | Multi-AZ: no
+     AZs: ap-south-1a, ap-south-1b, ap-south-1c | Member AZs: ap-south-1a | Readers: 0 | Endpoint: dev-aurora.cluster-cxyzabc123.ap-south-1.rds.amazonaws.com
+     Reader endpoint: dev-aurora.cluster-ro-cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718 | Subnet group: db-private
+     Security groups: sg-0db0000000000002 | Public: no | Encrypted: yes | KMS key: arn:aws:kms:ap-south-1:222222222222:key/00000000-1111-2222-3333-444444444444
+     IAM auth: yes | Deletion protection: no | SSL enforcement (param group): rds.force_ssl=engine-default | Backup retention: 7 days
+     Backup window: 19:00-19:30 | Maintenance window: sat:21:00-sat:21:30 | Auto minor upgrade: yes | Parameter group: default.aurora-postgresql
+     Performance Insights: off | Enhanced monitoring: off | Database Insights: standard | Created: 2024-08-08 (800 days)
+     Lifecycle: open-source-rds-extended-support · standard support ends 2027-01-25 · std end 2027-01-25 · ext end 2030-01-29 | ARN: arn:aws:rds:ap-south-1:222222222222:cluster:dev-aurora | Tags: Environment=dev, Owner=platform, Application=dev
+    └─ instance [writer]: dev-aurora-1  [aurora-postgresql 15.4, db.t4g.large, ap-south-1]  available
+         Major: 15 | vCPU / memory (static table): 2 vCPU / 8 GiB | Multi-AZ: no | AZ: ap-south-1a
+         Promotion tier: 1 | Endpoint: dev-aurora-1.cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:ap-south-1:222222222222:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): (cluster parameter group) | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes | Parameter group: default.aurora-postgresql (in-sync)
+         Option group: default:aurora-postgresql | Performance Insights: on (7 days) | Enhanced monitoring: 60s | Database Insights: standard
+         Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard support ends 2027-01-25 · std end 2027-01-25 · ext end 2030-01-29 | ARN: arn:aws:rds:ap-south-1:222222222222:db:dev-aurora-1 | Tags: Environment=dev, Owner=platform, Application=dev
+
+#### [STANDALONE] billing-pg  (111111111111 us-east-1)  3 resource(s)
+■ instance [primary]: billing-pg  [postgres 16.8, db.m6i.2xlarge, us-east-1]  available
+     Major: 16 | vCPU / memory (static table): 8 vCPU / 32 GiB | Storage: gp3 · 500 GB · 12000 IOPS · 500 MiB/s · max 1000 GB | Multi-AZ: yes
+     AZ: us-east-1a / us-east-1b | Endpoint: billing-pg.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+     Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+     KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: yes | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+     SSL enforcement (param group): rds.force_ssl=1 | Backup retention: 7 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+     Auto minor upgrade: yes | Pending maintenance: db-upgrade @2026-10-26; os-upgrade | Parameter group: billing-pg16 (in-sync) | Option group: default:postgres
+     Performance Insights: on (7 days) | Enhanced monitoring: 60s | Log exports: postgresql | Database Insights: standard
+     Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | Replicas: billing-pg-replica, arn:aws:rds:ap-south-1:111111111111:db:billing-pg-dr | ARN: arn:aws:rds:us-east-1:111111111111:db:billing-pg
+     Tags: Environment=prod, Owner=billing, Application=billing
+    └─ instance [read replica]: billing-pg-replica  [postgres 16.8, db.m6i.2xlarge, us-east-1]  available
+         Major: 16 | vCPU / memory (static table): 8 vCPU / 32 GiB | Storage: gp3 · 500 GB | Multi-AZ: no
+         AZ: us-east-1b | Endpoint: billing-pg-replica.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): rds.force_ssl=1 | Backup retention: 0 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+         Auto minor upgrade: yes | Parameter group: billing-pg16 (in-sync) | Option group: default:postgres | Performance Insights: on (7 days)
+         Enhanced monitoring: 60s | Log exports: postgresql | Database Insights: standard | Created: 2025-09-12 (400 days)
+         Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | Replication source: billing-pg | ARN: arn:aws:rds:us-east-1:111111111111:db:billing-pg-replica | Tags: Environment=prod, Owner=billing, Application=billing
+    └─ instance [cross-region replica]: billing-pg-dr  [postgres 16.8, db.m6i.xlarge, ap-south-1]  available
+         Major: 16 | vCPU / memory (static table): 4 vCPU / 16 GiB | Storage: gp3 · 500 GB | Multi-AZ: no
+         AZ: ap-south-1a | Endpoint: billing-pg-dr.cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+         Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+         KMS key: arn:aws:kms:ap-south-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+         SSL enforcement (param group): rds.force_ssl=1 | Backup retention: 7 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+         Auto minor upgrade: yes | Parameter group: billing-pg16 (in-sync) | Option group: default:postgres | Performance Insights: on (7 days)
+         Enhanced monitoring: 60s | Log exports: postgresql | Database Insights: standard | Created: 2025-09-12 (400 days)
+         Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | Replication source: arn:aws:rds:us-east-1:111111111111:db:billing-pg | ARN: arn:aws:rds:ap-south-1:111111111111:db:billing-pg-dr | Tags: Environment=prod, Owner=billing, Application=billing
+
+#### [STANDALONE] hr-sql  (111111111111 us-east-1)  1 resource(s)  !! CA_EXPIRING
+■ instance [primary]: hr-sql  [sqlserver-se 15.00.4430.1.v1, db.m5.xlarge, us-east-1]  available  !! CA_EXPIRING
+     Major: 15.00 | vCPU / memory (static table): 4 vCPU / 16 GiB | Storage: gp2 · 200 GB | Multi-AZ: yes
+     AZ: us-east-1a / us-east-1b | Endpoint: hr-sql.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 1433 | VPC: vpc-0a1b2c3d4e5f60718
+     Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+     KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-ecc384-g1 (valid till 2026-12-16)
+     SSL enforcement (param group): rds.force_ssl=0 | Backup retention: 7 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+     Auto minor upgrade: yes | Parameter group: hr-sql15 (pending-reboot) | Option group: hr-sql15-og | Performance Insights: on (7 days)
+     Enhanced monitoring: 60s | Log exports: error, agent | Database Insights: standard | Created: 2025-09-12 (400 days)
+     Lifecycle: open-source-rds-extended-support | ARN: arn:aws:rds:us-east-1:111111111111:db:hr-sql | Tags: Environment=prod, Owner=hr, Application=hrms
+
+#### [STANDALONE] legacy-mysql  (111111111111 us-east-1)  1 resource(s)  !! CA_EXPIRING,EXTENDED_SUPPORT,NO_DELETION_PROTECTION,PI_OFF,PUBLIC,RETENTION_LT_7,SINGLE_AZ_PROD,UNENCRYPTED
+■ instance [primary]: legacy-mysql  [mysql 5.7.44, db.t3.medium, us-east-1]  available  !! CA_EXPIRING,EXTENDED_SUPPORT,NO_DELETION_PROTECTION,PI_OFF,PUBLIC,RETENTION_LT_7,SINGLE_AZ_PROD,UNENCRYPTED
+     Major: 5.7 | vCPU / memory (static table): 2 vCPU / 4 GiB | Storage: gp3 · 100 GB | Multi-AZ: no
+     AZ: us-east-1a | Endpoint: legacy-mysql.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 3306 | VPC: vpc-0a1b2c3d4e5f60718
+     Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: yes | Encrypted: no
+     IAM auth: no | Deletion protection: no | CA cert: rds-ca-rsa2048-g1 (valid till 2026-11-16) | SSL enforcement (param group): require_secure_transport=engine-default
+     Backup retention: 1 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30 | Auto minor upgrade: yes
+     Parameter group: default.mysql5.7 (in-sync) | Option group: default:mysql | Performance Insights: off | Enhanced monitoring: off
+     Database Insights: standard | Created: 2020-03-22 (2400 days) | Lifecycle: open-source-rds-extended-support · extended support (past standard end) · std end 2025-09-12 · ext end 2028-02-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:legacy-mysql
+     Tags: Environment=production, Owner=ops, Application=legacy
+
+#### [STANDALONE] report-pg  (111111111111 us-east-1)  1 resource(s)  !! STOPPED_AUTO_RESTART
+■ instance [primary]: report-pg  [postgres 16.8, db.r6g.4xlarge, us-east-1]  stopped  !! STOPPED_AUTO_RESTART
+     Major: 16 | vCPU / memory (static table): 16 vCPU / 128 GiB | Storage: gp3 · 200 GB | Multi-AZ: no
+     AZ: us-east-1a | Endpoint: report-pg.cxyzabc123.us-east-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+     Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+     KMS key: arn:aws:kms:us-east-1:111111111111:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: yes | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+     SSL enforcement (param group): rds.force_ssl=engine-default | Backup retention: 7 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+     Auto minor upgrade: yes | Parameter group: default.postgres (in-sync) | Option group: default:postgres | Performance Insights: on (7 days)
+     Enhanced monitoring: 60s | Log exports: postgresql | Database Insights: standard | Auto restart: 2026-10-22
+     Created: 2025-09-12 (400 days) | Lifecycle: open-source-rds-extended-support · standard · std end 2030-11-25 · ext end 2033-11-29 | ARN: arn:aws:rds:us-east-1:111111111111:db:report-pg | Tags: Environment=dev, Owner=bi, Application=reports
+
+#### [STANDALONE] dev-pg  (222222222222 ap-south-1)  1 resource(s)  !! NO_DELETION_PROTECTION,PI_OFF
+■ instance [primary]: dev-pg  [postgres 17.4, db.t4g.medium, ap-south-1]  available  !! NO_DELETION_PROTECTION,PI_OFF
+     Major: 17 | vCPU / memory (static table): 2 vCPU / 4 GiB | Storage: gp3 · 100 GB | Multi-AZ: no
+     AZ: ap-south-1a | Endpoint: dev-pg.cxyzabc123.ap-south-1.rds.amazonaws.com | Port: 5432 | VPC: vpc-0a1b2c3d4e5f60718
+     Subnet group: db-private | Security groups: sg-0db0000000000001 | Public: no | Encrypted: yes
+     KMS key: arn:aws:kms:ap-south-1:222222222222:key/00000000-1111-2222-3333-444444444444 | IAM auth: no | Deletion protection: no | CA cert: rds-ca-rsa2048-g1 (valid till 2035-01-03)
+     SSL enforcement (param group): rds.force_ssl=engine-default | Backup retention: 7 days | Backup window: 20:30-21:00 | Maintenance window: sun:22:00-sun:22:30
+     Auto minor upgrade: yes | Parameter group: default.postgres17 (in-sync) | Option group: default:postgres | Performance Insights: off
+     Enhanced monitoring: 60s | Log exports: postgresql | Database Insights: standard | Created: 2025-09-12 (400 days)
+     Lifecycle: open-source-rds-extended-support · standard · std end 2031-09-21 · ext end 2034-09-25 | ARN: arn:aws:rds:ap-south-1:222222222222:db:dev-pg | Tags: Environment=dev, Owner=platform, Application=dev

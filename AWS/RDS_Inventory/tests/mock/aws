@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""Stub `aws` for testing rds_inventory_report.sh. It never talks to AWS (no network code at all) and refuses
+any non describe-/list- operation (exit 99). Output shapes follow `aws rds <op> --generate-cli-skeleton output`
+(validate_cli.sh checks that). Times are relative to now (or MOCK_NOW epoch). Env:
+  MOCK_SCENARIO = fleet (default) | empty | paramdenied | globalfail | nolc | badcreds | large
+  MOCK_LARGE_N = instances for 'large' (default 1500) ; MOCK_LOG = JSONL of argv ; MOCK_DEFAULT_REGION
+Profiles: prod -> 111111111111 (us-east-1 + ap-south-1), nonprod -> 222222222222 (ap-south-1), broken -> bad creds.
+"""
+import json, os, sys
+from datetime import datetime, timedelta, timezone
+
+NOW = datetime.fromtimestamp(int(os.environ["MOCK_NOW"]), timezone.utc) if os.environ.get("MOCK_NOW") else datetime.now(timezone.utc)
+SCEN = os.environ.get("MOCK_SCENARIO", "fleet")
+
+
+def fail(code, op, msg, rc=254):
+    sys.stderr.write("\naws: [ERROR]: An error occurred (%s) when calling the %s operation: %s\n\n" % (code, op, msg)); sys.exit(rc)
+
+
+argv = sys.argv[1:]
+if os.environ.get("MOCK_LOG"):
+    with open(os.environ["MOCK_LOG"], "a") as fh:
+        fh.write(json.dumps(argv) + "\n")
+if argv[:1] == ["--version"]:
+    print("aws-cli/2.38.2 Python/3.14.6 Linux/6.12 exe/x86_64.mock"); sys.exit(0)
+if argv[:3] == ["configure", "get", "region"]:
+    r = os.environ.get("MOCK_DEFAULT_REGION", "")
+    if r:
+        print(r); sys.exit(0)
+    sys.exit(1)
+
+GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout"}
+ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
+           ("rds", "describe-db-clusters"): set(), ("rds", "describe-db-instances"): set(), ("rds", "describe-global-clusters"): set(),
+           ("rds", "describe-db-cluster-endpoints"): set(), ("rds", "describe-pending-maintenance-actions"): set(),
+           ("rds", "describe-certificates"): set(), ("rds", "describe-db-major-engine-versions"): {"--engine"},
+           ("rds", "describe-db-parameters"): {"--db-parameter-group-name"}, ("rds", "describe-db-cluster-parameters"): {"--db-cluster-parameter-group-name"}}
+g, o, pos, i = {}, {}, [], 0
+while i < len(argv):
+    a = argv[i]
+    if a == "--no-cli-pager":
+        g[a] = True
+    elif a in GLOBAL_VAL:
+        g[a] = argv[i + 1]; i += 1
+    elif a.startswith("--"):
+        o[a] = argv[i + 1] if i + 1 < len(argv) else ""; i += 1
+    else:
+        pos.append(a)
+    i += 1
+if len(pos) == 2 and not pos[1].startswith(("describe-", "list-", "get-")) and pos[0] != "configure":
+    sys.stderr.write("mock: NON-READ OPERATION ATTEMPTED: %s\n" % " ".join(pos)); sys.exit(99)
+if pos and pos[0] == "cloudwatch":
+    sys.stderr.write("mock: CLOUDWATCH CALL ATTEMPTED\n"); sys.exit(99)
+if SCEN == "nolc" and tuple(pos) == ("rds", "describe-db-major-engine-versions"):
+    sys.stderr.write("\naws: error: argument operation: Invalid choice, valid choices are:\n"); sys.exit(252)
+if len(pos) != 2 or tuple(pos) not in ALLOWED:
+    sys.stderr.write("\naws: [ERROR]: mock does not implement: %s\n" % " ".join(pos)); sys.exit(252)
+bad = set(o) - ALLOWED[tuple(pos)]
+if bad:
+    sys.stderr.write("\naws: [ERROR]: Unknown options: %s\n" % ", ".join(sorted(bad))); sys.exit(252)
+if g.get("--output") != "json" or "--no-cli-pager" not in g:
+    sys.stderr.write("mock: script must pass --output json --no-cli-pager\n"); sys.exit(252)
+REGION = g.get("--region") or os.environ.get("AWS_REGION", "")
+if not REGION:
+    sys.stderr.write("\naws: [ERROR]: An error occurred (NoRegion): You must specify a region.\n"); sys.exit(253)
+PROFILE = g.get("--profile", "")
+SVC, OP = pos
+if PROFILE == "broken" or SCEN == "badcreds":
+    fail("InvalidClientTokenId", "GetCallerIdentity", "The security token included in the request is invalid.")
+ACCT = {"": "111111111111", "prod": "111111111111", "nonprod": "222222222222"}.get(PROFILE)
+if ACCT is None:
+    sys.stderr.write("\nThe config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
+
+
+def out(d):
+    print(json.dumps(d, indent=2)); sys.exit(0)
+
+
+def t(days):
+    return (NOW + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000000+00:00")
+
+
+if (SVC, OP) == ("sts", "get-caller-identity"):
+    out({"UserId": "AIDAMOCKUSER", "Account": ACCT, "Arn": "arn:aws:iam::%s:user/dba" % ACCT})
+if (SVC, OP) == ("ec2", "describe-regions"):
+    out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": "opt-in-not-required"} for r in ("us-east-1", "ap-south-1", "eu-west-1")]})
+if SCEN == "paramdenied" and OP in ("describe-db-parameters", "describe-db-cluster-parameters"):
+    fail("AccessDenied", "DescribeDBParameters", "User is not authorized to perform: rds:DescribeDBParameters")
+if SCEN == "globalfail" and OP == "describe-global-clusters":
+    fail("Throttling", "DescribeGlobalClusters", "Rate exceeded")
+
+INS, CL, EP, PMA = [], [], [], []
+GL = []
+A = "arn:aws:rds:%s:%s:%s:%s"
+
+
+def arn(kind, ident, region=None):
+    return A % (region or REGION, ACCT, kind, ident)
+
+
+def tags(env, owner, app):
+    return [{"Key": "Environment", "Value": env}, {"Key": "Owner", "Value": owner}, {"Key": "Application", "Value": app}]
+
+
+def cert(ca="rds-ca-rsa2048-g1", days=3000):
+    return {"CAIdentifier": ca, "ValidTill": t(days)}
+
+
+def subnet():
+    return {"DBSubnetGroupName": "db-private", "DBSubnetGroupDescription": "private", "VpcId": "vpc-0a1b2c3d4e5f60718",
+            "SubnetGroupStatus": "Complete", "Subnets": [{"SubnetIdentifier": "subnet-0aaa%04d" % k, "SubnetAvailabilityZone": {"Name": REGION + z}, "SubnetStatus": "Active"}
+                                                         for k, z in enumerate("abc")]}
+
+
+def inst(ident, engine, ver, cls="db.r6g.large", cluster=None, az="a", tg=None, **kw):
+    d = {"DBInstanceIdentifier": ident, "DBInstanceClass": cls, "Engine": engine, "EngineVersion": ver, "DBInstanceStatus": kw.get("status", "available"),
+         "Endpoint": {"Address": "%s.cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION), "Port": kw.get("port", 5432), "HostedZoneId": "Z2R2ITUGPM61AM"},
+         "InstanceCreateTime": t(-kw.get("age", 400)), "PreferredBackupWindow": "20:30-21:00", "BackupRetentionPeriod": kw.get("ret", 7),
+         "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0db%013d" % 1, "Status": "active"}],
+         "DBParameterGroups": [{"DBParameterGroupName": kw.get("pg", "default.%s" % engine), "ParameterApplyStatus": kw.get("pgs", "in-sync")}],
+         "AvailabilityZone": REGION + az, "DBSubnetGroup": subnet(), "PreferredMaintenanceWindow": "sun:22:00-sun:22:30",
+         "MultiAZ": kw.get("maz", False), "AutoMinorVersionUpgrade": kw.get("auto", True), "PubliclyAccessible": kw.get("public", False),
+         "StorageType": kw.get("st", "aurora" if cluster else "gp3"), "StorageEncrypted": kw.get("enc", True),
+         "KmsKeyId": "arn:aws:kms:%s:%s:key/00000000-1111-2222-3333-444444444444" % (REGION, ACCT) if kw.get("enc", True) else None,
+         "DbiResourceId": "db-" + ident.upper().replace("-", "")[:20], "CACertificateIdentifier": kw.get("ca", "rds-ca-rsa2048-g1"),
+         "CopyTagsToSnapshot": True, "MonitoringInterval": kw.get("mon", 60), "DBInstanceArn": arn("db", ident),
+         "IAMDatabaseAuthenticationEnabled": kw.get("iam", False), "PerformanceInsightsEnabled": kw.get("pi", True), "DeletionProtection": kw.get("dp", True),
+         "EnabledCloudwatchLogsExports": kw.get("logs", ["postgresql"] if "postgres" in engine else []),
+         "TagList": tg or [], "DatabaseInsightsMode": kw.get("dbi", "standard"), "EngineLifecycleSupport": kw.get("els", "open-source-rds-extended-support"),
+         "OptionGroupMemberships": [{"OptionGroupName": kw.get("og", "default:%s" % engine), "Status": "in-sync"}],
+         "DbInstancePort": 0}
+    if kw.get("pi", True):
+        d["PerformanceInsightsRetentionPeriod"] = kw.get("pir", 7)
+    if not d["KmsKeyId"]:
+        del d["KmsKeyId"]
+    if kw.get("cert", True):
+        d["CertificateDetails"] = cert(d["CACertificateIdentifier"], kw.get("cadays", 3000))
+    if cluster:
+        d["DBClusterIdentifier"] = cluster
+        d["PromotionTier"] = kw.get("tier", 1)
+        d.pop("AllocatedStorage", None)
+        d["AllocatedStorage"] = 1
+    else:
+        d["AllocatedStorage"] = kw.get("gb", 100)
+        if kw.get("iops"):
+            d["Iops"] = kw["iops"]
+        if kw.get("tp"):
+            d["StorageThroughput"] = kw["tp"]
+        if kw.get("maxgb"):
+            d["MaxAllocatedStorage"] = kw["maxgb"]
+    if kw.get("maz"):
+        d["SecondaryAvailabilityZone"] = REGION + "b"
+    if kw.get("src"):
+        d["ReadReplicaSourceDBInstanceIdentifier"] = kw["src"]
+    d["ReadReplicaDBInstanceIdentifiers"] = kw.get("replicas", [])
+    if d["DBInstanceStatus"] == "stopped":
+        d["AutomaticRestartTime"] = t(5)
+    INS.append(d); return d
+
+
+def cluster(ident, engine, ver, members, tg=None, **kw):
+    d = {"DBClusterIdentifier": ident, "Engine": engine, "EngineVersion": ver, "EngineMode": "provisioned", "Status": kw.get("status", "available"),
+         "Endpoint": "%s.cluster-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION), "ReaderEndpoint": "%s.cluster-ro-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION),
+         "Port": kw.get("port", 5432), "AvailabilityZones": [REGION + z for z in "abc"], "BackupRetentionPeriod": kw.get("ret", 7),
+         "DBClusterParameterGroup": kw.get("cpg", "default.%s" % engine), "DBSubnetGroup": "db-private", "PreferredBackupWindow": "19:00-19:30",
+         "PreferredMaintenanceWindow": "sat:21:00-sat:21:30", "MultiAZ": len(members) > 1, "StorageEncrypted": kw.get("enc", True),
+         "KmsKeyId": "arn:aws:kms:%s:%s:key/00000000-1111-2222-3333-444444444444" % (REGION, ACCT), "DbClusterResourceId": "cluster-ABC%s" % ident,
+         "DBClusterArn": arn("cluster", ident), "IAMDatabaseAuthenticationEnabled": kw.get("iam", True), "ClusterCreateTime": t(-kw.get("age", 800)),
+         "DeletionProtection": kw.get("dp", True), "EnabledCloudwatchLogsExports": kw.get("logs", []), "TagList": tg or [], "AllocatedStorage": kw.get("gb", 1),
+         "VpcSecurityGroups": [{"VpcSecurityGroupId": "sg-0db%013d" % 2, "Status": "active"}], "StorageType": kw.get("st", "aurora"),
+         "EngineLifecycleSupport": "open-source-rds-extended-support", "DatabaseInsightsMode": kw.get("dbi", "standard"),
+         "PerformanceInsightsEnabled": kw.get("pi", False), "MonitoringInterval": 0, "AutoMinorVersionUpgrade": True,
+         "DBClusterMembers": [{"DBInstanceIdentifier": m, "IsClusterWriter": k == 0, "DBClusterParameterGroupStatus": kw.get("cpgs", "in-sync"), "PromotionTier": k + 1}
+                              for k, m in enumerate(members)]}
+    if kw.get("sv2"):
+        d["ServerlessV2ScalingConfiguration"] = {"MinCapacity": kw["sv2"][0], "MaxCapacity": kw["sv2"][1]}
+    if kw.get("glob"):
+        d["GlobalClusterIdentifier"] = kw["glob"]
+    if kw.get("cls"):
+        d["DBClusterInstanceClass"] = kw["cls"]
+    if kw.get("iops"):
+        d["Iops"] = kw["iops"]
+    if "postgres" in engine and not engine.startswith("aurora"):
+        d["CertificateDetails"] = cert()
+    CL.append(d)
+    azs = kw.get("azs", "abc")
+    for k, m in enumerate(members):
+        inst(m, engine, ver, cls=kw.get("mcls", kw.get("cls", "db.r6g.large")), cluster=ident, az=azs[k % len(azs)], tg=tg, tier=k + 1,
+             pi=kw.get("mpi", True), port=kw.get("port", 5432), pg=kw.get("mpg", "default.%s" % engine), logs=[])
+    return d
+
+
+def endpoint(cl, ident, ctype, static, excluded=()):
+    EP.append({"DBClusterEndpointIdentifier": ident, "DBClusterIdentifier": cl, "DBClusterEndpointResourceIdentifier": "cluster-endpoint-" + ident,
+               "Endpoint": "%s.cluster-custom-cxyzabc123.%s.rds.amazonaws.com" % (ident, REGION), "Status": "available", "EndpointType": "CUSTOM",
+               "CustomEndpointType": ctype, "StaticMembers": list(static), "ExcludedMembers": list(excluded), "DBClusterEndpointArn": arn("cluster-endpoint", ident)})
+    EP.append({"DBClusterEndpointIdentifier": cl, "DBClusterIdentifier": cl, "Endpoint": "%s.cluster-cxyzabc123.%s.rds.amazonaws.com" % (cl, REGION),
+               "Status": "available", "EndpointType": "WRITER"})
+
+
+def pma(res_arn, actions):
+    PMA.append({"ResourceIdentifier": res_arn, "PendingMaintenanceActionDetails": [
+        dict({"Action": a, "Description": desc}, **({"AutoAppliedAfterDate": t(d)} if d is not None else {}), **({"CurrentApplyDate": t(d)} if d is not None else {}))
+        for a, desc, d in actions]})
+
+
+PROD, PRIMARY_DONE = PROFILE in ("", "prod"), False
+if SCEN == "large" and REGION == "us-east-1" and PROD:
+    n = int(os.environ.get("MOCK_LARGE_N", "1500"))
+    for k in range(n):
+        inst("bulk-pg-%05d" % k, "postgres", "16.8", cls="db.m6g.large", tg=tags("prod", "team-%d" % (k % 7), "bulk"), maz=True)
+    for k in range(n // 10):
+        cluster("bulk-apg-%04d" % k, "aurora-postgresql", "16.9", ["bulk-apg-%04d-1" % k, "bulk-apg-%04d-2" % k], tg=tags("prod", "team", "bulk"))
+elif SCEN != "empty" and REGION == "us-east-1" and PROD:
+    P = tags("prod", "payments", "pay")
+    cluster("pay-aurora-use1", "aurora-postgresql", "16.9", ["pay-use1-1", "pay-use1-2", "pay-use1-3"], P, glob="pay-global", cls="db.r6g.xlarge",
+            cpg="pay-apg16", logs=["postgresql"], mpg="pay-apg16-inst")
+    endpoint("pay-aurora-use1", "pay-reporting", "READER", ["pay-use1-3"])
+    pma(arn("db", "pay-use1-2"), [("system-update", "New Operating System update is available", 12)])
+    cluster("crm-sv2", "aurora-mysql", "8.0.mysql_aurora.3.08.2", ["crm-sv2-1"], tags("prod", "crm", "crm"), sv2=(0.5, 16), mcls="db.serverless", port=3306, azs="a")
+    endpoint("crm-sv2", "crm-analytics", "ANY", [], ["crm-sv2-1"])
+    cluster("ledger-maz", "postgres", "16.6", ["ledger-maz-1", "ledger-maz-2", "ledger-maz-3"], tags("prod", "finance", "ledger"), cls="db.m6gd.large",
+            st="io1", iops=3000, gb=400, cpg="ledger-pg16")
+    inst("billing-pg", "postgres", "16.8", cls="db.m6i.2xlarge", maz=True, gb=500, iops=12000, tp=500, maxgb=1000, pg="billing-pg16",
+         tg=tags("prod", "billing", "billing"), replicas=["billing-pg-replica", arn("db", "billing-pg-dr", "ap-south-1")], iam=True)
+    pma(arn("db", "billing-pg"), [("db-upgrade", "Automatic minor version upgrade to 16.10", 9), ("os-upgrade", "New OS update", None)])
+    inst("billing-pg-replica", "postgres", "16.8", cls="db.m6i.2xlarge", gb=500, src="billing-pg", ret=0, pg="billing-pg16", tg=tags("prod", "billing", "billing"), az="b")
+    inst("legacy-mysql", "mysql", "5.7.44", cls="db.t3.medium", public=True, enc=False, dp=False, ret=1, pi=False, cadays=30, port=3306, mon=0,
+         tg=tags("production", "ops", "legacy"), pg="default.mysql5.7", age=2400, els="open-source-rds-extended-support")
+    inst("report-pg", "postgres", "16.8", cls="db.r6g.4xlarge", status="stopped", tg=tags("dev", "bi", "reports"), gb=200)
+    inst("hr-sql", "sqlserver-se", "15.00.4430.1.v1", cls="db.m5.xlarge", maz=True, gb=200, st="gp2", pg="hr-sql15", port=1433, cert=False,
+         ca="rds-ca-ecc384-g1", tg=tags("prod", "hr", "hrms"), og="hr-sql15-og", logs=["error", "agent"], pgs="pending-reboot")
+    c = cluster("catalog-docdb", "docdb", "5.0.0", ["catalog-docdb-1", "catalog-docdb-2"], tags("prod", "catalog", "catalog"), port=27017)
+    cluster("graph-neptune", "neptune", "1.3.2.1", ["graph-neptune-1"], tags("prod", "graph", "recs"), port=8182)
+elif SCEN != "empty" and REGION == "ap-south-1" and PROD:
+    P = tags("prod", "payments", "pay")
+    cluster("pay-aurora-aps1", "aurora-postgresql", "16.9", ["pay-aps1-1"], P, glob="pay-global", cls="db.r6g.xlarge", cpg="pay-apg16")
+    CL[-1]["ReplicationSourceIdentifier"] = arn("cluster", "pay-aurora-use1", "us-east-1")
+    for m in CL[-1]["DBClusterMembers"]:
+        m["IsClusterWriter"] = False
+    inst("billing-pg-dr", "postgres", "16.8", cls="db.m6i.xlarge", gb=500, src=arn("db", "billing-pg", "us-east-1"), ret=7, dp=True, pg="billing-pg16",
+         tg=tags("prod", "billing", "billing"))
+elif SCEN != "empty" and REGION == "ap-south-1" and PROFILE == "nonprod":
+    inst("dev-pg", "postgres", "17.4", cls="db.t4g.medium", tg=tags("dev", "platform", "dev"), dp=False, pg="default.postgres17", pi=False)
+    cluster("dev-aurora", "aurora-postgresql", "15.4", ["dev-aurora-1"], tags("dev", "platform", "dev"), cls="db.t4g.large", dp=False)
+
+if PROD and SCEN not in ("empty", "large"):
+    GL.append({"GlobalClusterIdentifier": "pay-global", "GlobalClusterResourceId": "cluster-GLOBAL123", "GlobalClusterArn": "arn:aws:rds::%s:global-cluster:pay-global" % ACCT,
+               "Status": "available", "Engine": "aurora-postgresql", "EngineVersion": "16.9", "EngineLifecycleSupport": "open-source-rds-extended-support",
+               "StorageEncrypted": True, "DeletionProtection": True, "Endpoint": "pay-global.global-cxyzabc123.global.rds.amazonaws.com",
+               "GlobalClusterMembers": [
+                   {"DBClusterArn": A % ("us-east-1", ACCT, "cluster", "pay-aurora-use1"), "IsWriter": True, "GlobalWriteForwardingStatus": "disabled",
+                    "Readers": [A % ("ap-south-1", ACCT, "cluster", "pay-aurora-aps1"), A % ("eu-west-1", ACCT, "cluster", "pay-aurora-euw1")], "SynchronizationStatus": "connected"},
+                   {"DBClusterArn": A % ("ap-south-1", ACCT, "cluster", "pay-aurora-aps1"), "IsWriter": False, "Readers": [], "SynchronizationStatus": "connected"},
+                   {"DBClusterArn": A % ("eu-west-1", ACCT, "cluster", "pay-aurora-euw1"), "IsWriter": False, "Readers": [], "SynchronizationStatus": "connected"}],
+               "TagList": tags("prod", "payments", "pay")})
+
+LC = {"mysql": {"5.7": (-400, 500), "8.0": (170, 1260)}, "postgres": {"16": (1500, 2600), "17": (1800, 2900)},
+      "aurora-postgresql": {"15": (100, 1200), "16": (1500, 2600)}, "aurora-mysql": {"8.0": (900, 2000)}}
+PARAMS = {"pay-apg16": [("rds.force_ssl", "1")], "ledger-pg16": [("rds.force_ssl", "1")], "billing-pg16": [("rds.force_ssl", "1")],
+          "hr-sql15": [("rds.force_ssl", "0")], "default.mysql5.7": [("require_secure_transport", None)], "default.postgres17": [("rds.force_ssl", None)],
+          "default.aurora-mysql": [("require_secure_transport", None)], "default.postgres": [("rds.force_ssl", None)],
+          "default.aurora-postgresql": [("rds.force_ssl", None)]}
+
+if OP == "describe-db-clusters":
+    out({"DBClusters": CL})
+if OP == "describe-db-instances":
+    out({"DBInstances": INS})
+if OP == "describe-global-clusters":
+    out({"GlobalClusters": GL})
+if OP == "describe-db-cluster-endpoints":
+    out({"DBClusterEndpoints": EP})
+if OP == "describe-pending-maintenance-actions":
+    out({"PendingMaintenanceActions": PMA})
+if OP == "describe-certificates":
+    out({"Certificates": [{"CertificateIdentifier": c, "CertificateType": "CA", "ValidFrom": t(-900), "ValidTill": t(d), "Thumbprint": "ab12",
+                           "CertificateArn": "arn:aws:rds:%s::cert:%s" % (REGION, c)} for c, d in (("rds-ca-rsa2048-g1", 13000), ("rds-ca-ecc384-g1", 60))]})
+if OP == "describe-db-major-engine-versions":
+    e = o["--engine"]
+    out({"DBMajorEngineVersions": [{"Engine": e, "MajorEngineVersion": m, "SupportedEngineLifecycles": [
+        {"LifecycleSupportName": "open-source-rds-standard-support", "LifecycleSupportStartDate": t(-2000), "LifecycleSupportEndDate": t(s)},
+        {"LifecycleSupportName": "open-source-rds-extended-support", "LifecycleSupportStartDate": t(s), "LifecycleSupportEndDate": t(x)}]}
+        for m, (s, x) in LC.get(e, {}).items()]})
+if OP in ("describe-db-parameters", "describe-db-cluster-parameters"):
+    name = o.get("--db-parameter-group-name") or o.get("--db-cluster-parameter-group-name")
+    ps = [{"ParameterName": "log_min_duration_statement", "ParameterValue": "1000", "Source": "user", "ApplyType": "dynamic", "DataType": "integer", "IsModifiable": True}]
+    for n, v in PARAMS.get(name, PARAMS.get(name.rsplit("-inst", 1)[0], [])):
+        p = {"ParameterName": n, "Source": "user" if v is not None else "engine-default", "ApplyType": "dynamic", "DataType": "boolean", "IsModifiable": True}
+        if v is not None:
+            p["ParameterValue"] = v
+        ps.append(p)
+    out({"Parameters": ps})
+sys.stderr.write("mock: unhandled\n"); sys.exit(252)
