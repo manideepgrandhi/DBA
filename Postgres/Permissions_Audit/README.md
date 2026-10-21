@@ -134,8 +134,51 @@ It covers shellcheck, input validation (injection attempts in the servers file),
 
 ## Limits
 
-- Tested on PostgreSQL 17 locally, **not yet on a real Aurora PostgreSQL cluster**. The catalog columns used exist in PG 11+ (Aurora 13-16 should work), but please try one non-prod cluster first.
+- Tested on local PostgreSQL 13, 16 and 17, **not yet on a real Aurora PostgreSQL cluster**. The catalog columns used exist in PG 11+, but please try one non-prod cluster first.
 - Effective access is privilege-based. It does not evaluate row-level security policies, `pg_hba`/security groups, or `rds.restrict_password_commands`.
 - Types, domains, languages, large objects and event triggers are not audited.
 - `PASSWORD_NO_EXPIRY` cannot tell IAM-only users apart (they have no password). Treat it as informational for `rds_iam` members.
 - Very large schemas (100k+ objects) produce big HTML. Use `--schema` or `--role` to narrow the report.
+
+## Manual psql audit (one database, no bash/jq)
+
+`pg_permissions_audit.sql` is a standalone version of the audit for **one database**. You run it by hand with plain `psql` (client 10+, server PG 11+; tested on PostgreSQL 13, 16 and 17). It uses only psql meta-commands. Everything runs inside `BEGIN READ ONLY` with `statement_timeout=120s`, `lock_timeout=5s` and `search_path=pg_catalog`, and it stops at the first error (`ON_ERROR_STOP`).
+
+```bash
+psql -X -h host -U user -d db -f pg_permissions_audit.sql > audit.txt
+psql -X -h host -U user -d db -f pg_permissions_audit.sql -v role=app_user > audit.txt       # + effective access of app_user
+psql -X -h host -U user -d db -f pg_permissions_audit.sql -v schema='sales*' > audit.txt     # schema filter (* or %)
+psql -X -h host -U user -d db -f pg_permissions_audit.sql -v showall=on > audit.txt          # + owner self-grants / extension objects
+psql -X -h host -U user -d db -f pg_permissions_audit.sql -v csv=on > audit.csv.txt          # CSV tables (psql 12+ client)
+# Aurora with IAM:  PGPASSWORD="$(aws rds generate-db-auth-token --hostname host --port 5432 --username user --region us-east-1)" \
+#                   psql -X "host=host dbname=db user=user sslmode=require" -f pg_permissions_audit.sql > audit.txt
+```
+
+Inside an interactive psql session you can send the output to a file instead:
+
+```
+\o /tmp/audit.txt
+\set role app_user
+\i pg_permissions_audit.sql
+\o
+```
+
+The report opens with a header: server version, database, connected user, UTC and IST time, filters, and your privilege level. The numbered sections match the script's section headers:
+
+1. **Risk flags**: the same codes as the bash report, with HIGH flags listed first.
+2. Database: owner and ACL, plus CONNECT-for-PUBLIC across the other databases on the server.
+3. Schemas: owner, USAGE and CREATE.
+4. Object grants for all object types, with grant option shown as `*`, SECURITY DEFINER and default ACL marked.
+5. Column grants.
+6. Default privileges.
+7. Foreign servers with USAGE grants and user mappings (user names only).
+8. Roles and their attributes (cluster-wide).
+9. Membership chains, recursive, marked inherited or SET ROLE only.
+10. Objects and schemas owned by login users.
+11. Only with `-v role=NAME`: that role's effective access, meaning every database, schema, object, column, future-object (default privilege) and user mapping it can reach, with privileges grouped by the role they come **via**. If the role doesn't exist, the script says so.
+
+Limits of the psql script:
+
+- It covers one database per run. Roles are cluster-wide, so sections 9 and 10 are the same in every database.
+- psql client 12+ is needed for `csv=on`.
+- It reads `pg_user_mappings` (user names only), which every role can read, never `pg_user_mapping`.
