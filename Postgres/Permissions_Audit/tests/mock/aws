@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Test mock for `aws rds generate-db-auth-token` - prints a fake token, never contacts AWS.
+[[ "$1 $2" == "rds generate-db-auth-token" ]] || { echo "mock aws: unsupported: $*" >&2; exit 2; }
+echo "$*" >>"${MOCK_LOG:-/dev/null}"; echo "fake-iam-token-for-tests"

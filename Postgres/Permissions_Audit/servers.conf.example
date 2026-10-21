@@ -1,0 +1,9 @@
+# pg_permissions_audit.sh servers file - one server per line (parsed, never sourced; no passwords here).
+#   name  host  port  user  dbs  [sslmode]  [auth=password|iam]  [region=REGION]
+# dbs     : all  (every connectable non-template db, rdsadmin skipped)  or a comma list: app,reporting
+# sslmode : disable|allow|prefer|require|verify-ca|verify-full  (default prefer; require for IAM)
+# auth    : password (from ~/.pgpass or PGPASSWORD) | iam (aws rds generate-db-auth-token; region parsed from host)
+#
+# billing-prod   billing-prod.cluster-abc123xyz.us-east-1.rds.amazonaws.com     5432 dba_audit all       require
+# crm-prod       crm-prod.cluster-abc123xyz.ap-south-1.rds.amazonaws.com        5432 dba_audit crm,crm_rpt require auth=iam
+# reporting-dev  reporting-dev.cluster-ro-abc123xyz.us-west-2.rds.amazonaws.com 5432 dba_audit all       verify-full
