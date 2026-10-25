@@ -1,0 +1,25 @@
+# MongoDB health report targets. Copy to servers.conf and edit. Parsed, never sourced.
+# One target per line:   name   uri | host:port[,host:port..]   [key=value ...]
+#
+#   rs=NAME            replica set name (adds replicaSet=NAME for host lists)
+#   user= / authdb=    monitoring user and its auth database (default admin)
+#   pass_env=VAR       read the password from environment variable VAR      (recommended)
+#   pass_file=PATH     read the password from the first line of PATH (chmod 600)
+#                      Passwords are NEVER read from this file or from the command line.
+#   authmech=          e.g. SCRAM-SHA-256, MONGODB-X509, MONGODB-AWS
+#   tls=on|off  tlsca=PATH  tlscert=PATH  tls_insecure=on      (mongodb+srv:// turns TLS on by itself)
+#   ssh=auto           run read-only df on every replica set member host over SSH (member names, port stripped)
+#   ssh=[user@]host[,..]  run df on these hosts instead;  ssh_user=  ssh_port=  ssh_key=
+#
+# Replica set: list two or more seeds so the report still works when one host is down.
+orders-rs     db1.prod.internal:27017,db2.prod.internal:27017,db3.prod.internal:27017  rs=rs0  user=dba_mon pass_env=MONGO_PW  ssh=auto ssh_user=ec2-user
+billing-rs    mongodb://10.0.1.11:27017,10.0.1.12:27017/?replicaSet=billing            user=dba_mon pass_env=MONGO_PW  ssh=auto ssh_user=ec2-user ssh_key=~/.ssh/billing.pem
+
+# RHEL host with TLS and a private CA; df over SSH as a different user
+crm-rs        crm1.corp.example:27017,crm2.corp.example:27017  rs=crm  user=dba_mon pass_file=~/.mongo_crm_pw  tls=on tlsca=/etc/pki/tls/certs/corp-ca.pem  ssh=auto ssh_user=dbadmin
+
+# Standalone (no replica set) with df over SSH on a named host
+reporting     10.0.2.20:27017   user=dba_mon pass_env=MONGO_RPT_PW   ssh=ec2-user@10.0.2.20
+
+# Atlas / SRV (no SSH: Atlas disk usage comes from dbStats fsUsedSize only)
+# analytics   mongodb+srv://analytics.abcde.mongodb.net/   user=dba_mon pass_env=ATLAS_PW
