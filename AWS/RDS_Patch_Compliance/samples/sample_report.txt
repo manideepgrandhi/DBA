@@ -1,9 +1,8 @@
-RDS PATCH COMPLIANCE REPORT - 2026-10-27 08:52 UTC (2026-10-27 14:22 IST)
-Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, ca-central-1, us-east-1, us-west-2 (of 14 enabled)
+RDS PATCH COMPLIANCE REPORT - 2026-10-27 09:53 UTC (2026-10-27 15:23 IST)
+Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: all enabled
 Rule     : COMPLIANT when RDS lists at most 2 valid minor upgrade target(s) for the current version (NON-COMPLIANT = 3+; UNKNOWN = lookup failed or current version not returned)
 Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)
 Regions  : 28 checked, 3 with databases, 23 empty, 2 errors (discovery probe, 8 in parallel; full scan only where databases or a probe error) - per account x region
-Empty    : 111111111111: ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1; 222222222222: ap-northeast-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
 
 SUMMARY
   Servers/clusters : 23   COMPLIANT 14   NON-COMPLIANT 8   UNKNOWN 1   -> 60.9% compliant
@@ -41,36 +40,13 @@ PER ENGINE / MAJOR VERSION
   postgres              all            5      3      2     0  60% compliant
   sqlserver-se          all            2      1      1     0  50% compliant
 
-PER REGION (account x region; pending = servers with pending maintenance)
+PER REGION (account x region with databases or an AWS error; empty regions only counted above; pending = servers with pending maintenance)
   ACCOUNT       REGION          STATUS      TOTAL  COMPL  NON-C  UNKN  %COMPL  PEND  PAST-STD
   111111111111  us-east-1       databases      19     11      7     1   57.9%     3         2
   111111111111  us-west-2       databases       1      1      0     0    100%     0         0
   222222222222  ap-south-1      databases       3      2      1     0   66.7%     0         0
   111111111111  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
   222222222222  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
-  111111111111  ap-northeast-1  empty           0      0      0     0       -     0         0
-  111111111111  ap-south-1      empty           0      0      0     0       -     0         0
-  111111111111  ap-southeast-1  empty           0      0      0     0       -     0         0
-  111111111111  ap-southeast-2  empty           0      0      0     0       -     0         0
-  111111111111  eu-central-1    empty           0      0      0     0       -     0         0
-  111111111111  eu-north-1      empty           0      0      0     0       -     0         0
-  111111111111  eu-west-1       empty           0      0      0     0       -     0         0
-  111111111111  eu-west-2       empty           0      0      0     0       -     0         0
-  111111111111  sa-east-1       empty           0      0      0     0       -     0         0
-  111111111111  us-east-2       empty           0      0      0     0       -     0         0
-  111111111111  us-west-1       empty           0      0      0     0       -     0         0
-  222222222222  ap-northeast-1  empty           0      0      0     0       -     0         0
-  222222222222  ap-southeast-1  empty           0      0      0     0       -     0         0
-  222222222222  ap-southeast-2  empty           0      0      0     0       -     0         0
-  222222222222  eu-central-1    empty           0      0      0     0       -     0         0
-  222222222222  eu-north-1      empty           0      0      0     0       -     0         0
-  222222222222  eu-west-1       empty           0      0      0     0       -     0         0
-  222222222222  eu-west-2       empty           0      0      0     0       -     0         0
-  222222222222  sa-east-1       empty           0      0      0     0       -     0         0
-  222222222222  us-east-1       empty           0      0      0     0       -     0         0
-  222222222222  us-east-2       empty           0      0      0     0       -     0         0
-  222222222222  us-west-1       empty           0      0      0     0       -     0         0
-  222222222222  us-west-2       empty           0      0      0     0       -     0         0
   ALL           All regions                    23     14      8     1   60.9%     3         2
 
 TOP 10 MOST BEHIND

@@ -31,13 +31,13 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
 
 Options: `-P` (repeatable), `-r` / `--all-regions` (with `--no-discover`, `--probe-parallel N`, see [Regions](#regions-discovery-and-region-wise-breakdown-v120)), `-e`, `-i`, `--max-behind N` (default 2: NON-COMPLIANT when versions_behind > 2, i.e. 3 or more), `--warn-days`, `--oracle-any-patch-line`, `-F txt,html,csv` (default txt to the screen; html / csv / several formats need `-o`), `--prefix`, `--fail-on-noncompliant` (exit 5), `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-from`, `-v`.
 
-Output: header (run time UTC + IST, accounts / regions, the `Regions  : N checked, M with databases, K empty, E errors` line and the empty regions, the rule), overall totals and % compliant, a **per-region** table (regions with databases or an AWS error, plus an All-regions row), per engine the major-version breakdown with compliant / non-compliant / unknown and % plus the latest minor per major (Oracle per patch line), key flags as counts (past standard support, support ending within N days, auto minor upgrade off, pending maintenance), then the **NON-COMPLIANT servers** (`!!` lines in txt, red table in HTML; account, region, engine, identifier, current -> latest minor, behind, support flag; most behind first, then name) or `*** All servers compliant ***`, and the UNKNOWN servers with the reason. Compliant servers are not listed. CSV: `<prefix>_<UTC stamp>_noncompliant.csv` (non-compliant rows only) + `<prefix>_<UTC stamp>_summary.csv` (overall, engine, major and flag rows) + `<prefix>_<UTC stamp>_regions.csv` (one row per account + region, empty regions as 0 rows, plus `ALL`). Exit codes: 0, 1 usage, 2 pre-check / scan failed, 4 output, 5 non-compliant with `--fail-on-noncompliant`.
+Output: header (run time UTC + IST, accounts / regions, the `Regions  : N checked, M with databases, K empty, E errors` count line - no region name lists, the rule), overall totals and % compliant, a **per-region** table (regions with databases or an AWS error, plus an All-regions row), per engine the major-version breakdown with compliant / non-compliant / unknown and % plus the latest minor per major (Oracle per patch line), key flags as counts (past standard support, support ending within N days, auto minor upgrade off, pending maintenance), then the **NON-COMPLIANT servers** (`!!` lines in txt, red table in HTML; account, region, engine, identifier, current -> latest minor, behind, support flag; most behind first, then name) or `*** All servers compliant ***`, and the UNKNOWN servers with the reason. Compliant servers are not listed. CSV: `<prefix>_<UTC stamp>_noncompliant.csv` (non-compliant rows only) + `<prefix>_<UTC stamp>_summary.csv` (overall, engine, major and flag rows) + `<prefix>_<UTC stamp>_regions.csv` (one row per account + region with databases or an AWS error, plus `ALL`; empty regions are only counted). Exit codes: 0, 1 usage, 2 pre-check / scan failed, 4 output, 5 non-compliant with `--fail-on-noncompliant`.
 
 Samples: [txt](samples/sample_summary.txt), [html](samples/sample_summary.html), [regions csv](samples/sample_summary_regions.csv). Tests: `tests/run_summary_tests.sh` (mock AWS; boundaries 2/3, `--max-behind`, all-compliant, unknown, Oracle, multi-profile, numbers equal to the full report, alerts, shellcheck); `tests/validate_cli.sh` also runs it through the real AWS CLI against the local fake endpoint.
 
 ![Summary HTML](samples/sample_summary.png)
 
-## Regions: discovery and region-wise breakdown (v1.2.0)
+## Regions: discovery and region-wise breakdown (v1.2.0, v1.2.1)
 
 **Discovery (`-A` / `--all-regions`).** Most accounts have databases in a few of their ~17 enabled regions. Instead of the full scan (clusters, instances, pending maintenance, version lookups) everywhere, each enabled region is first **probed** with two read-only one-page calls:
 
@@ -52,29 +52,28 @@ aws rds describe-db-clusters  --max-records 20 --query 'length(DBClusters)'  --n
 * `--no-discover` (config `discover = no`) scans every enabled region in full, as before v1.2.0. Regions given with `-r` (or the profile default) are always scanned directly, with no probe.
 * `--dry-run` shows the probe commands and the full-scan commands; probes are counted in `aws_calls` (JSON `meta`, log `Result:` line).
 
-**Header.** Text, HTML and the summary show one line plus the empty regions (a collapsible list in HTML):
+**Header.** Text, HTML and the summary show only a count line; no region names are listed at the top (v1.2.1). Region names appear in the header only with `-r` (the regions you named); with `-A` the text header says `Regions: all enabled`. Empty regions (no DB instance or cluster) are only counted - they are not listed anywhere in text, HTML or CSV (JSON keeps them, see below):
 
 ```
-Accounts : 111111111111 (prod)   Regions: ca-central-1, us-east-1, us-west-2 (of 14 enabled)
+Accounts : 111111111111 (prod)   Regions: all enabled
 Regions  : 14 checked, 2 with databases, 11 empty, 1 error (discovery probe, 8 in parallel; full scan only where databases or a probe error)
-Empty    : 111111111111: ap-northeast-1, ap-northeast-2, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, eu-west-3, sa-east-1
 ```
 
-**Region-wise breakdown.** One row per account + region (status `databases` / `error` / `empty`, total, compliant, non-compliant, unknown, % compliant, servers with pending maintenance, past standard support), then an **All regions** row. Order: regions with databases, then errors, then empty (0 rows); within that most servers first. Everywhere:
+HTML header: `... accounts 111111111111 (prod) · Regions: 14 checked, 2 with databases, 11 empty, 1 error`.
 
-* text: `PER REGION` section after `PER ENGINE / MAJOR VERSION`; summary txt: `PER REGION` table (regions with databases or errors; empties on one line).
+**Region-wise breakdown.** One row per account + region **with databases or an AWS error** (status `databases` / `error`, total, compliant, non-compliant, unknown, % compliant, servers with pending maintenance, past standard support), then an **All regions** row. Order: regions with databases, then errors; within that most servers first. Empty regions get no row (v1.2.1). Everywhere:
+
+* text: `PER REGION` section after `PER ENGINE / MAJOR VERSION`; summary txt: `PER REGION` table (same rows).
 * HTML: a sortable, colour-coded table (% compliant bar: green >= 90 %, amber >= 70 %, red below), section `#regions`, linked from the header; a "Regions" summary card.
 * CSV: an extra file `<prefix>_<stamp>_regions.csv` (`account_id, profile, region, status, total, compliant, non_compliant, unknown, pct_compliant, servers_with_pending_maintenance, pending_actions, past_standard_support, aws_errors, probe_instances_max20, probe_clusters_max20`).
-* JSON: `summary.regions[]`, `summary.regions_total`, `summary.region_overview` (`mode`, `probe_parallel`, `checked`, `with_databases`, `empty`, `error`, `empty_regions`); `meta.region_status`, `meta.region_discovery`.
+* JSON keeps the full data, including empty regions: `summary.regions[]` (also `status: "empty"` rows), `summary.regions_total`, `summary.region_overview` (`mode`, `probe_parallel`, `checked`, `with_databases`, `empty`, `error`, `empty_regions`); `meta.region_status`, `meta.region_discovery`.
 
 ```
-PER REGION (account x region; pending = servers with pending maintenance)
+PER REGION (account x region with databases or an AWS error; empty regions only counted above; pending = servers with pending maintenance)
   ACCOUNT       REGION          STATUS      TOTAL  COMPL  NON-C  UNKN  %COMPL  PEND  PAST-STD
   111111111111  us-east-1       databases      19     11      7     1   57.9%     3         2
   111111111111  us-west-2       databases       1      1      0     0    100%     0         0
   111111111111  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
-  111111111111  ap-northeast-1  empty           0      0      0     0       -     0         0
-  ...
   ALL           All regions                    20     12      7     1     60%     3         2
 ```
 
@@ -255,6 +254,7 @@ No AWS account is used and nothing can reach AWS.
 
 ## Changelog
 
+* **1.2.1 / summary 1.1.1** - No region names at the top of the HTML report or summary: the report header `<details>` list (with databases / errors / empty) and the summary header list of every enabled region are gone; the header keeps one count line (`Regions: N checked, M with databases, K empty, E errors`). Empty regions are no longer listed anywhere in txt / HTML / CSV: no `Empty :` line, no collapsible empty list, no 0-rows in the per-region table or `*_regions.csv` (counts only). Text header shows region names only for `-r`. JSON unchanged (keeps empty regions and `empty_regions`).
 * **1.2.0 / summary 1.1.0** - `--all-regions` discovery: per region two parallel one-page probes (`--max-records 20 --query length(...) --no-paginate`, `--probe-parallel`, default 8); full scan only where databases are found; a failed probe is an error and the region is still scanned; `--no-discover` / `discover = no`; `-r` regions are never probed; probes in `--dry-run` and `aws_calls`. Header `Regions  : N checked, M with databases, K empty, E errors` + empty-region list. Region-wise breakdown (account x region + All regions) in text, HTML (sortable, colour-coded), JSON, `*_regions.csv` and the summary script (txt / html / `*_regions.csv`).
 * **summary 1.0.0** - New `rds_patch_compliance_summary.sh` (+ `lib/summary.jq`, `tests/run_summary_tests.sh`): high-level summary and the NON-COMPLIANT servers only; reuses the full report for the scan and all counting.
 * **1.1.1** - Oracle: upgrade targets count only on the SAME patch line as the current version (mrp/rur/plain RU/spb; numeric ru date, line date, rN ordering); other lines are excluded with a note. Fixes `...mrp-2026-07.r1` showing `...spb-2026-07.r1` as latest (console offers `...mrp-2026-07.r2`). Same-major safety net for every engine (a target AWS marks as minor but in another major line is excluded and noted). New `--oracle-any-patch-line` / `oracle_any_patch_line`. JSON rows gain `excluded_targets`, `version_warnings`; meta gains `oracle_any_patch_line`. Shared logic in `lib/versions.jq` (same file in RDS_Pending_Maintenance and RDS_Patch_Runner). Mock scenario `oracle`.

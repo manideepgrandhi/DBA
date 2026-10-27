@@ -14,12 +14,12 @@ def why: if .deprecated_version then "current version not returned by RDS (depre
 def rule($s): "NON-COMPLIANT when the current version is more than \($s.max_behind) valid minor versions behind the latest (\($s.max_behind + 1) or more); counted from RDS ValidUpgradeTarget (same major; Oracle: same patch line)";
 def accts: .meta.accounts | map("\(.account) (\(.profile))") | join(", ");
 # region-wise breakdown (summary.regions / regions_total / region_overview, built by compliance.jq finalize).
-# The summary lists only regions with databases or errors as rows; empty regions go on one line (all of them are in csv_regions).
+# Rows (txt / html / csv_regions) are only regions with databases or an AWS error; empty regions are only counted.
+# Region NAMES are never listed in the header (only "Regions: N checked, ..."); JSON from the report keeps everything.
 def ro: .summary.region_overview // {checked: (.meta.regions | length), with_databases: 0, empty: 0, error: 0, empty_regions: [], mode: "explicit"};
 def multi: (.meta.accounts | length) > 1;
 def region_line: "\(.checked) checked, \(.with_databases) with databases, \(.empty) empty, \(.error) error\(if .error == 1 then "" else "s" end)"
   + {"discover": " (discovery probe)", "full": " (all scanned in full, --no-discover)", "explicit": ""}[.mode];
-def empty_txt($multi): .empty_regions | map(if $multi then "\(.account_id): " + (.regions | join(", ")) else .regions | join(", ") end) | join("; ");
 def shown_regions: [.summary.regions // [] | .[] | select(.status != "empty")];
 def pct_txt: if . == null then "-" else "\(.)%" end;
 def pctc: if . == null then "" elif . >= 100 then "ok" elif . >= 80 then "warn" else "bad" end;
@@ -30,7 +30,7 @@ def text:
   | ($s.engines | map(.engine | length) | max // 6 | [., 6] | max + 2) as $ew
   | [ "RDS PATCH COMPLIANCE - SUMMARY",
       "Run      : \($r.meta.generated_utc) / \($r.meta.generated_local)",
-      "Scanned  : accounts \($r | accts); regions \($r.meta.regions | join(", "))" + (if $r.meta.filters_text != "" then "; filters: \($r.meta.filters_text)" else "" end),
+      "Scanned  : accounts \($r | accts)" + (if ($r | ro).mode == "explicit" then "; regions \($r.meta.regions | join(", "))" else "; all enabled regions" end) + (if $r.meta.filters_text != "" then "; filters: \($r.meta.filters_text)" else "" end),
       "Rule     : " + rule($s),
       "",
       "Regions  : \($r | ro | region_line)",
@@ -42,7 +42,6 @@ def text:
       ( ($r | shown_regions) + [$s.regions_total // empty] | .[]
         | "  " + (.account_id | pad(14)) + (.region | pad(16)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6))
           + (.pct_compliant | pct_txt | rpad(8)) + (.with_pending | rpad(6)) + (if .status == "error" then "  AWS error - see ERRORS" else "" end) ),
-      ( $r | ro | select(.empty > 0) | "  Empty (no DB instance / cluster): " + empty_txt($r | multi) ),
       "",
       "PER ENGINE",
       "  " + ("ENGINE" | pad($ew)) + ("MAJOR" | pad(8)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("  %COMPL" | rpad(9)) + "  LATEST MINOR",
@@ -77,8 +76,8 @@ def html:
   + "table.nc{border:2px solid #c62828}table.nc th{background:#c62828;color:#fff}table.nc tr td{background:#fdecea}h2{font-size:16px;margin:16px 0 6px}h2.bad{color:#c62828}"
   + ".allok{background:#e6f4ea;color:#1b5e20;border:2px solid #2e7d32;border-radius:8px;padding:12px 16px;font-weight:700;margin-bottom:16px}footer{padding:8px 26px 22px;color:#7b8794;font-size:12px}"
   + "table.sortable th{cursor:pointer}td.warn{color:#b26a00;font-weight:600}tfoot td{border-top:2px solid #232f3e;background:#f0f3f7;font-weight:600}h2 .sub{font-size:12px;font-weight:400;color:#52606d}"
-  + ".err{background:#fdecea;color:#c62828;border-radius:8px;padding:1px 6px;font-size:11px;font-weight:600}details.empty{margin:-10px 0 16px;font-size:12.5px;color:#52606d}details.empty summary{cursor:pointer}</style></head><body>"
-  + "<header><h1>RDS patch compliance - summary</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r | accts | h) &middot; regions \($r.meta.regions | join(", ") | h)\(if $r.meta.filters_text != "" then " &middot; filters: " + ($r.meta.filters_text | h) else "" end)</p></header><main>"
+  + ".err{background:#fdecea;color:#c62828;border-radius:8px;padding:1px 6px;font-size:11px;font-weight:600}</style></head><body>"
+  + "<header><h1>RDS patch compliance - summary</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r | accts | h) &middot; Regions: \($r | ro | region_line | h)\(if $r.meta.filters_text != "" then " &middot; filters: " + ($r.meta.filters_text | h) else "" end)</p></header><main>"
   + "<div class=\"rule\"><b>Rule:</b> \(rule($s) | h)</div><div class=\"cards\">"
   + card("Servers / clusters"; $s.total; ""; "\($r.meta.accounts | length) account(s), \($r.meta.regions | length) region(s)")
   + card("% compliant"; "\($s.pct_compliant)%"; (if $s.non_compliant > 0 then "warn" else "ok" end); "of all servers")
@@ -96,7 +95,6 @@ def html:
   + "<h2>Per region <span class=\"sub\">\($r | ro | region_line | h) &middot; click a header to sort</span></h2><table class=\"sortable\"><thead><tr><th>Account</th><th>Region</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>% compliant</th><th>Pending maint.</th></tr></thead><tbody>"
   + ($r | shown_regions | map("<tr><td>\(.account_id | h)</td><td><b>\(.region | h)</b>\(if .status == "error" then " <span class=\"err\">AWS error</span>" else "" end)</td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td class=\"n \(.pct_compliant | pctc)\" data-s=\"\(.pct_compliant // -1)\">\(.pct_compliant | pct_txt)</td><td class=\"n \(if .with_pending > 0 then "warn" else "" end)\">\(.with_pending)</td></tr>") | join(""))
   + "</tbody>" + ($s.regions_total // null | if . == null then "" else "<tfoot><tr><td><b>All regions</b></td><td></td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td class=\"n \(.pct_compliant | pctc)\">\(.pct_compliant | pct_txt)</td><td class=\"n\">\(.with_pending)</td></tr></tfoot>" end) + "</table>"
-  + ($r | ro | if .empty > 0 then "<details class=\"empty\"><summary>\(.empty) empty region(s) - no DB instance or cluster</summary><p class=\"mono\">\(empty_txt($r | multi) | h)</p></details>" else "" end)
   + "<h2>Per engine and major version</h2><table><tr><th>Engine</th><th>Major</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>% compliant</th><th>Latest minor</th></tr>"
   + ([$s.engines[] | . as $e
       | "<tr class=\"eng\"><td>\($e.engine | h)</td><td>all</td><td class=\"n\">\($e.total)</td><td class=\"n ok\">\($e.compliant)</td><td class=\"n \(if $e.non_compliant > 0 then "bad" else "" end)\">\($e.non_compliant)</td><td class=\"n\">\($e.unknown)</td><td class=\"n\">\($e.pct_compliant)%</td><td></td></tr>"
@@ -125,7 +123,7 @@ def csv_summary:
     (["flag","pending_maintenance","",$s.with_pending,"","","","",""] | @csv);
 def csv_regions:
   (["account_id","profile","region","status","total","compliant","non_compliant","unknown","pct_compliant","servers_with_pending_maintenance","pending_actions","aws_errors"] | @csv),
-  ((.summary.regions // []) + [.summary.regions_total // empty] | .[]
+  (shown_regions + [.summary.regions_total // empty] | .[]
    | [.account_id, .profile, .region, .status, .total, .compliant, .non_compliant, .unknown, (.pct_compliant // ""), .with_pending, .pending_total, .errors] | @csv);
 def alert: {summary: (.summary | {total, compliant, non_compliant, unknown, pct_compliant, max_behind, errors}),
             regions: (ro | {checked, with_databases, empty, error}),

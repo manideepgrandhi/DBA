@@ -67,19 +67,18 @@ aws rds describe-db-engine-versions --engine aurora-postgresql --engine-version 
 ./rds_patch_compliance_report.sh -P prod -A -F json | jq -c '.summary.regions[] | select(.total > 0) | {account_id, region, total, compliant, non_compliant, unknown, pct_compliant}'
 ./rds_patch_compliance_report.sh -P prod -A -F json | jq -r '.summary.regions[] | select(.pct_compliant != null and .pct_compliant < 80) | "\(.region) \(.pct_compliant)%"'
 
-# 17b. Which regions are empty / could not be probed
+# 17b. Region counts (JSON keeps the full list, incl. empty regions: .summary.region_overview.empty_regions)
 ./rds_patch_compliance_report.sh -P prod -A -F json | jq '.summary.region_overview'
 ```
 
 Sample text summary (from the test mock, see `samples/sample_report.txt`):
 
 ```
-RDS PATCH COMPLIANCE REPORT - 2026-10-27 08:52 UTC (2026-10-27 14:22 IST)
-Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, ca-central-1, us-east-1, us-west-2 (of 14 enabled)
+RDS PATCH COMPLIANCE REPORT - 2026-10-27 09:53 UTC (2026-10-27 15:23 IST)
+Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: all enabled
 Rule     : COMPLIANT when RDS lists at most 2 valid minor upgrade target(s) for the current version (NON-COMPLIANT = 3+; UNKNOWN = lookup failed or current version not returned)
 Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)
 Regions  : 28 checked, 3 with databases, 23 empty, 2 errors (discovery probe, 8 in parallel; full scan only where databases or a probe error) - per account x region
-Empty    : 111111111111: ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1; 222222222222: ap-northeast-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
 
 SUMMARY
   Servers/clusters : 23   COMPLIANT 14   NON-COMPLIANT 8   UNKNOWN 1   -> 60.9% compliant

@@ -1,9 +1,9 @@
 {
   "meta": {
     "script": "rds_patch_compliance_report.sh",
-    "version": "1.2.0",
-    "generated_utc": "2026-10-27 08:52 UTC",
-    "generated_local": "2026-10-27 14:22 IST",
+    "version": "1.2.1",
+    "generated_utc": "2026-10-27 09:53 UTC",
+    "generated_local": "2026-10-27 15:23 IST",
     "tz": "Asia/Kolkata",
     "host": "grok-bot-vm-256144679",
     "accounts": [

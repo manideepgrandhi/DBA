@@ -1,6 +1,6 @@
 RDS PATCH COMPLIANCE - SUMMARY
-Run      : 2026-10-27 08:52 UTC / 2026-10-27 14:22 IST
-Scanned  : accounts 111111111111 (prod), 222222222222 (nonprod); regions ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, ca-central-1, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
+Run      : 2026-10-27 09:53 UTC / 2026-10-27 15:23 IST
+Scanned  : accounts 111111111111 (prod), 222222222222 (nonprod); all enabled regions
 Rule     : NON-COMPLIANT when the current version is more than 2 valid minor versions behind the latest (3 or more); counted from RDS ValidUpgradeTarget (same major; Oracle: same patch line)
 
 Regions  : 28 checked, 3 with databases, 23 empty, 2 errors (discovery probe)
@@ -15,7 +15,6 @@ PER REGION
   111111111111  ca-central-1         0      0      0     0       -     0  AWS error - see ERRORS
   222222222222  ca-central-1         0      0      0     0       -     0  AWS error - see ERRORS
   ALL           All regions         23     14      8     1   60.9%     3
-  Empty (no DB instance / cluster): 111111111111: ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1; 222222222222: ap-northeast-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
 
 PER ENGINE
   ENGINE             MAJOR    TOTAL  COMPL  NON-C  UNKN   %COMPL  LATEST MINOR

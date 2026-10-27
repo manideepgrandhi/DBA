@@ -118,7 +118,7 @@ vce oracle-ee "${O}2026-10.mrp-2026-10.r1" 1 "${O}2026-07.mrp-2026-07.r10"
 
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.2\.0'
+t version 0 fleet --version;         has version out '1\.2\.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -315,27 +315,34 @@ jqt disc '.summary.regions[] | select(.region == "us-east-1") | .total == 19 and
 jqt disc '.summary as $s | [.rows[] | select(.region == "us-east-1")] | length == ($s.regions[] | select(.region == "us-east-1") | .total)'
 t disc_txt 0 discover -P prod -A
 has disc_txt out '^Regions  : 14 checked, 2 with databases, 11 empty, 1 error \(discovery probe, 8 in parallel'
-has disc_txt out '^Empty    : ap-northeast-1, ap-south-1, .*us-west-1$'
-has disc_txt out '^Accounts : 111111111111 \(prod\)   Regions: ca-central-1, us-east-1, us-west-2 \(of 14 enabled\)'
+hasnt disc_txt out '^Empty'
+has disc_txt out '^Accounts : 111111111111 \(prod\)   Regions: all enabled$'
+chk "disc_txt: no region names above SUMMARY" test "$(sed '/^SUMMARY/q' "$OUT/disc_txt.out" | grep -cE '[a-z]{2}-[a-z]+-[0-9]')" -eq 0
 has disc_txt out '^PER REGION'
 has disc_txt out '^  111111111111  us-east-1       databases      19     11      7     1   57\.9%     3'
 has disc_txt out '^  111111111111  ca-central-1    error           0 .* see ERRORS \(no data\)'
-has disc_txt out '^  111111111111  eu-west-1       empty           0      0      0     0       -'
+hasnt disc_txt out '^  [0-9]{12}  [a-z0-9-]+ +empty '
+chk "disc_txt: PER REGION = 2 databases + 1 error + ALL rows" test "$(sed -n '/^PER REGION/,/^$/p' "$OUT/disc_txt.out" | grep -cE '^  (111111111111|ALL) ')" -eq 4
 has disc_txt out '^  ALL           All regions                    20     12      7     1     60%     3'
 has disc_txt out 'ca-central-1: rds describe-db-instances \(discovery probe\): .*AccessDenied'
 has disc_txt err 'discovery: probing 14 region\(s\), 8 at a time'
 t disc_files 0 discover -P prod -A -F csv,html -o "$OUT/disc"
 RCSV="$(find "$OUT/disc" -name '*_regions.csv')"; RHTML="$(find "$OUT/disc" -name '*.html')"
 chk "regions csv written" test -s "$RCSV"
-chk "regions csv: header + 14 regions + All regions" test "$(wc -l <"$RCSV")" -eq 16
-chk "regions csv: empty regions as 0 rows" grep -q '^"111111111111","prod","eu-north-1","empty",0,0,0,0,"",0,0,0,0,0,0$' "$RCSV"
+chk "regions csv: header + 2 regions with databases + 1 error + All regions (no empty rows)" test "$(wc -l <"$RCSV")" -eq 5
+chk "regions csv: no empty-region rows" test "$(grep -c '"empty"' "$RCSV")" -eq 0
 chk "regions csv: All regions row" grep -q '^"ALL","","All regions","",20,12,7,1,60,3,5,2,2,"",""$' "$RCSV"
 chk "regions csv parses with 15 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$RCSV")" == "{15}"
 chk "html: sortable region table" grep -q '<table class="sortable regions"><thead><tr><th>Account</th><th>Region</th><th>Status</th><th>Total</th>' "$RHTML"
 chk "html: All regions total row in tfoot" grep -q '<tfoot><tr><td><b>All regions</b></td>' "$RHTML"
 chk "html: colour-coded % compliant" grep -q 'class="n bad" data-s="57.9">57.9%<div class="bar"><i class="bad"' "$RHTML"
-chk "html: empty regions collapsible" grep -q '<details class="empty"><summary>11 empty region(s)' "$RHTML"
-chk "html: header region line" grep -q 'regions 14 checked, 2 with databases, 11 empty, 1 error' "$RHTML"
+chk "html: no empty-regions list" test "$(grep -c 'details class="empty"\|empty region(s)' "$RHTML")" -eq 0
+chk "html: header region line is counts only" grep -q '&middot; Regions: 14 checked, 2 with databases, 11 empty, 1 error</p></header>' "$RHTML"
+TOPH="$(cat "$RHTML")"; TOPH="${TOPH%%<table*}"   # everything above the first table
+chk "html: no region names above the first table" test "$(grep -oE '[a-z]{2}-[a-z]+-[0-9]' <<<"$TOPH" | wc -l)" -eq 0
+chk "html: no <details> in the header" test "$(grep -o '<header.*</header>' "$RHTML" | grep -c '<details')" -eq 0
+chk "html: region table = 3 rows (databases + error), no empty rows" test "$(grep -oP '<table class="sortable regions">.*?</tbody>' "$RHTML" | grep -o '<tr>' | wc -l)" -eq 4
+chk "html: no empty status chip" test "$(grep -c 'class="st unk">empty<' "$RHTML")" -eq 0
 chk "html: sort script covers the region table" grep -q "querySelectorAll('table.main,table.sortable')" "$RHTML"
 echo "-- --no-discover / config / explicit -r"
 : >"$MOCK_LOG"
@@ -386,7 +393,8 @@ jqt disc2 '.summary.region_overview | .checked == 28 and .with_databases + .empt
 jqt disc2 '.summary as $s | ([$s.regions[].total] | add) == $s.total and $s.regions_total.total == $s.total'
 jqt disc2 '[.summary.regions[] | select(.status == "databases") | "\(.account_id)/\(.region)"] | sort == ["111111111111/us-east-1","111111111111/us-west-2","222222222222/ap-south-1"]'
 t disc2_txt 0 discover -P prod,nonprod -A
-has disc2_txt out '^Empty    : 111111111111: ap-northeast-1, .*; 222222222222: '
+hasnt disc2_txt out '^Empty'
+has disc2_txt out '^Regions  : 28 checked, 3 with databases, 23 empty, 2 errors'
 t ad_disc 0 accessdenied -P prod -A -F json
 jqt ad_disc '.summary.regions[] | select(.region == "eu-west-1") | .status == "error"'
 jqt ad_disc '[.errors[] | select(.region == "eu-west-1" and .call == "rds describe-db-clusters (discovery probe)")] | length == 1'

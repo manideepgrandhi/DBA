@@ -39,7 +39,7 @@ P2=(-P prod,nonprod -r us-east-1,ap-south-1)
 
 echo "== usage"
 t help 0 fleet --help; has help out 'versions_behind > --max-behind'
-t version 0 fleet --version; has version out '1.1.0'
+t version 0 fleet --version; has version out '1.1.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t htmlnoout 1 fleet -r us-east-1 -F html
@@ -103,7 +103,9 @@ has disc out '  111111111111  us-east-1           19     11      7     1   57.9%
 has disc out '  111111111111  us-west-2            1      1      0     0    100%     0'
 has disc out '  111111111111  ca-central-1         0      0      0     0       -     0  AWS error - see ERRORS'
 has disc out '  ALL           All regions         20     12      7     1     60%     3'
-has disc out '  Empty (no DB instance / cluster): ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1'
+hasnt disc out 'Empty'
+has disc out 'Scanned  : accounts 111111111111 (prod); all enabled regions'
+chk "disc: no region names above OVERALL" test "$(sed '/^OVERALL/q' "$OUT/disc.out" | grep -cE '[a-z]{2}-[a-z]+-[0-9]')" -eq 0
 hasnt disc out '  111111111111  eu-west-1 '
 chk "disc: 28 probes passed through the full report" test "$(probes)" -eq 28
 : >"$MOCK_LOG"
@@ -116,11 +118,15 @@ t rdisc 0 discover -P prod -r us-east-1,eu-west-1
 has rdisc out 'Regions  : 2 checked, 1 with databases, 1 empty, 0 errors'
 t dfiles 0 discover -P prod -A -F html,csv -o "$OUT/dfiles"
 SRC="$(find "$OUT/dfiles" -name '*_regions.csv')"; SH="$(find "$OUT/dfiles" -name '*.html')"
-chk "summary regions csv: header + 14 regions + All regions" test "$(wc -l <"$SRC")" -eq 16
+chk "summary regions csv: header + 2 databases + 1 error + All regions (no empty rows)" test "$(wc -l <"$SRC")" -eq 5
 chk "summary regions csv: totals row" grep -q '^"ALL","","All regions","",20,12,7,1,60,3,5,2$' "$SRC"
-chk "summary regions csv: empty region as 0 row" grep -q '^"111111111111","prod","sa-east-1","empty",0,0,0,0,"",0,0,0$' "$SRC"
+chk "summary regions csv: no empty-region rows" test "$(grep -c '"empty"' "$SRC")" -eq 0
 chk "summary html: sortable region table + All regions" grep -q '<table class="sortable"><thead><tr><th>Account</th><th>Region</th>.*<tfoot><tr><td><b>All regions</b>' "$SH"
-chk "summary html: AWS error badge + empty list" grep -q 'ca-central-1</b> <span class="err">AWS error</span>.*<details class="empty"><summary>11 empty region(s)' "$SH"
+chk "summary html: AWS error badge" grep -q 'ca-central-1</b> <span class="err">AWS error</span>' "$SH"
+chk "summary html: no empty-regions list" test "$(grep -c 'details class="empty"\|empty region(s)' "$SH")" -eq 0
+chk "summary html: header has counts only" grep -q '&middot; Regions: 14 checked, 2 with databases, 11 empty, 1 error (discovery probe)</p></header>' "$SH"
+SHTOP="$(cat "$SH")"; SHTOP="${SHTOP%%<table*}"   # everything above the first table
+chk "summary html: no region names above the first table" test "$(grep -oE '[a-z]{2}-[a-z]+-[0-9]' <<<"$SHTOP" | wc -l)" -eq 0
 chk "summary html: region totals = overall" grep -q '<td><b>All regions</b></td><td></td><td class="n">20</td><td class="n ok">12</td><td class="n bad">7</td><td class="n">1</td><td class="n bad">60%</td>' "$SH"
 
 echo "== outputs"

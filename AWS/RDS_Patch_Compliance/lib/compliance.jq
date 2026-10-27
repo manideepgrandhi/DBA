@@ -207,17 +207,18 @@ def pend_tip: [ .pending_actions_detail[] | .text + (if .auto_applied_after_utc 
 def region_mode_txt: {"discover": "discovery probe, \(.probe_parallel) in parallel; full scan only where databases or a probe error",
                        "full": "every enabled region scanned in full (--no-discover)", "explicit": "queried directly, no probe"}[.mode] // .mode;
 def region_line: "\(.checked) checked, \(.with_databases) with databases, \(.empty) empty, \(.error) error\(if .error == 1 then "" else "s" end)";
-def empty_list($multi): .empty_regions | map(if $multi then "\(.account_id): " + (.regions | join(", ")) else .regions | join(", ") end) | join("; ");
+# Region NAMES are never listed in the report header; empty regions (no DB instance / cluster) are only counted.
+# Rows / CSV show regions with databases or an AWS error; JSON summary.regions keeps every region (incl. empty).
+def shown_regions: [.summary.regions[] | select(.status != "empty")];
 def text:
   . as $r | $r.summary as $s | $s.region_overview as $ro | (($r.meta.accounts | length) > 1) as $multi
   | ([12, ($r.rows[] | (.current_version, .latest_minor_version) | tostring | length)] | max + 2) as $vw
   | ([20, ($s.engines[].engine | length)] | max + 2) as $ew
   | "RDS PATCH COMPLIANCE REPORT - \($r.meta.generated_utc) (\($r.meta.generated_local))",
-    "Accounts : \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", "))   Regions: \(if $ro.mode == "discover" then ([$s.regions[] | select(.status != "empty") | .region] | unique | join(", ") | if . == "" then "none" else . end) + " (of \($r.meta.regions | length) enabled)" else $r.meta.regions | join(", ") end)",
+    "Accounts : \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", "))" + (if $ro.mode == "explicit" then "   Regions: \($r.meta.regions | join(", "))" else "   Regions: all enabled" end),
     "Rule     : COMPLIANT when RDS lists at most \($s.max_behind) valid minor upgrade target(s) for the current version (NON-COMPLIANT = \($s.max_behind + 1)+; UNKNOWN = lookup failed or current version not returned)",
     "Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)",
     "Regions  : \($ro | region_line) (\($ro | region_mode_txt))" + (if $multi then " - per account x region" else "" end),
-    (if $ro.empty > 0 then "Empty    : \($ro | empty_list($multi))" else empty end),
     (if ($r.meta.filters_text // "") != "" then "Filters  : \($r.meta.filters_text)" else empty end),
     "",
     "SUMMARY",
@@ -233,9 +234,9 @@ def text:
        + ((.latest_minor // "") | if contains("; ") then "\n" + (split("; ") | map("        latest minor, " + .) | join("\n")) else "" end)),
     ($s.engines[] | "  " + (.engine | pad($ew)) + ("all" | pad(10)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + "  \(.pct_compliant)% compliant"),
     "",
-    "PER REGION (account x region; pending = servers with pending maintenance)",
+    "PER REGION (account x region with databases or an AWS error; empty regions only counted above; pending = servers with pending maintenance)",
     "  " + ("ACCOUNT" | pad(14)) + ("REGION" | pad(16)) + ("STATUS" | pad(11)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("%COMPL" | rpad(8)) + ("PEND" | rpad(6)) + ("PAST-STD" | rpad(10)),
-    (($s.regions + [$s.regions_total])[] | "  " + (.account_id | pad(14)) + (.region | pad(16)) + (.status | pad(11)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6))
+    (($r | shown_regions) + [$s.regions_total] | .[] | "  " + (.account_id | pad(14)) + (.region | pad(16)) + (.status | pad(11)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6))
        + ((if .pct_compliant == null then "-" else "\(.pct_compliant)%" end) | rpad(8)) + (.with_pending | rpad(6)) + (.past_standard_support | rpad(10))
        + (if .status == "error" then "  see ERRORS" + (if .total == 0 then " (no data)" else " (partial)" end) else "" end)),
     "",
@@ -270,7 +271,7 @@ def csv_regions:
    ["non_compliant","non_compliant"],["unknown","unknown"],["pct_compliant","pct_compliant"],["servers_with_pending_maintenance","with_pending"],
    ["pending_actions","pending_total"],["past_standard_support","past_standard_support"],["aws_errors","errors"],
    ["probe_instances_max20","probe_instances"],["probe_clusters_max20","probe_clusters"]] as $c
-  | ($c | map(.[0]) | @csv), ((.summary.regions + [.summary.regions_total])[] | . as $x | [$c[] | $x[.[1]] | if . == null then "" else . end] | @csv);
+  | ($c | map(.[0]) | @csv), ((shown_regions + [.summary.regions_total])[] | . as $x | [$c[] | $x[.[1]] | if . == null then "" else . end] | @csv);
 def json_out: .;
 def alert: {summary: .summary, non_compliant: [.rows[] | select(.compliance_status == "NON-COMPLIANT") | {account_id, region, identifier, engine, current_version, latest_minor_version, versions_behind}], errors: .errors};
 
@@ -297,20 +298,18 @@ def html_row:
 def rgc: {"databases": "db", "error": "bad", "empty": "unk"}[.] // "unk";
 def pctc: if . == null then "muted" elif . >= 100 then "ok" elif . >= 80 then "warn" else "bad" end;
 def region_tr($foot):
-  "<tr\(if .status == "empty" then " class=\"empty\"" else "" end)><td>\(if $foot then "<b>All regions</b>" else (.account_id | h) + "<div class=\"sub\">\(.profile | h)</div>" end)</td>"
+  "<tr><td>\(if $foot then "<b>All regions</b>" else (.account_id | h) + "<div class=\"sub\">\(.profile | h)</div>" end)</td>"
   + "<td>\(if $foot then "" else "<b>\(.region | h)</b>" end)</td>"
-  + "<td data-s=\"\(if $foot then 9 else (.status | region_rank) end)\">\(if $foot then "" else "<span class=\"st \(.status | rgc)\">\(.status | h)</span>" + (if .status == "error" then "<div class=\"sub\">see Errors\(if .total == 0 then ", no data" else ", partial" end)</div>" elif .skipped then "<div class=\"sub\">probe: 0 instances, 0 clusters</div>" else "" end) end)</td>"
+  + "<td data-s=\"\(if $foot then 9 else (.status | region_rank) end)\">\(if $foot then "" else "<span class=\"st \(.status | rgc)\">\(.status | h)</span>" + (if .status == "error" then "<div class=\"sub\">see Errors\(if .total == 0 then ", no data" else ", partial" end)</div>" else "" end) end)</td>"
   + "<td class=\"n\" data-s=\"\(.total)\"><b>\(.total)</b></td><td class=\"n \(if .compliant > 0 then "ok" else "" end)\" data-s=\"\(.compliant)\">\(.compliant)</td>"
   + "<td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\" data-s=\"\(.non_compliant)\">\(.non_compliant)</td><td class=\"n\" data-s=\"\(.unknown)\">\(.unknown)</td>"
   + "<td class=\"n \(.pct_compliant | pctc)\" data-s=\"\(.pct_compliant // -1)\">" + (if .pct_compliant == null then "-" else "\(.pct_compliant)%<div class=\"bar\"><i class=\"\(.pct_compliant | pctc)\" style=\"width:\(.pct_compliant)%\"></i></div>" end) + "</td>"
   + "<td class=\"n \(if .with_pending > 0 then "warn" else "" end)\" data-s=\"\(.with_pending)\">\(.with_pending)\(if .pending_total > 0 then "<div class=\"sub\">\(.pending_total) action(s)</div>" else "" end)</td>"
   + "<td class=\"n \(if .past_standard_support > 0 then "bad" else "" end)\" data-s=\"\(.past_standard_support)\">\(.past_standard_support)</td></tr>";
-def html_regions($s; $ro; $multi):
+def html_regions($r; $s; $ro; $multi):
   "<section id=\"regions\"><h2>Per region <span class=\"muted\">\($ro | region_line) &middot; \($ro | region_mode_txt | h)\(if $multi then " &middot; per account x region" else "" end) &middot; click a header to sort</span></h2>"
   + "<table class=\"sortable regions\"><thead><tr><th>Account</th><th>Region</th><th>Status</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>% compliant</th><th>Pending maint.</th><th>Past standard support</th></tr></thead><tbody>"
-  + ($s.regions | map(region_tr(false)) | join("")) + "</tbody><tfoot>" + ($s.regions_total | region_tr(true)) + "</tfoot></table>"
-  + (if $ro.empty > 0 then "<details class=\"empty\"><summary>\($ro.empty) empty region(s) - no DB instance or cluster\(if $ro.mode == "discover" then " (discovery probe; not scanned further)" else "" end)</summary><p class=\"mono\">"
-       + ($ro.empty_regions | map((if $multi then "<b>\(.account_id | h)</b>: " else "" end) + (.regions | map(h) | join(", "))) | join("<br>")) + "</p></details>" else "" end)
+  + ($r | shown_regions | map(region_tr(false)) | join("")) + "</tbody><tfoot>" + ($s.regions_total | region_tr(true)) + "</tfoot></table>"
   + "</section>";
 def html:
   . as $r | $r.summary as $s | $s.region_overview as $ro | (($r.meta.accounts | length) > 1) as $multi
@@ -327,15 +326,10 @@ def html:
   + ".cp{margin-top:4px;font-size:11px;padding:2px 8px;border:1px solid #9aa5b1;background:#fff;border-radius:5px;cursor:pointer}.cp.ok{background:#e6f4ea}"
   + "h2{font-size:16px;margin:18px 0 6px}h3{font-size:14px;margin:12px 0 6px}#q{width:420px;padding:7px 10px;border:1px solid #9aa5b1;border-radius:6px;margin:8px 0 12px;font-size:13px}"
   + ".grid{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}table.sortable th{cursor:pointer}table.sortable th:hover{background:#dde3ea}td.n{text-align:right}"
-  + ".st.db{background:#e3f0fb;color:#0d47a1}tr.empty td{color:#9aa5b1;background:#fafbfc}tfoot td{border-top:2px solid #232f3e;background:#f0f3f7;font-weight:600}"
+  + ".st.db{background:#e3f0fb;color:#0d47a1}tfoot td{border-top:2px solid #232f3e;background:#f0f3f7;font-weight:600}"
   + ".bar{height:4px;background:#e6e9ee;border-radius:2px;margin-top:3px;min-width:70px}.bar i{display:block;height:4px;border-radius:2px;background:#2e7d32}.bar i.warn{background:#e08a00}.bar i.bad{background:#c62828}"
-  + "details.empty{margin:-8px 0 14px;font-size:12.5px}details.empty summary{cursor:pointer;color:#52606d}details.empty p{background:#fff;padding:8px 12px;margin:6px 0 0;box-shadow:0 1px 3px rgba(0,0,0,.12)}header details{margin-top:4px;color:#c9d1d9;font-size:12.5px}header details summary{cursor:pointer}"
   + "footer{padding:10px 26px 24px;color:#7b8794;font-size:12px}</style></head><body>"
-  + "<header id=\"top\"><h1>RDS patch compliance report</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", ") | h) &middot; regions \($ro | region_line) <span class=\"rmode\">(\($ro | region_mode_txt | h))</span></p>"
-  + "<details><summary>regions checked: \($r.meta.regions | length)\(if $ro.empty > 0 then "; \($ro.empty) empty" else "" end) (click to list)</summary>"
-  + "with databases: \([$s.regions[] | select(.status == "databases") | (if $multi then .account_id + "/" else "" end) + .region] | join(", ") | if . == "" then "none" else . end | h)"
-  + (if $ro.error > 0 then "<br>errors: \([$s.regions[] | select(.status == "error") | (if $multi then .account_id + "/" else "" end) + .region] | join(", ") | h)" else "" end)
-  + (if $ro.empty > 0 then "<br>empty: \($ro | empty_list($multi) | h)" else "" end) + "</details></header><main>"
+  + "<header id=\"top\"><h1>RDS patch compliance report</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", ") | h) &middot; Regions: \($ro | region_line)</p></header><main>"
   + "<p class=\"muted\">Rule: <b>COMPLIANT</b> = at most \($s.max_behind) valid minor upgrade target(s) for the current version; <b>NON-COMPLIANT</b> = \($s.max_behind + 1) or more; <b>UNKNOWN</b> = lookup failed or current version not returned (deprecated). Counted are only the <b>valid minor upgrade targets</b> RDS returns for the server's current version (describe-db-engine-versions --engine-version &lt;current&gt;, ValidUpgradeTarget with IsMajorVersionUpgrade=false). Latest minor per major = highest valid target seen (or the current version when up to date).<br><b>Pending maint.</b> = maintenance actions AWS has scheduled or offered for this server that haven't been applied yet (cluster rows include their member instances' actions); click the badge to expand, hover for IST dates.</p>"
   + "<div class=\"cards\">" + card("Servers / clusters"; $s.total; ""; "\($r.meta.accounts | length) account(s), \($r.meta.regions | length) region(s)")
   + card("Compliant"; $s.compliant; "ok"; "\($s.pct_compliant)% of all") + card("Non-compliant"; $s.non_compliant; (if $s.non_compliant > 0 then "bad" else "ok" end); "> \($s.max_behind) behind")
@@ -346,7 +340,7 @@ def html:
   + card("Pending maintenance"; $s.with_pending; (if $s.with_pending > 0 then "warn" else "ok" end); ($s.pending_by_action | to_entries | map("\(.key) \(.value)") | join(", ") | if . == "" then "none" else . end))
   + card("Version not returned"; $s.deprecated; (if $s.deprecated > 0 then "bad" else "ok" end); "deprecated / not offered")
   + card("Regions"; "\($ro.with_databases) / \($ro.checked)"; (if $ro.error > 0 then "bad" else "" end); "with databases; \($ro.empty) empty, \($ro.error) error(s)") + "</div>"
-  + html_regions($s; $ro; $multi)
+  + html_regions($r; $s; $ro; $multi)
   + "<div class=\"grid\"><div><h3>Per engine and major version</h3><table><tr><th>Engine</th><th>Major</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>Latest minor</th><th>Support</th></tr>"
   + ([$s.engines[] | . as $e | .majors[] | "<tr><td><a href=\"#\($e.anchor)\">\($e.engine | h)</a></td><td>\(.major | h)</td><td>\(.total)</td><td class=\"ok\">\(.compliant)</td><td class=\"\(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td>\(.unknown)</td><td class=\"mono\">\(.latest_minor | dash | h)</td><td class=\"\(.support_flag | sfc)\">\(.support_flag | dash | h)\(if .standard_support_end != null then "<div class=\"sub\">standard end \(.standard_support_end)</div>" else "" end)</td></tr>"] | join(""))
   + "</table></div><div><h3>Top \($top_n) most behind</h3><table><tr><th>Behind</th><th>Server / cluster</th><th>Engine</th><th>Current &rarr; latest minor</th><th>Status</th></tr>"
