@@ -6,6 +6,10 @@ Lifecycle dates are relative to now. Env:
   MOCK_SCENARIO = fleet (default) | empty | lookupfail | nolc | lcfail | accessdenied | badcreds | large | oracle
   MOCK_LARGE_N  = instances for 'large' (default 3000) ; MOCK_LOG = JSONL of argv
   MOCK_DEFAULT_REGION = answer for `aws configure get region`
+  MOCK_SCENARIO=discover: 14 enabled regions; prod also has a cluster-only region (us-west-2: a headless Aurora
+                cluster, no instances) and ca-central-1 denies rds:DescribeDBInstances (SCP); the rest are empty
+  MOCK_PROBE_DELAY = seconds each discovery probe (--query length(...)) sleeps; MOCK_TIMING = JSONL of
+                     [start, end, region] per probe (to measure the real parallelism)
 Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1 fleet), (none) -> prod,
           broken -> invalid credentials. Other regions are empty.
 """
@@ -39,7 +43,7 @@ if argv[:3] == ["configure", "get", "region"]:
 
 GLOBAL_VAL = {"--output", "--profile", "--region", "--cli-connect-timeout", "--cli-read-timeout"}
 ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): set(),
-           ("rds", "describe-db-clusters"): set(), ("rds", "describe-db-instances"): set(),
+           ("rds", "describe-db-clusters"): {"--max-records", "--query"}, ("rds", "describe-db-instances"): {"--max-records", "--query"},
            ("rds", "describe-pending-maintenance-actions"): set(),
            ("rds", "describe-db-engine-versions"): {"--engine", "--engine-version"}, ("docdb", "describe-db-engine-versions"): {"--engine", "--engine-version"},
            ("neptune", "describe-db-engine-versions"): {"--engine", "--engine-version"},
@@ -47,7 +51,7 @@ ALLOWED = {("sts", "get-caller-identity"): set(), ("ec2", "describe-regions"): s
 g, o, pos, i = {}, {}, [], 0
 while i < len(argv):
     a = argv[i]
-    if a == "--no-cli-pager":
+    if a in ("--no-cli-pager", "--no-paginate"):
         g[a] = True
     elif a in GLOBAL_VAL:
         g[a] = argv[i + 1]; i += 1
@@ -78,6 +82,10 @@ if ACCT is None:
     sys.stderr.write("\nThe config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
 
 
+DISCOVER_REGIONS = ("us-east-1", "ap-south-1", "eu-west-1", "us-west-2", "ca-central-1", "us-east-2", "us-west-1", "eu-central-1",
+                    "eu-west-2", "eu-north-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "sa-east-1")
+
+
 def out(d):
     print(json.dumps(d, indent=2)); sys.exit(0)
 
@@ -86,9 +94,12 @@ if (SVC, OP) == ("sts", "get-caller-identity"):
     out({"UserId": "AIDAMOCKUSER", "Account": ACCT, "Arn": "arn:aws:iam::%s:user/dba" % ACCT})
 if (SVC, OP) == ("ec2", "describe-regions"):
     out({"Regions": [{"Endpoint": "ec2.%s.amazonaws.com" % r, "RegionName": r, "OptInStatus": "opt-in-not-required"}
-                     for r in ("us-east-1", "ap-south-1", "eu-west-1")]})
+                     for r in (DISCOVER_REGIONS if SCEN == "discover" else ("us-east-1", "ap-south-1", "eu-west-1"))]})
 if SCEN == "accessdenied" and REGION == "eu-west-1" and OP == "describe-db-clusters":
     fail("AccessDenied", "DescribeDBClusters", "User is not authorized to perform: rds:DescribeDBClusters")
+if SCEN == "discover" and REGION == "ca-central-1" and OP == "describe-db-instances":
+    fail("AccessDenied", "DescribeDBInstances", "User: arn:aws:iam::%s:user/dba is not authorized to perform: rds:DescribeDBInstances "
+         "with an explicit deny in a service control policy" % ACCT)
 
 # ------------------------------------------------------------------ engine version catalogue (per engine)
 def fam(major, minors, fmt="%s"):
@@ -305,11 +316,30 @@ elif SCEN != "empty" and REGION == "us-east-1" and PROFILE in ("", "prod"):
     pma(arn("db", "catalog-docdb-2"), [("system-update", "Upgrades to the DocumentDB engine", 30, 60, None)])
     cluster("graph-neptune", "neptune", "1.3.2.1", ["graph-neptune-1"], tags("prod", "graph", "recs"))
     inst("unrelated-redis-like", "custom-sqlserver-ee", "15.00.4073.23.cev1", tg=[])  # out of scope engine: ignored
+elif SCEN == "discover" and REGION == "us-west-2" and PROFILE in ("", "prod"):
+    # cluster-only region: an Aurora global-database secondary with no instances (headless)
+    cluster("dr-aurora-pg15", "aurora-postgresql", "15.10", [], tags("dr", "orders", "orders-dr"))
 elif SCEN != "empty" and REGION == "ap-south-1" and PROFILE == "nonprod":
     cluster("dev-aurora-pg15", "aurora-postgresql", "15.4", ["dev-pg15-1"], tags("dev", "platform", "dev"))
     inst("qa-pg", "postgres", "17.4", tg=tags("qa", "platform", "qa"))
     inst("dev-mariadb", "mariadb", "10.11.9", tg=tags("dev", "platform", "dev"))
 
+if "--query" in o:   # discovery probe: one page (--max-records, CLI --no-paginate), JMESPath length(...)
+    q, mr = o["--query"], o.get("--max-records", "100")
+    if not mr.isdigit() or not 20 <= int(mr) <= 100:
+        fail("InvalidParameterValue", OPNAME, "MaxRecords must be between 20 and 100")
+    if "--no-paginate" not in g:
+        sys.stderr.write("mock: probe must pass --no-paginate (one page only)\n"); sys.exit(252)
+    want = {"describe-db-clusters": ("length(DBClusters)", CL), "describe-db-instances": ("length(DBInstances)", INS)}[OP]
+    if q != want[0]:
+        sys.stderr.write("mock: unsupported --query %s\n" % q); sys.exit(252)
+    t0 = __import__("time").time()
+    if os.environ.get("MOCK_PROBE_DELAY"):
+        __import__("time").sleep(float(os.environ["MOCK_PROBE_DELAY"]))
+    if os.environ.get("MOCK_TIMING"):
+        with open(os.environ["MOCK_TIMING"], "a") as fh:
+            fh.write(json.dumps([t0, __import__("time").time(), REGION, OP]) + "\n")
+    print(json.dumps(min(len(want[1]), int(mr)))); sys.exit(0)
 if OP == "describe-db-clusters":
     out({"DBClusters": CL})
 if OP == "describe-db-instances":

@@ -17,7 +17,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.1.1"
+readonly SCRIPT_VERSION="1.2.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PCR_LIB:-$SCRIPT_DIR/lib}/compliance.jq"
@@ -29,6 +29,8 @@ fi
 PROFILES=()
 REGIONS=()
 ALL_REGIONS=0
+DISCOVER=1
+PROBE_PARALLEL=8
 ENGINES=()
 IDENTIFIERS=()
 TAG_COLUMNS=(Environment Owner Application)
@@ -64,6 +66,7 @@ NOW=0
 REPORT=""
 LC_UNSUPPORTED=0
 declare -a ACCOUNTS_JSON=() ALL_REGIONS_SEEN=() WRITTEN=()
+REGION_MODE="explicit"   # explicit (-r / profile default) | discover (-A, probed) | full (-A --no-discover)
 
 _ts() { date '+%Y-%m-%d %H:%M:%S'; }
 _log() {
@@ -87,7 +90,12 @@ Usage: $SCRIPT_NAME [options]
 Scope:
   -P, --profile NAME        AWS CLI profile / account; repeatable or comma-separated (default: default chain)
   -r, --region REGION       Region(s); repeatable or comma-separated (default: env / profile region)
-  -A, --all-regions         Every region enabled in each account (ec2 describe-regions)
+  -A, --all-regions         Every region enabled in each account (ec2 describe-regions). Each region is first
+                            probed (2 one-page calls, in parallel); only regions with a DB instance or cluster
+                            are scanned in full. A probe that fails (AccessDenied / SCP / timeout) is reported
+                            as an error and that region is still scanned in full - never skipped silently
+      --no-discover         With -A: no probe, scan every enabled region in full (the pre-1.2 behaviour)
+      --probe-parallel N    Regions probed at the same time (default: 8, 1-32)
   -e, --engine GLOB         aurora-postgresql, aurora-mysql, postgres, mysql, mariadb, 'sqlserver-*',
                             'oracle-*', docdb, neptune (globs * ?, case-insensitive)      [repeatable]
   -i, --identifier GLOB     cluster / instance identifier (a cluster also matches by member) [repeatable]
@@ -173,6 +181,8 @@ load_config() {
             profile|profiles)       PROFILES=(); add_list PROFILES "$val" ;;
             region|regions)         REGIONS=(); add_list REGIONS "$val" ;;
             all_regions)            if is_true "$val"; then ALL_REGIONS=1; else ALL_REGIONS=0; fi ;;
+            discover)               if is_true "$val"; then DISCOVER=1; else DISCOVER=0; fi ;;
+            probe_parallel)         PROBE_PARALLEL="$val" ;;
             engine|engines)         ENGINES=(); add_list ENGINES "$val" ;;
             identifier|identifiers) IDENTIFIERS=(); add_list IDENTIFIERS "$val" ;;
             tag_columns)            TAG_COLUMNS=(); add_list TAG_COLUMNS "$val" ;;
@@ -221,6 +231,9 @@ parse_args() {
             -P|--profile)       need_arg "$opt" $#; reset_once PROFILES; add_list PROFILES "$2"; shift 2 ;;
             -r|--region)        need_arg "$opt" $#; reset_once REGIONS; add_list REGIONS "$2"; shift 2 ;;
             -A|--all-regions)   ALL_REGIONS=1; shift ;;
+            --no-discover)      DISCOVER=0; shift ;;
+            --discover)         DISCOVER=1; shift ;;
+            --probe-parallel)   need_arg "$opt" $#; PROBE_PARALLEL="$2"; shift 2 ;;
             -e|--engine)        need_arg "$opt" $#; reset_once ENGINES; add_list ENGINES "$2"; shift 2 ;;
             -i|--identifier)    need_arg "$opt" $#; reset_once IDENTIFIERS; add_list IDENTIFIERS "$2"; shift 2 ;;
             -T|--tag-columns)   need_arg "$opt" $#; TAG_COLUMNS=(); add_list TAG_COLUMNS "$2"; shift 2 ;;
@@ -275,6 +288,9 @@ validate() {
     [[ -e "/usr/share/zoneinfo/$DISPLAY_TZ" || "$DISPLAY_TZ" == UTC ]] || die 1 "Unknown time zone: $DISPLAY_TZ"
     if [[ ! "$AWS_TIMEOUT" =~ ^[0-9]+$ ]] || (( AWS_TIMEOUT == 0 )); then die 1 "--aws-timeout must be a positive integer"; fi
     if [[ ! "$MAX_ATTEMPTS" =~ ^[0-9]+$ ]] || (( MAX_ATTEMPTS == 0 )); then die 1 "--max-attempts must be a positive integer"; fi
+    if [[ ! "$PROBE_PARALLEL" =~ ^[0-9]+$ ]] || (( 10#$PROBE_PARALLEL < 1 || 10#$PROBE_PARALLEL > 32 )); then die 1 "--probe-parallel must be 1-32"; fi
+    PROBE_PARALLEL=$(( 10#$PROBE_PARALLEL ))
+    if (( ALL_REGIONS )); then if (( DISCOVER )); then REGION_MODE="discover"; else REGION_MODE="full"; fi; fi
     case "${ALERT_ON,,}" in noncompliant|always) ALERT_ON="${ALERT_ON,,}" ;; *) die 1 "--alert-on must be noncompliant or always" ;; esac
     case "${ALERT_WEBHOOK_FORMAT,,}" in slack|json) ALERT_WEBHOOK_FORMAT="${ALERT_WEBHOOK_FORMAT,,}" ;; *) die 1 "--alert-webhook-format must be slack or json" ;; esac
     for x in "${ALERT_EMAILS[@]}"; do
@@ -458,6 +474,66 @@ collect_region() {   # collect_region <profile> <account> <region> <dir>
     log_info "[${profile:-default}/$region] $(jq -r 'group_by(.compliance_status) | map("\(.[0].compliance_status)=\(length)") | join(" ") | if . == "" then "no matching servers" else . end' "$d/rows.json")"
 }
 
+# Region discovery (-A): two read-only, one-page calls per region tell whether it has any DB instance / cluster.
+# --no-paginate + --max-records 20 = exactly one API call each; --query length(...) prints a number.
+PROBE_ARGS_I=(rds describe-db-instances --max-records 20 --query 'length(DBInstances)' --no-paginate)
+PROBE_ARGS_C=(rds describe-db-clusters --max-records 20 --query 'length(DBClusters)' --no-paginate)
+probe_region() {   # probe_region <profile> <region> <outfile>   (runs in a background subshell: results go to the file)
+    local profile="$1" region="$2" out="$3" kind n rc ni="" nc="" ei="" ec="" e
+    local -a args
+    for kind in i c; do
+        if [[ "$kind" == i ]]; then args=("${PROBE_ARGS_I[@]}"); else args=("${PROBE_ARGS_C[@]}"); fi
+        aws_base "$profile" "$region"
+        rc=0; n="$("${AWS_CMD[@]}" "${args[@]}" 2>"$out.$kind.err")" || rc=$?
+        n="${n//[[:space:]]/}"
+        if (( rc == 0 )) && [[ "$n" =~ ^[0-9]+$ ]]; then e=""
+        else
+            e="$(tr -s '\n' ' ' <"$out.$kind.err" | sed -E 's/aws: \[ERROR\]: //g; s/^ +//; s/ +$//')"
+            [[ -n "$e" ]] || e="exit $rc, not a number: ${n:0:80}"
+            (( rc == 124 || rc == 137 )) && e="timed out ($e)"
+            (( ${#e} > 400 )) && e="${e:0:400}..."; n=""
+        fi
+        if [[ "$kind" == i ]]; then ni="$n"; ei="$e"; else nc="$n"; ec="$e"; fi
+    done
+    jq -cn --arg r "$region" --arg ni "$ni" --arg nc "$nc" --arg ei "$ei" --arg ec "$ec" \
+        '{region: $r, instances: (if $ni == "" then null else ($ni | tonumber) end), clusters: (if $nc == "" then null else ($nc | tonumber) end),
+          errors: ([if $ei != "" then {call: "rds describe-db-instances (discovery probe)", message: $ei} else empty end,
+                    if $ec != "" then {call: "rds describe-db-clusters (discovery probe)", message: $ec} else empty end])}' >"$out.tmp" \
+        && mv -f -- "$out.tmp" "$out"
+    return 0
+}
+discover_regions() {   # discover_regions <profile> <account> <dir> <region...>  -> $dir/probe/<region>.json
+    local profile="$1" account="$2" dir="$3" region running=0 f c m
+    shift 3
+    mkdir -p "$dir/probe"
+    log_info "[${profile:-default}] discovery: probing ${#} region(s), $PROBE_PARALLEL at a time"
+    for region in "$@"; do
+        probe_region "$profile" "$region" "$dir/probe/$region.json" &
+        running=$(( running + 1 ))
+        if (( running >= PROBE_PARALLEL )); then wait -n || true; running=$(( running - 1 )); fi
+    done
+    wait || true
+    # the probes ran in subshells: count their calls / failures here
+    for region in "$@"; do
+        f="$dir/probe/$region.json"
+        AWS_CALLS=$(( AWS_CALLS + 2 ))
+        if [[ ! -s "$f" ]]; then   # the subshell died before writing: treat as an error, never as empty
+            jq -cn --arg r "$region" '{region: $r, instances: null, clusters: null, errors: [{call: "rds discovery probe", message: "probe produced no result"}]}' >"$f"
+        fi
+        while IFS=$'\t' read -r c m; do
+            AWS_FAILS=$(( AWS_FAILS + 1 ))
+            log_error "[${profile:-default}/$region] discovery probe '$c' failed: $m"
+            add_error "$account" "$profile" "$region" "$c" "$m (region scanned in full anyway)"
+        done < <(jq -r '.errors[] | [.call, .message] | @tsv' "$f")
+    done
+}
+region_status() {   # region_status <account> <profile> <region> <status> [probe-json-file]
+    local probe='{}'
+    [[ -n "${5:-}" && -s "${5:-}" ]] && probe="$(jq -c '{probe_instances: .instances, probe_clusters: .clusters}' "$5")"
+    jq -cn --arg a "$1" --arg p "${2:-default}" --arg r "$3" --arg s "$4" --argjson x "$probe" \
+        '{account: $a, profile: $p, region: $r, status: $s} + $x' >>"$WORK/region_status.jsonl"
+}
+
 collect_profile() {   # collect_profile <index> <profile>
     local idx="$1" profile="$2" account region base
     local -a regions=()
@@ -483,8 +559,17 @@ collect_profile() {   # collect_profile <index> <profile>
         mapfile -t regions < <(jq -r '.Regions[].RegionName' "$WORK/p$idx/regions.json" | sort)
     elif (( ${#REGIONS[@]} )); then regions=("${REGIONS[@]}")
     else regions=("$base"); fi
+    local pf st
+    (( ALL_REGIONS && DISCOVER && ${#regions[@]} )) && discover_regions "$profile" "$account" "$WORK/p$idx" "${regions[@]}"
     for region in "${regions[@]}"; do
         ALL_REGIONS_SEEN+=("$region")
+        st="scanned"; pf=""
+        if (( ALL_REGIONS && DISCOVER )); then
+            pf="$WORK/p$idx/probe/$region.json"
+            st="$(jq -r 'if (.errors | length) > 0 then "probe-error" elif (.instances + .clusters) > 0 then "databases" else "empty" end' "$pf")"
+        fi
+        region_status "$account" "$profile" "$region" "$st" "$pf"
+        if [[ "$st" == empty ]]; then log_debug "[${profile:-default}/$region] discovery: no DB instance or cluster; skipped"; continue; fi
         collect_region "$profile" "$account" "$region" "$WORK/p$idx/$region"
     done
     return 0
@@ -500,18 +585,21 @@ build_report() {
     if (( ${#rowfiles[@]} )); then jq -cs 'add // []' -- "${rowfiles[@]}" >"$WORK/all_rows.json"; else printf '[]' >"$WORK/all_rows.json"; fi
     if [[ -s "$WORK/errors.jsonl" ]]; then jq -cs . "$WORK/errors.jsonl" >"$WORK/all_errors.json"; else printf '[]' >"$WORK/all_errors.json"; fi
     : >"$WORK/accounts.jsonl"
+    [[ -f "$WORK/region_status.jsonl" ]] || : >"$WORK/region_status.jsonl"
     if (( ${#ACCOUNTS_JSON[@]} )); then printf '%s\n' "${ACCOUNTS_JSON[@]}" >"$WORK/accounts.jsonl"; fi
     jq -n --arg script "$SCRIPT_NAME" --arg version "$SCRIPT_VERSION" \
         --arg gu "$(date -u -d "@$NOW" '+%Y-%m-%d %H:%M UTC')" --arg gl "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Y-%m-%d %H:%M %Z')" \
         --arg tz "$DISPLAY_TZ" --arg host "$(hostname 2>/dev/null || echo unknown)" \
-        --slurpfile accounts "$WORK/accounts.jsonl" \
+        --slurpfile accounts "$WORK/accounts.jsonl" --slurpfile rstat "$WORK/region_status.jsonl" \
+        --arg rmode "$REGION_MODE" --argjson pp "$PROBE_PARALLEL" \
         --argjson regions "$(json_array "${ALL_REGIONS_SEEN[@]}" | jq -c 'unique')" --argjson tagcols "$(json_array "${TAG_COLUMNS[@]}")" \
         --argjson mb "$MAX_BEHIND" --argjson warn "$WARN_DAYS" --arg ft "$(filters_text)" --argjson f "$FILTERS_JSON" \
         --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" --argjson lcu "$LC_UNSUPPORTED" \
         --argjson oal "$( (( ORACLE_ANY_LINE )) && echo true || echo false)" \
         '{script: $script, version: $version, generated_utc: $gu, generated_local: $gl, tz: $tz, host: $host,
           accounts: $accounts, regions: $regions, tag_columns: $tagcols, max_behind: $mb, warn_days: $warn,
-          filters: $f, filters_text: $ft, aws_calls: $calls, aws_failures: $fails, lifecycle_api: ($lcu == 0), oracle_any_patch_line: $oal}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
+          filters: $f, filters_text: $ft,
+          region_discovery: {mode: $rmode, probe_parallel: (if $rmode == "discover" then $pp else null end)}, region_status: $rstat, aws_calls: $calls, aws_failures: $fails, lifecycle_api: ($lcu == 0), oracle_any_patch_line: $oal}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     REPORT="$WORK/report.json"
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile rows "$WORK/all_rows.json" --slurpfile errors "$WORK/all_errors.json" \
         '{meta: $meta[0], rows: $rows[0], errors: $errors[0]}' >"$WORK/raw_report.json" || die 4 "Assembling the report failed"
@@ -527,19 +615,25 @@ render() {   # render <format>  -> stdout
     esac
 }
 
+place() {   # place <tmp> <file>   atomic copy into the output dir
+    if ! { cp -- "$1" "$2.tmp.$$" && mv -f -- "$2.tmp.$$" "$2"; }; then die 4 "Cannot write $2"; fi
+    chmod 0640 -- "$2" 2>/dev/null || true
+    WRITTEN+=("$(cd -- "$(dirname -- "$2")" && pwd -P)/${2##*/}")
+    log_info "Wrote ${WRITTEN[-1]}"
+}
 write_outputs() {
-    local fmt ext file stamp tmp
+    local fmt ext stamp tmp
     stamp="$(date -d "@$NOW" '+%Y%m%d_%H%M%S')"
     for fmt in "${FORMATS[@]}"; do
         tmp="$WORK/out.$fmt"
         render "$fmt" >"$tmp" || die 4 "Rendering $fmt failed"
         if [[ -z "$OUTPUT_DIR" ]]; then cat -- "$tmp"; continue; fi
         ext="$fmt"; [[ "$fmt" == text ]] && ext="txt"
-        file="${OUTPUT_DIR%/}/${PREFIX}_${stamp}.$ext"
-        if ! { cp -- "$tmp" "$file.tmp.$$" && mv -f -- "$file.tmp.$$" "$file"; }; then die 4 "Cannot write $file"; fi
-        chmod 0640 -- "$file" 2>/dev/null || true
-        WRITTEN+=("$(cd -- "$(dirname -- "$file")" && pwd -P)/${file##*/}")
-        log_info "Wrote ${WRITTEN[-1]}"
+        place "$tmp" "${OUTPUT_DIR%/}/${PREFIX}_${stamp}.$ext"
+        if [[ "$fmt" == csv ]]; then   # region-wise breakdown next to the per-server CSV
+            rjq csv_regions -r "$REPORT" >"$WORK/out.csv_regions" || die 4 "Rendering the region CSV failed"
+            place "$WORK/out.csv_regions" "${OUTPUT_DIR%/}/${PREFIX}_${stamp}_regions.csv"
+        fi
     done
 }
 
@@ -604,7 +698,9 @@ dry_run_plan() {
     local p r
     echo "$SCRIPT_NAME v$SCRIPT_VERSION dry run - no AWS calls are made"
     echo "  profiles : $(for p in "${PROFILES[@]}"; do printf '%s ' "${p:-default}"; done)"
-    echo "  regions  : $( (( ALL_REGIONS )) && echo "all enabled per account" || echo "${REGIONS[*]:-profile default}")"
+    echo "  regions  : $(case "$REGION_MODE" in discover) echo "all enabled per account; discovery probe ($PROBE_PARALLEL in parallel), full scan only where databases (or a probe error) are found" ;;
+                              full) echo "all enabled per account; every region scanned in full (--no-discover)" ;;
+                              *) echo "${REGIONS[*]:-profile default} (queried directly, no probe)" ;; esac)"
     echo "  filters  : $(filters_text)"
     echo "  rule     : COMPLIANT <= $MAX_BEHIND minor version(s) behind; support warning ${WARN_DAYS}d"
     echo "  formats  : ${FORMATS[*]} -> ${OUTPUT_DIR:-stdout}"
@@ -613,6 +709,12 @@ dry_run_plan() {
         echo "Profile ${p:-default}:"
         aws_base "$p" "$r"; printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" sts get-caller-identity)"
         (( ALL_REGIONS )) && printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" ec2 describe-regions)"
+        if [[ "$REGION_MODE" == discover ]]; then
+            echo "  discovery probe, every enabled region, $PROBE_PARALLEL at a time (2 calls per region):"
+            aws_base "$p" "<each-region>"
+            printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" "${PROBE_ARGS_I[@]}")" "$(printf '%q ' "${AWS_CMD[@]}" "${PROBE_ARGS_C[@]}")"
+            echo "  full scan, only regions where a probe found a DB instance / cluster or failed:"
+        fi
         for r in "${REGIONS[@]:-<each-region>}"; do
             aws_base "$p" "$r"
             printf '    %s\n' "$(printf '%q ' "${AWS_CMD[@]}" rds describe-db-clusters)"
@@ -628,6 +730,7 @@ dry_run_plan() {
 on_exit() {
     local rc=$?
     trap - EXIT INT TERM
+    local j; for j in $(jobs -pr); do kill "$j" 2>/dev/null || true; done   # discovery probes still running
     if [[ -n "$WORK" && -d "$WORK" ]]; then
         if (( KEEP_WORKDIR )); then log_info "Raw AWS responses kept in $WORK"; else rm -rf -- "$WORK"; fi
     fi

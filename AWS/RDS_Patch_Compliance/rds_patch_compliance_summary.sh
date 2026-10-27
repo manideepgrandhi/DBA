@@ -12,7 +12,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="rds_patch_compliance_summary.sh"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 FULL="${RDS_PCS_FULL:-$SCRIPT_DIR/rds_patch_compliance_report.sh}"
@@ -22,7 +22,7 @@ if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) ))
     echo "$SCRIPT_NAME: bash 4.4+ required (found $BASH_VERSION)" >&2; exit 2
 fi
 
-PROFILES=(); REGIONS=(); ALL_REGIONS=0; ENGINES=(); IDENTIFIERS=()
+PROFILES=(); REGIONS=(); ALL_REGIONS=0; NO_DISCOVER=0; PROBE_PARALLEL=""; ENGINES=(); IDENTIFIERS=()
 FORMATS=(); OUTPUT_DIR=""; PREFIX="rds_patch_compliance_summary"
 MAX_BEHIND=2; WARN_DAYS=180; ORACLE_ANY_LINE=0; FAIL_ON_NC=0; VERBOSE=0
 ALERT_EMAILS=(); ALERT_WEBHOOKS=(); ALERT_ON="noncompliant"; ALERT_WEBHOOK_FORMAT="slack"; ALERT_FROM=""
@@ -55,7 +55,10 @@ NON-COMPLIANT when versions_behind > --max-behind (default 2, i.e. 3 or more val
 Usage: $SCRIPT_NAME [options]
   -P, --profile P[,P]       AWS CLI profile(s)                                   [repeatable]
   -r, --region R[,R]        Region(s)                                            [repeatable]
-  -A, --all-regions         Every enabled region
+  -A, --all-regions         Every enabled region; a quick discovery probe per region (in parallel) skips
+                            regions with no DB instance / cluster
+      --no-discover         With -A: scan every enabled region in full (no probe)
+      --probe-parallel N    With -A: regions probed at a time (1-32, default 8)
   -e, --engine GLOB         Engine filter, e.g. 'aurora-*', oracle-ee            [repeatable]
   -i, --identifier GLOB     Cluster / instance filter                            [repeatable]
       --max-behind N        Allowed minor versions behind (default 2)
@@ -86,6 +89,8 @@ parse_args() {
             -P|--profile)       need_arg "$opt" $#; add_list PROFILES "$2"; shift 2 ;;
             -r|--region)        need_arg "$opt" $#; add_list REGIONS "$2"; shift 2 ;;
             -A|--all-regions)   ALL_REGIONS=1; shift ;;
+            --no-discover)      NO_DISCOVER=1; shift ;;
+            --probe-parallel)   need_arg "$opt" $#; PROBE_PARALLEL="$2"; shift 2 ;;
             -e|--engine)        need_arg "$opt" $#; add_list ENGINES "$2"; shift 2 ;;
             -i|--identifier)    need_arg "$opt" $#; add_list IDENTIFIERS "$2"; shift 2 ;;
             --max-behind)       need_arg "$opt" $#; MAX_BEHIND="$2"; shift 2 ;;
@@ -119,6 +124,8 @@ validate() {
     [[ "$WARN_DAYS" =~ ^[0-9]+$ ]] || die 1 "--warn-days must be a whole number >= 0"
     [[ "$PREFIX" =~ ^[A-Za-z0-9._-]+$ && "$PREFIX" != .* ]] || die 1 "--prefix may contain only letters, digits, . _ -"
     (( ALL_REGIONS && ${#REGIONS[@]} )) && die 1 "Use either -r or --all-regions, not both"
+    [[ -z "$PROBE_PARALLEL" ]] || { [[ "$PROBE_PARALLEL" =~ ^[0-9]+$ ]] && (( 10#$PROBE_PARALLEL >= 1 && 10#$PROBE_PARALLEL <= 32 )); } \
+        || die 1 "--probe-parallel must be a whole number from 1 to 32"
     case "${ALERT_ON,,}" in noncompliant|always) ALERT_ON="${ALERT_ON,,}" ;; *) die 1 "--alert-on must be noncompliant or always" ;; esac
     case "${ALERT_WEBHOOK_FORMAT,,}" in slack|json) ALERT_WEBHOOK_FORMAT="${ALERT_WEBHOOK_FORMAT,,}" ;; *) die 1 "--alert-webhook-format must be slack or json" ;; esac
     for x in "${ALERT_EMAILS[@]}"; do
@@ -139,6 +146,8 @@ collect() {
     for x in "${ENGINES[@]}"; do a+=(-e "$x"); done
     for x in "${IDENTIFIERS[@]}"; do a+=(-i "$x"); done
     (( ALL_REGIONS )) && a+=(--all-regions)
+    (( NO_DISCOVER )) && a+=(--no-discover)
+    [[ -n "$PROBE_PARALLEL" ]] && a+=(--probe-parallel "$PROBE_PARALLEL")
     (( ORACLE_ANY_LINE )) && a+=(--oracle-any-patch-line)
     (( VERBOSE )) && a+=(-v)
     REPORT="$WORK/report.json"
@@ -160,7 +169,9 @@ write_outputs() {
             html)     file="$OUTPUT_DIR/${PREFIX}_$stamp.html"; render html >"$file" || die 4 "Writing $file failed" ;;
             csv)      file="$OUTPUT_DIR/${PREFIX}_${stamp}_summary.csv"; render csv_summary >"$file" || die 4 "Writing $file failed"
                       WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
-                      file="$OUTPUT_DIR/${PREFIX}_${stamp}_noncompliant.csv"; render csv_nc >"$file" || die 4 "Writing $file failed" ;;
+                      file="$OUTPUT_DIR/${PREFIX}_${stamp}_noncompliant.csv"; render csv_nc >"$file" || die 4 "Writing $file failed"
+                      WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
+                      file="$OUTPUT_DIR/${PREFIX}_${stamp}_regions.csv"; render csv_regions >"$file" || die 4 "Writing $file failed" ;;
         esac
         WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
     done

@@ -1,35 +1,38 @@
-RDS PATCH COMPLIANCE REPORT - 2026-10-15 10:53 UTC (2026-10-15 16:23 IST)
-Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, us-east-1
+RDS PATCH COMPLIANCE REPORT - 2026-10-27 08:52 UTC (2026-10-27 14:22 IST)
+Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, ca-central-1, us-east-1, us-west-2 (of 14 enabled)
 Rule     : COMPLIANT when RDS lists at most 2 valid minor upgrade target(s) for the current version (NON-COMPLIANT = 3+; UNKNOWN = lookup failed or current version not returned)
 Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)
+Regions  : 28 checked, 3 with databases, 23 empty, 2 errors (discovery probe, 8 in parallel; full scan only where databases or a probe error) - per account x region
+Empty    : 111111111111: ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1; 222222222222: ap-northeast-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
 
 SUMMARY
-  Servers/clusters : 22   COMPLIANT 13   NON-COMPLIANT 8   UNKNOWN 1   -> 59.1% compliant
+  Servers/clusters : 23   COMPLIANT 14   NON-COMPLIANT 8   UNKNOWN 1   -> 60.9% compliant
   Support          : 2 past standard support (Extended Support charges), 2 ending within 180 days
   Pending maint.   : on 3 server(s): os-upgrade 2, system-update 2, db-upgrade 1 (5 action(s))
   Other flags      : auto minor upgrade off 3, current version not returned / deprecated 1
+  AWS errors       : 4 (see ERRORS at the end; affected regions may be missing)
 
 PER ENGINE / MAJOR VERSION
   ENGINE                MAJOR      TOTAL  COMPL  NON-C  UNKN  LATEST MINOR                        SUPPORT
-  aurora-mysql          8.0            2      1      1     0  8.0.mysql_aurora.3.10.0             ok (standard end 2029-04-02)
-  aurora-postgresql     16             1      1      0     0  16.9                                ok (standard end 2030-11-23)
-  aurora-postgresql     15             3      2      1     0  15.13                               ok (standard end 2030-01-27)
-  aurora-postgresql     14             1      0      1     0  14.17                               ok (standard end 2028-12-23)
-  aurora-postgresql     12             1      0      1     0  12.22                               past standard support (Extended Support charges) (standard end 2025-03-14)
-  aurora-postgresql     11             1      0      0     1  -                                   past standard support (Extended Support charges) (standard end 2025-02-22)
+  aurora-mysql          8.0            2      1      1     0  8.0.mysql_aurora.3.10.0             ok (standard end 2029-04-14)
+  aurora-postgresql     16             1      1      0     0  16.9                                ok (standard end 2030-12-05)
+  aurora-postgresql     15             4      3      1     0  15.13                               ok (standard end 2030-02-08)
+  aurora-postgresql     14             1      0      1     0  14.17                               ok (standard end 2029-01-04)
+  aurora-postgresql     12             1      0      1     0  12.22                               past standard support (Extended Support charges) (standard end 2025-03-26)
+  aurora-postgresql     11             1      0      0     1  -                                   past standard support (Extended Support charges) (standard end 2025-03-06)
   docdb                 5.0            1      1      0     0  5.0.0                               n/a (no lifecycle API for docdb)
-  mariadb               10.11          1      1      0     0  10.11.11                            ok (standard end 2029-07-11)
-  mysql                 8.4            1      1      0     0  8.4.6                               ok (standard end 2032-04-06)
-  mysql                 8.0            1      0      1     0  8.0.43                              standard support ends in 169 days (standard end 2027-04-03)
+  mariadb               10.11          1      1      0     0  10.11.11                            ok (standard end 2029-07-23)
+  mysql                 8.4            1      1      0     0  8.4.6                               ok (standard end 2032-04-18)
+  mysql                 8.0            1      0      1     0  8.0.43                              standard support ends in 169 days (standard end 2027-04-15)
   neptune               1.3            1      1      0     0  1.3.4.0                             n/a (no lifecycle API for neptune)
   oracle-ee             19             1      1      0     0  19.0.0.0.ru-2025-07.rur-2025-07.r1  unknown (AWS lists no lifecycle dates for oracle-ee 19)
-  postgres              17             1      1      0     0  17.6                                ok (standard end 2031-09-19)
-  postgres              16             3      2      1     0  16.10                               ok (standard end 2030-11-23)
-  postgres              13             1      0      1     0  13.22                               standard support ends in 119 days (standard end 2027-02-12)
+  postgres              17             1      1      0     0  17.6                                ok (standard end 2031-10-01)
+  postgres              16             3      2      1     0  16.10                               ok (standard end 2030-12-05)
+  postgres              13             1      0      1     0  13.22                               standard support ends in 119 days (standard end 2027-02-24)
   sqlserver-se          16.00          1      1      0     0  16.00.4185.3.v1                     unknown (AWS lists no lifecycle dates for sqlserver-se 16.00)
   sqlserver-se          15.00          1      0      1     0  15.00.4430.1.v1                     unknown (AWS lists no lifecycle dates for sqlserver-se 15.00)
   aurora-mysql          all            2      1      1     0  50% compliant
-  aurora-postgresql     all            7      3      3     1  42.9% compliant
+  aurora-postgresql     all            8      4      3     1  50% compliant
   docdb                 all            1      1      0     0  100% compliant
   mariadb               all            1      1      0     0  100% compliant
   mysql                 all            2      1      1     0  50% compliant
@@ -37,6 +40,38 @@ PER ENGINE / MAJOR VERSION
   oracle-ee             all            1      1      0     0  100% compliant
   postgres              all            5      3      2     0  60% compliant
   sqlserver-se          all            2      1      1     0  50% compliant
+
+PER REGION (account x region; pending = servers with pending maintenance)
+  ACCOUNT       REGION          STATUS      TOTAL  COMPL  NON-C  UNKN  %COMPL  PEND  PAST-STD
+  111111111111  us-east-1       databases      19     11      7     1   57.9%     3         2
+  111111111111  us-west-2       databases       1      1      0     0    100%     0         0
+  222222222222  ap-south-1      databases       3      2      1     0   66.7%     0         0
+  111111111111  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
+  222222222222  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
+  111111111111  ap-northeast-1  empty           0      0      0     0       -     0         0
+  111111111111  ap-south-1      empty           0      0      0     0       -     0         0
+  111111111111  ap-southeast-1  empty           0      0      0     0       -     0         0
+  111111111111  ap-southeast-2  empty           0      0      0     0       -     0         0
+  111111111111  eu-central-1    empty           0      0      0     0       -     0         0
+  111111111111  eu-north-1      empty           0      0      0     0       -     0         0
+  111111111111  eu-west-1       empty           0      0      0     0       -     0         0
+  111111111111  eu-west-2       empty           0      0      0     0       -     0         0
+  111111111111  sa-east-1       empty           0      0      0     0       -     0         0
+  111111111111  us-east-2       empty           0      0      0     0       -     0         0
+  111111111111  us-west-1       empty           0      0      0     0       -     0         0
+  222222222222  ap-northeast-1  empty           0      0      0     0       -     0         0
+  222222222222  ap-southeast-1  empty           0      0      0     0       -     0         0
+  222222222222  ap-southeast-2  empty           0      0      0     0       -     0         0
+  222222222222  eu-central-1    empty           0      0      0     0       -     0         0
+  222222222222  eu-north-1      empty           0      0      0     0       -     0         0
+  222222222222  eu-west-1       empty           0      0      0     0       -     0         0
+  222222222222  eu-west-2       empty           0      0      0     0       -     0         0
+  222222222222  sa-east-1       empty           0      0      0     0       -     0         0
+  222222222222  us-east-1       empty           0      0      0     0       -     0         0
+  222222222222  us-east-2       empty           0      0      0     0       -     0         0
+  222222222222  us-west-1       empty           0      0      0     0       -     0         0
+  222222222222  us-west-2       empty           0      0      0     0       -     0         0
+  ALL           All regions                    23     14      8     1   60.9%     3         2
 
 TOP 10 MOST BEHIND
     7 behind  dev-aurora-pg15                 aurora-postgresql     15.4                                -> 15.13                               NON-COMPLIANT  (ap-south-1)
@@ -55,22 +90,23 @@ TOP 10 MOST BEHIND
   NON-COMPLIANT      5  shop-aurora-mysql               aurora-cluster   8.0.mysql_aurora.3.05.2             8.0.mysql_aurora.3.10.0             mixed     0  us-east-1      -
   COMPLIANT          1  cms-aurora-mysql                aurora-cluster   8.0.mysql_aurora.3.09.0             8.0.mysql_aurora.3.10.0             true      0  us-east-1      -
 
-=== aurora-postgresql: 7 (compliant 3, non-compliant 3, unknown 1) ===
+=== aurora-postgresql: 8 (compliant 4, non-compliant 3, unknown 1) ===
   STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
   NON-COMPLIANT      7  dev-aurora-pg15                 aurora-cluster   15.4                                15.13                               true      0  ap-south-1     -
   NON-COMPLIANT      6  legacy-aurora-pg12              aurora-cluster   12.15                               12.22                               true      0  us-east-1      past standard support (Extended Support charges)
   NON-COMPLIANT      3  reports-aurora-pg14             aurora-cluster   14.12                               14.17                               false     0  us-east-1      -
   UNKNOWN            -  old-aurora-pg11                 aurora-cluster   11.9                                -                                   true      0  us-east-1      past standard support (Extended Support charges); current version not returned (deprecated?)
   COMPLIANT          2  crm-aurora-pg15                 aurora-cluster   15.10                               15.13                               true      0  us-east-1      -
+  COMPLIANT          2  dr-aurora-pg15                  aurora-cluster   15.10                               15.13                               unknown   0  us-west-2      -
   COMPLIANT          2  orders-aurora-pg15              aurora-cluster   15.8                                15.12                               true      2  us-east-1      -
-      pending: system-update on cluster (auto-apply 2026-11-01, forced 2026-12-01) - Upgrade to Aurora PostgreSQL 15.8.1 patch [auto-apply 2026-11-02 01:30 IST]
+      pending: system-update on cluster (auto-apply 2026-11-13, forced 2026-12-13) - Upgrade to Aurora PostgreSQL 15.8.1 patch [auto-apply 2026-11-14 01:30 IST]
       pending: os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available
   COMPLIANT          0  pay-aurora-pg16                 aurora-cluster   16.9                                16.9                                true      0  us-east-1      -
 
 === docdb: 1 (compliant 1, non-compliant 0, unknown 0) ===
   STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
   COMPLIANT          0  catalog-docdb                   docdb-cluster    5.0.0                               5.0.0                               true      1  us-east-1      -
-      pending: system-update on member catalog-docdb-2 (auto-apply 2026-11-14, forced 2026-12-14) - Upgrades to the DocumentDB engine [auto-apply 2026-11-15 01:30 IST]
+      pending: system-update on member catalog-docdb-2 (auto-apply 2026-11-26, forced 2026-12-26) - Upgrades to the DocumentDB engine [auto-apply 2026-11-27 01:30 IST]
 
 === mariadb: 1 (compliant 1, non-compliant 0, unknown 0) ===
   STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
@@ -79,7 +115,7 @@ TOP 10 MOST BEHIND
 === mysql: 2 (compliant 1, non-compliant 1, unknown 0) ===
   STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
   NON-COMPLIANT      6  inv-mysql                       instance         8.0.36                              8.0.43                              false     2  us-east-1      standard support ends in 169 days
-      pending: db-upgrade (auto-apply 2026-10-25) - Automatic minor version upgrade to 8.0.40 [auto-apply 2026-10-26 01:30 IST]
+      pending: db-upgrade (auto-apply 2026-11-06) - Automatic minor version upgrade to 8.0.40 [auto-apply 2026-11-07 01:30 IST]
       pending: os-upgrade (no date, optional) - New Operating System update is available; it includes sec...
   COMPLIANT          0  app-mysql84                     instance         8.4.6                               8.4.6                               true      0  us-east-1      -
 
@@ -103,5 +139,11 @@ TOP 10 MOST BEHIND
   STATUS        BEHIND  IDENTIFIER                      TYPE             CURRENT                             LATEST MINOR                        AUTO   PEND  REGION         FLAGS
   NON-COMPLIANT      3  hr-sql                          instance         15.00.4410.1.v1                     15.00.4430.1.v1                     true      0  us-east-1      unknown (AWS lists no lifecycle dates for sqlserver-se 15.00)
   COMPLIANT          1  erp-sql                         instance         16.00.4175.1.v1                     16.00.4185.3.v1                     true      0  us-east-1      unknown (AWS lists no lifecycle dates for sqlserver-se 16.00)
+
+ERRORS
+  prod/ca-central-1: rds describe-db-instances (discovery probe): An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::111111111111:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy (region scanned in full anyway)
+  prod/ca-central-1: rds describe-db-instances: An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::111111111111:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy
+  nonprod/ca-central-1: rds describe-db-instances (discovery probe): An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::222222222222:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy (region scanned in full anyway)
+  nonprod/ca-central-1: rds describe-db-instances: An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::222222222222:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy
 
 Upgrade commands (printed only, never run) are in the CSV / HTML / JSON output.

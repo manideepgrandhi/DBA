@@ -118,7 +118,7 @@ vce oracle-ee "${O}2026-10.mrp-2026-10.r1" 1 "${O}2026-07.mrp-2026-07.r10"
 
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.1\.1'
+t version 0 fleet --version;         has version out '1\.2\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -268,9 +268,9 @@ t noregion 2 fleet -P prod
 echo "== output files"
 t files 0 fleet "${P2[@]}" -F csv,html,txt,json -o "$OUT/rep" -T Environment,Owner
 mapfile -t F < <(find "$OUT/rep" -type f | sort)
-chk "4 files written" test "${#F[@]}" -eq 4
+chk "5 files written (txt, html, json, csv, regions csv)" test "${#F[@]}" -eq 5
 chk "files are 0640" test "$(stat -c %a "${F[@]}" | sort -u)" = 640
-CSV="$(find "$OUT/rep" -name '*.csv')"; HTML="$(find "$OUT/rep" -name '*.html')"; TXT="$(find "$OUT/rep" -name '*.txt')"
+CSV="$(find "$OUT/rep" -name '*.csv' ! -name '*_regions.csv')"; HTML="$(find "$OUT/rep" -name '*.html')"; TXT="$(find "$OUT/rep" -name '*.txt')"
 chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","default_auto_upgrade_target","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions_count","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note"'
 chk "csv rows = 22" test "$(python3 -c 'import csv,sys; print(sum(1 for _ in csv.reader(open(sys.argv[1])))-1)' "$CSV")" -eq 22
 chk "csv parses with 28 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{28}"
@@ -281,11 +281,124 @@ chk "html is well-formed enough (python html.parser)" python3 -c 'import html.pa
 for p in '^SUMMARY' '^PER ENGINE / MAJOR VERSION' '^TOP 10 MOST BEHIND' '^=== aurora-postgresql: 7' '59.1% compliant' 'past standard support' 'Pending maint\.   : on 3 server\(s\): os-upgrade 2, system-update 2, db-upgrade 1' '^      pending: os-upgrade on member orders-pg15-2'; do
     if grep -qE -- "$p" "$TXT"; then ok "txt has /$p/"; else bad "txt lacks /$p/"; fi
 done
-chk "summary is at the top of the txt" test "$(grep -n '^SUMMARY' "$TXT" | cut -d: -f1)" -lt 8
+chk "summary is at the top of the txt" test "$(grep -n '^SUMMARY' "$TXT" | cut -d: -f1)" -lt 10
 t notags 0 fleet -P prod -r us-east-1 -F csv -T ''
 chk "-T '' -> no tag columns" bash -c "! head -1 '$OUT/notags.out' | grep -q tag:"
 t logf 0 fleet -P prod -r us-east-1 -l "$OUT/run.log"
 chk "log file has timestamped lines" grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} \[INFO\]' "$OUT/run.log"
+
+echo "== region discovery (-A) and region-wise breakdown (MOCK_SCENARIO=discover: 14 regions)"
+# prod: us-east-1 = fleet, us-west-2 = one headless Aurora cluster only, ca-central-1 = describe-db-instances AccessDenied (SCP)
+api_calls() { jq -c 'select(.[0] == "--output")' "$MOCK_LOG" | wc -l; }   # AWS API calls (not `aws --version` / `aws configure get`)
+probes() { jq -c 'select(index("--query"))' "$MOCK_LOG" | wc -l; }
+full_regions() { jq -r 'select(index("describe-db-instances") and (index("--query") | not)) | .[index("--region") + 1]' "$MOCK_LOG" | sort -u | paste -sd, -; }
+: >"$MOCK_LOG"
+t disc 0 discover -P prod -A -F json
+jqt disc '.summary.region_overview | .mode == "discover" and .probe_parallel == 8 and .checked == 14 and .with_databases == 2 and .empty == 11 and .error == 1'
+jqt disc '[.summary.regions[] | select(.status == "empty") | .region] == ["ap-northeast-1","ap-south-1","ap-southeast-1","ap-southeast-2","eu-central-1","eu-north-1","eu-west-1","eu-west-2","sa-east-1","us-east-2","us-west-1"]'
+jqt disc '[.summary.regions[] | select(.status == "empty") | .total + .compliant + .non_compliant + .unknown + .with_pending] | add == 0'
+chk "disc: 28 probes (2 per enabled region)" test "$(probes)" -eq 28
+chk "disc: full scan only where databases or a probe error ($(full_regions))" test "$(full_regions)" == "ca-central-1,us-east-1,us-west-2"
+chk "disc: no pending-maintenance call in an empty region" test "$(jq -c 'select(index("describe-pending-maintenance-actions")) | select(index("eu-west-1") or index("us-east-2"))' "$MOCK_LOG" | wc -l)" -eq 0
+jqt disc '.summary.regions[] | select(.region == "us-west-2") | .status == "databases" and .total == 1 and .compliant == 1 and .probe_instances == 0 and .probe_clusters == 1'
+rowt disc dr-aurora-pg15 '.region == "us-west-2" and .resource_type == "aurora-cluster" and .member_count == 0'
+jqt disc '.summary.regions[] | select(.region == "ca-central-1") | .status == "error" and .probe_instances == null and .probe_clusters == 0 and .errors >= 1'
+jqt disc '[.errors[] | select(.region == "ca-central-1" and .call == "rds describe-db-instances (discovery probe)" and (.message | test("AccessDenied")) and (.message | test("scanned in full anyway")))] | length == 1'
+jqt disc '.meta.aws_failures >= 1'
+chk "disc: aws_calls (incl. probes) = calls made ($(jq .meta.aws_calls "$OUT/disc.out") vs $(api_calls))" test "$(jq .meta.aws_calls "$OUT/disc.out")" -eq "$(api_calls)"
+jqt disc '.meta.regions | length == 14'
+echo "-- breakdown totals = overall totals"
+jqt disc '.summary as $s | [$s.regions[].total] | add == $s.total'
+jqt disc '.summary as $s | ([$s.regions[].compliant] | add) == $s.compliant and ([$s.regions[].non_compliant] | add) == $s.non_compliant and ([$s.regions[].unknown] | add) == $s.unknown and ([$s.regions[].with_pending] | add) == $s.with_pending'
+jqt disc '.summary as $s | $s.regions_total | .region == "All regions" and .total == $s.total and .compliant == $s.compliant and .non_compliant == $s.non_compliant and .unknown == $s.unknown and .pct_compliant == $s.pct_compliant and .with_pending == $s.with_pending'
+jqt disc '.summary.regions[] | select(.region == "us-east-1") | .total == 19 and .compliant == 11 and .non_compliant == 7 and .unknown == 1 and .pct_compliant == 57.9 and .with_pending == 3'
+jqt disc '.summary as $s | [.rows[] | select(.region == "us-east-1")] | length == ($s.regions[] | select(.region == "us-east-1") | .total)'
+t disc_txt 0 discover -P prod -A
+has disc_txt out '^Regions  : 14 checked, 2 with databases, 11 empty, 1 error \(discovery probe, 8 in parallel'
+has disc_txt out '^Empty    : ap-northeast-1, ap-south-1, .*us-west-1$'
+has disc_txt out '^Accounts : 111111111111 \(prod\)   Regions: ca-central-1, us-east-1, us-west-2 \(of 14 enabled\)'
+has disc_txt out '^PER REGION'
+has disc_txt out '^  111111111111  us-east-1       databases      19     11      7     1   57\.9%     3'
+has disc_txt out '^  111111111111  ca-central-1    error           0 .* see ERRORS \(no data\)'
+has disc_txt out '^  111111111111  eu-west-1       empty           0      0      0     0       -'
+has disc_txt out '^  ALL           All regions                    20     12      7     1     60%     3'
+has disc_txt out 'ca-central-1: rds describe-db-instances \(discovery probe\): .*AccessDenied'
+has disc_txt err 'discovery: probing 14 region\(s\), 8 at a time'
+t disc_files 0 discover -P prod -A -F csv,html -o "$OUT/disc"
+RCSV="$(find "$OUT/disc" -name '*_regions.csv')"; RHTML="$(find "$OUT/disc" -name '*.html')"
+chk "regions csv written" test -s "$RCSV"
+chk "regions csv: header + 14 regions + All regions" test "$(wc -l <"$RCSV")" -eq 16
+chk "regions csv: empty regions as 0 rows" grep -q '^"111111111111","prod","eu-north-1","empty",0,0,0,0,"",0,0,0,0,0,0$' "$RCSV"
+chk "regions csv: All regions row" grep -q '^"ALL","","All regions","",20,12,7,1,60,3,5,2,2,"",""$' "$RCSV"
+chk "regions csv parses with 15 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$RCSV")" == "{15}"
+chk "html: sortable region table" grep -q '<table class="sortable regions"><thead><tr><th>Account</th><th>Region</th><th>Status</th><th>Total</th>' "$RHTML"
+chk "html: All regions total row in tfoot" grep -q '<tfoot><tr><td><b>All regions</b></td>' "$RHTML"
+chk "html: colour-coded % compliant" grep -q 'class="n bad" data-s="57.9">57.9%<div class="bar"><i class="bad"' "$RHTML"
+chk "html: empty regions collapsible" grep -q '<details class="empty"><summary>11 empty region(s)' "$RHTML"
+chk "html: header region line" grep -q 'regions 14 checked, 2 with databases, 11 empty, 1 error' "$RHTML"
+chk "html: sort script covers the region table" grep -q "querySelectorAll('table.main,table.sortable')" "$RHTML"
+echo "-- --no-discover / config / explicit -r"
+: >"$MOCK_LOG"
+t nodisc 0 discover -P prod -A --no-discover -F json
+chk "nodisc: no probe" test "$(probes)" -eq 0
+chk "nodisc: every enabled region scanned in full" test "$(jq -r 'select(index("describe-db-instances")) | .[index("--region") + 1]' "$MOCK_LOG" | sort -u | wc -l)" -eq 14
+jqt nodisc '.summary.region_overview | .mode == "full" and .checked == 14 and .with_databases == 2 and .empty == 11 and .error == 1'
+jqt nodisc '.meta.region_discovery.probe_parallel == null and ([.meta.region_status[].status] | unique) == ["scanned"]'
+jqt nodisc '.summary.total == 20 and .summary.compliant == 12'
+chk "nodisc: same rows as with discovery" test "$(jq -c '[.rows[] | [.account_id, .region, .identifier, .compliance_status]] | sort' "$OUT/nodisc.out")" == "$(jq -c '[.rows[] | [.account_id, .region, .identifier, .compliance_status]] | sort' "$OUT/disc.out")"
+printf 'profiles = prod\nall_regions = yes\ndiscover = no\nformat = json\n' >"$OUT/nd.conf"
+: >"$MOCK_LOG"
+t nodisc_conf 0 discover --config "$OUT/nd.conf"
+chk "discover = no in config: no probe" test "$(probes)" -eq 0
+jqt nodisc_conf '.summary.region_overview.mode == "full"'
+: >"$MOCK_LOG"
+t disc_r 0 discover -P prod -r us-east-1,us-west-2,eu-west-1 -F json
+chk "-r: no probe" test "$(probes)" -eq 0
+chk "-r: only the named regions" test "$(full_regions)" == "eu-west-1,us-east-1,us-west-2"
+jqt disc_r '.summary.region_overview | .mode == "explicit" and .checked == 3 and .with_databases == 2 and .empty == 1 and .error == 0'
+t disc_r_txt 0 discover -P prod -r us-east-1,us-west-2
+has disc_r_txt out '^Regions  : 2 checked, 2 with databases, 0 empty, 0 errors \(queried directly, no probe\)'
+t badpp 1 discover -P prod -A --probe-parallel 0;   has badpp err 'probe-parallel'
+t badpp2 1 discover -P prod -A --probe-parallel 33
+echo "-- parallel probes"
+: >"$MOCK_LOG"; rm -f "$OUT/timing.jsonl"
+SECONDS=0
+MOCK_PROBE_DELAY=0.6 MOCK_TIMING="$OUT/timing.jsonl" t par 0 discover -P prod -A --probe-parallel 4 -F json
+PAR_S=$SECONDS
+MAXC="$(python3 - "$OUT/timing.jsonl" <<'PY'
+import json, sys
+ev = sorted([(a, 1) for a, b, *_ in map(json.loads, open(sys.argv[1]))] + [(b, -1) for a, b, *_ in map(json.loads, open(sys.argv[1]))], key=lambda e: (e[0], e[1]))
+c = m = 0
+for _, d in ev: c += d; m = max(m, c)
+print(m)
+PY
+)"
+chk "par: 27 probe calls timed (the 28th, ca-central-1 instances, is denied before the delay)" test "$(wc -l <"$OUT/timing.jsonl")" -eq 27
+chk "par: probes ran in parallel, at most 4 at a time (max concurrent = $MAXC)" test "$MAXC" -ge 2 -a "$MAXC" -le 4
+chk "par: faster than serial (28 x 0.6s = 16.8s; took ${PAR_S}s)" test "$PAR_S" -lt 14
+chk "par: same breakdown as default parallelism" test "$(jq -c '.summary.regions' "$OUT/par.out")" == "$(jq -c '.summary.regions' "$OUT/disc.out")"
+chk "par: aws_calls (incl. probes) = calls made" test "$(jq .meta.aws_calls "$OUT/par.out")" -eq "$(api_calls)"
+t ser 0 discover -P prod -A --probe-parallel 1 -F json
+chk "ser: --probe-parallel 1 gives the same breakdown" test "$(jq -c '.summary.regions' "$OUT/ser.out")" == "$(jq -c '.summary.regions' "$OUT/disc.out")"
+echo "-- multi-account + other scenarios"
+t disc2 0 discover -P prod,nonprod -A -F json
+jqt disc2 '.summary.region_overview | .checked == 28 and .with_databases + .empty + .error == 28'
+jqt disc2 '.summary as $s | ([$s.regions[].total] | add) == $s.total and $s.regions_total.total == $s.total'
+jqt disc2 '[.summary.regions[] | select(.status == "databases") | "\(.account_id)/\(.region)"] | sort == ["111111111111/us-east-1","111111111111/us-west-2","222222222222/ap-south-1"]'
+t disc2_txt 0 discover -P prod,nonprod -A
+has disc2_txt out '^Empty    : 111111111111: ap-northeast-1, .*; 222222222222: '
+t ad_disc 0 accessdenied -P prod -A -F json
+jqt ad_disc '.summary.regions[] | select(.region == "eu-west-1") | .status == "error"'
+jqt ad_disc '[.errors[] | select(.region == "eu-west-1" and .call == "rds describe-db-clusters (discovery probe)")] | length == 1'
+: >"$MOCK_LOG"
+t disc_dry 0 discover -P prod -A --dry-run
+has disc_dry out 'discovery probe, every enabled region, 8 at a time \(2 calls per region\)'
+has disc_dry out 'rds describe-db-instances --max-records 20 --query length.?\(DBInstances.?\) --no-paginate'
+has disc_dry out 'rds describe-db-clusters --max-records 20 --query length.?\(DBClusters.?\) --no-paginate'
+has disc_dry out 'full scan, only regions where a probe found'
+chk "disc_dry: no AWS calls" test ! -s "$MOCK_LOG"
+t nodisc_dry 0 discover -P prod -A --no-discover --dry-run;  hasnt nodisc_dry out 'length\(DBInstances\)'
+t r_dry 0 discover -P prod -r us-east-1 --dry-run;           hasnt r_dry out 'length\(DBInstances\)'
 
 echo "== large fleet (ARG_MAX safety)"
 SECONDS=0

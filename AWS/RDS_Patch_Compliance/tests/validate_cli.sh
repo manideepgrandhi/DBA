@@ -9,6 +9,9 @@
 #     The replayed calls include describe-db-engine-versions --engine E --engine-version V for every engine.
 #  5. pagination end-to-end: the real CLI, with the script's exact options, against a local fake endpoint that
 #     pages every list with Marker; the report must contain everything.
+#  6. region discovery end-to-end: -A through the real CLI against the same fake endpoint (region-aware):
+#     each probe is ONE request (MaxRecords 20, no Marker), a probe AccessDenied is an error region that is
+#     still scanned in full, empty regions get no full scan, and the region breakdown adds up.
 # Guard: fake credentials, AWS_CONFIG_FILE=/dev/null, every real-CLI call gets a 127.0.0.1 --endpoint-url,
 # and a wrapper refuses any call without one.
 set -uo pipefail
@@ -30,7 +33,8 @@ real() {   # guard: the real CLI only ever runs with a loopback endpoint (or for
 }
 
 for s in "fleet -P prod,nonprod -r us-east-1,ap-south-1,eu-west-1" "fleet -P nonprod --all-regions" \
-         "lookupfail -P prod -r us-east-1" "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "oracle -P prod -r us-east-1"; do
+         "lookupfail -P prod -r us-east-1" "accessdenied -P prod -r eu-west-1" "fleet -P prod,broken -r us-east-1" "oracle -P prod -r us-east-1" \
+         "discover -P prod --all-regions" "discover -P prod --all-regions --no-discover"; do
     read -r scen args <<<"$s"
     # shellcheck disable=SC2086
     MOCK_SCENARIO="$scen" PATH="$HERE/mock:$PATH" "$S" $args -F json >/dev/null 2>&1
@@ -69,12 +73,15 @@ done
 neg=0
 for bad in "rds describe-db-clusters --bogus-opt x" "rds describe-db-engine-versions --engine-versoin 16.8" \
            "rds describe-db-major-engine-versions --major-engine-versoin 16" "neptune describe-db-engine-versions --engine" \
-           "docdb describe-db-engine-versions --max-records abc" "rds describe-db-instances --filters Nme=x"; do
+           "docdb describe-db-engine-versions --max-records abc" "rds describe-db-instances --filters Nme=x" \
+           "rds describe-db-instances --max-records 20 --query length(DBInstances --no-paginate"; do
     # shellcheck disable=SC2086
     run_real --output json --region us-east-1 $bad
     if [[ "$OUTP" != *"Could not connect"* && "$RC" -ne 0 ]]; then neg=$((neg + 1)); else echo "NEGATIVE CONTROL NOT REJECTED: $bad"; fail=$((fail + 1)); fi
 done
-echo "negative control rejected: $neg/6"
+echo "negative control rejected: $neg/7"
+nprobe="$(jq -c 'select(index("--query"))' "$OUT/uniq.jsonl" | wc -l)"
+if (( nprobe >= 2 )); then echo "discovery probe command lines replayed: $nprobe"; else echo "DISCOVERY PROBES NOT REPLAYED"; fail=$((fail + 1)); fi
 real rds describe-db-clusters --region us-east-1 >/dev/null 2>&1; grc=$?
 if [[ "$grc" == 99 ]]; then echo "guard: real call without loopback endpoint refused"; else echo "GUARD FAILED (rc=$grc)"; fail=$((fail + 1)); fi
 
@@ -132,7 +139,7 @@ cat >"$OUT/realbin/aws" <<WRAP
 #!/usr/bin/env bash
 # real AWS CLI, every service call redirected to the local fake endpoint
 case " \$* " in *" configure "*|*" --version "*) exec "$REAL_AWS" "\$@" ;; esac
-exec "$REAL_AWS" "\$@" --endpoint-url "http://127.0.0.1:$(cat "$OUT/fport")"
+exec "$REAL_AWS" "\$@" --endpoint-url "http://127.0.0.1:\$(cat "$OUT/fport")"
 WRAP
 chmod +x "$OUT/realbin/aws"
 PATH="$OUT/realbin:$PATH" "$S" -r us-east-1 -F json >"$OUT/pag.json" 2>"$OUT/pag.err"; prc=$?
@@ -159,6 +166,31 @@ if (( pg_ok )) && [[ "$prc" == 0 ]]; then
     echo "pagination: OK (real CLI followed every Marker page; report has all 230 servers/clusters, rc=$prc)"
 else
     echo "pagination: FAIL (rc=$prc)"; tail -5 "$OUT/pag.err"; fail=$((fail + 1))
+fi
+# 6. region discovery end-to-end through the real CLI: -A against the region-aware fake endpoint
+: >"$OUT/dreq.jsonl"; rm -f "$OUT/fport"
+python3 "$HERE/fake_rds_endpoint.py" "$OUT/fport" "$OUT/dreq.jsonl" &
+FAKE=$!
+for _ in $(seq 50); do [[ -s "$OUT/fport" ]] && break; sleep 0.1; done
+PATH="$OUT/realbin:$PATH" "$S" -A --probe-parallel 3 -F json >"$OUT/disc.json" 2>"$OUT/disc.err"; drc=$?
+cp "$OUT/dreq.jsonl" "$OUT/dreq1.jsonl"   # requests of the first (json) run only
+PATH="$OUT/realbin:$PATH" "$S" -A >"$OUT/disc.txt" 2>/dev/null
+kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null
+dsum="$(jq -sc '[.[] | select(.max_records == "20")] | group_by(.action) | map({key: .[0].action, value: {probes: length, regions: (map(.region) | unique), paged: (map(select(.marker != null)) | length)}}) | from_entries' "$OUT/dreq1.jsonl")"
+echo "discovery probes seen by the fake endpoint: $dsum"
+d_ok=1
+jq -e '.DescribeDBInstances.probes == 5 and .DescribeDBClusters.probes == 5 and .DescribeDBInstances.paged == 0 and .DescribeDBClusters.paged == 0' <<<"$dsum" >/dev/null || d_ok=0
+jq -e '.summary.region_overview | .checked == 5 and .with_databases == 2 and .empty == 2 and .error == 1' "$OUT/disc.json" >/dev/null 2>&1 || d_ok=0
+jq -e '(.summary.regions | map({key: .region, value: [.status, .probe_instances, .probe_clusters, .total]}) | from_entries)
+       == {"us-east-1": ["databases", 20, 20, 230], "us-west-2": ["databases", 0, 1, 1], "eu-west-1": ["error", null, 0, 0], "ap-south-1": ["empty", 0, 0, 0], "ca-central-1": ["empty", 0, 0, 0]}
+       and .summary.total == 231 and .summary.regions_total.total == 231
+       and ([.errors[] | select(.region == "eu-west-1" and .call == "rds describe-db-instances (discovery probe)" and (.message | test("AccessDenied")))] | length == 1)' "$OUT/disc.json" >/dev/null 2>&1 || d_ok=0
+[[ "$(jq -sc '[.[] | select(.max_records == null and (.action == "DescribeDBInstances" or .action == "DescribeDBClusters")) | .region] | unique' "$OUT/dreq1.jsonl")" == '["eu-west-1","us-east-1","us-west-2"]' ]] || d_ok=0
+grep -q '^Regions  : 5 checked, 2 with databases, 2 empty, 1 error' "$OUT/disc.txt" || d_ok=0
+if (( d_ok )) && [[ "$drc" == 0 ]]; then
+    echo "discovery via real CLI: OK (1 request per probe even with 230 instances; probe AccessDenied -> error; full scan only in us-east-1, us-west-2, eu-west-1)"
+else
+    echo "discovery via real CLI: FAIL (rc=$drc)"; tail -5 "$OUT/disc.err"; jq -c '.summary.region_overview, [.summary.regions[] | [.region,.status,.probe_instances,.probe_clusters,.total]]' "$OUT/disc.json" 2>/dev/null; fail=$((fail + 1))
 fi
 echo "validate_cli: $( (( fail == 0 )) && echo PASS || echo "FAIL ($fail)")"
 (( fail == 0 ))

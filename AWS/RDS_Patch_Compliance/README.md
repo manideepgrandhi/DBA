@@ -12,11 +12,11 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
   * DocumentDB and Neptune clusters: per cluster.
   * Standalone RDS instances: `postgres`, `mysql`, `mariadb`, `sqlserver-ee/se/ex/web`, `oracle-ee/se2/ee-cdb/se2-cdb`. Judged **per instance** (read replicas are their own rows).
   * Instances that belong to a cluster are not separate rows. Other engines (e.g. RDS Custom, Db2) are ignored.
-* **Strictly read-only.** Calls: `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), `rds describe-db-clusters`, `rds describe-db-instances`, `rds describe-pending-maintenance-actions`, `rds|docdb|neptune describe-db-engine-versions --engine E --engine-version V` and `rds describe-db-major-engine-versions`. The `upgrade_command` column is **printed only**, never run.
+* **Strictly read-only.** Calls: `sts get-caller-identity`, `ec2 describe-regions` (only for `--all-regions`), the `--all-regions` discovery probe (`rds describe-db-instances` / `describe-db-clusters --max-records 20 --query length(...) --no-paginate`), `rds describe-db-clusters`, `rds describe-db-instances`, `rds describe-pending-maintenance-actions`, `rds|docdb|neptune describe-db-engine-versions --engine E --engine-version V` and `rds describe-db-major-engine-versions`. The `upgrade_command` column is **printed only**, never run.
 * **Requirements:** Bash 4.4+, AWS CLI v2 (2.15+ recommended, for `describe-db-major-engine-versions`), jq 1.6+. Keep `lib/compliance.jq` next to the script. curl and mail/mailx/sendmail only for the optional alerts.
 * **Siblings:** [RDS_Pending_Maintenance](../RDS_Pending_Maintenance/README.md) shows *what maintenance is pending and when*; [RDS_Patch_Runner](../RDS_Patch_Runner/README.md) *applies* it to one cluster safely. This tool answers *how far behind are we on minor versions*.
 
-![HTML report: summary cards, per-engine/major table and most-behind list](docs/sample_report_html.png)
+![HTML report: summary cards, region breakdown, per-engine/major table and most-behind list](docs/sample_report_html.png)
 
 ![HTML detail rows: valid minor targets, auto-upgrade default and the pending-maintenance badge expanded](docs/sample_report_pending.png)
 
@@ -29,13 +29,54 @@ A **read-only** patch compliance report for AWS databases. For every Aurora clus
 ./rds_patch_compliance_summary.sh -P prod --all-regions -F txt,html,csv -o ~/compliance  # files (+ txt on screen)
 ```
 
-Options: `-P` (repeatable), `-r` / `--all-regions`, `-e`, `-i`, `--max-behind N` (default 2: NON-COMPLIANT when versions_behind > 2, i.e. 3 or more), `--warn-days`, `--oracle-any-patch-line`, `-F txt,html,csv` (default txt to the screen; html / csv / several formats need `-o`), `--prefix`, `--fail-on-noncompliant` (exit 5), `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-from`, `-v`.
+Options: `-P` (repeatable), `-r` / `--all-regions` (with `--no-discover`, `--probe-parallel N`, see [Regions](#regions-discovery-and-region-wise-breakdown-v120)), `-e`, `-i`, `--max-behind N` (default 2: NON-COMPLIANT when versions_behind > 2, i.e. 3 or more), `--warn-days`, `--oracle-any-patch-line`, `-F txt,html,csv` (default txt to the screen; html / csv / several formats need `-o`), `--prefix`, `--fail-on-noncompliant` (exit 5), `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-from`, `-v`.
 
-Output: header (run time UTC + IST, accounts / regions, the rule), overall totals and % compliant, per engine the major-version breakdown with compliant / non-compliant / unknown and % plus the latest minor per major (Oracle per patch line), key flags as counts (past standard support, support ending within N days, auto minor upgrade off, pending maintenance), then the **NON-COMPLIANT servers** (`!!` lines in txt, red table in HTML; account, region, engine, identifier, current -> latest minor, behind, support flag; most behind first, then name) or `*** All servers compliant ***`, and the UNKNOWN servers with the reason. Compliant servers are not listed. CSV: `<prefix>_<UTC stamp>_noncompliant.csv` (non-compliant rows only) + `<prefix>_<UTC stamp>_summary.csv` (overall, engine, major and flag rows). Exit codes: 0, 1 usage, 2 pre-check / scan failed, 4 output, 5 non-compliant with `--fail-on-noncompliant`.
+Output: header (run time UTC + IST, accounts / regions, the `Regions  : N checked, M with databases, K empty, E errors` line and the empty regions, the rule), overall totals and % compliant, a **per-region** table (regions with databases or an AWS error, plus an All-regions row), per engine the major-version breakdown with compliant / non-compliant / unknown and % plus the latest minor per major (Oracle per patch line), key flags as counts (past standard support, support ending within N days, auto minor upgrade off, pending maintenance), then the **NON-COMPLIANT servers** (`!!` lines in txt, red table in HTML; account, region, engine, identifier, current -> latest minor, behind, support flag; most behind first, then name) or `*** All servers compliant ***`, and the UNKNOWN servers with the reason. Compliant servers are not listed. CSV: `<prefix>_<UTC stamp>_noncompliant.csv` (non-compliant rows only) + `<prefix>_<UTC stamp>_summary.csv` (overall, engine, major and flag rows) + `<prefix>_<UTC stamp>_regions.csv` (one row per account + region, empty regions as 0 rows, plus `ALL`). Exit codes: 0, 1 usage, 2 pre-check / scan failed, 4 output, 5 non-compliant with `--fail-on-noncompliant`.
 
-Samples: [txt](samples/sample_summary.txt), [html](samples/sample_summary.html). Tests: `tests/run_summary_tests.sh` (mock AWS; boundaries 2/3, `--max-behind`, all-compliant, unknown, Oracle, multi-profile, numbers equal to the full report, alerts, shellcheck); `tests/validate_cli.sh` also runs it through the real AWS CLI against the local fake endpoint.
+Samples: [txt](samples/sample_summary.txt), [html](samples/sample_summary.html), [regions csv](samples/sample_summary_regions.csv). Tests: `tests/run_summary_tests.sh` (mock AWS; boundaries 2/3, `--max-behind`, all-compliant, unknown, Oracle, multi-profile, numbers equal to the full report, alerts, shellcheck); `tests/validate_cli.sh` also runs it through the real AWS CLI against the local fake endpoint.
 
 ![Summary HTML](samples/sample_summary.png)
+
+## Regions: discovery and region-wise breakdown (v1.2.0)
+
+**Discovery (`-A` / `--all-regions`).** Most accounts have databases in a few of their ~17 enabled regions. Instead of the full scan (clusters, instances, pending maintenance, version lookups) everywhere, each enabled region is first **probed** with two read-only one-page calls:
+
+```
+aws rds describe-db-instances --max-records 20 --query 'length(DBInstances)' --no-paginate --region R
+aws rds describe-db-clusters  --max-records 20 --query 'length(DBClusters)'  --no-paginate --region R
+```
+
+* Probes run in parallel, `--probe-parallel N` at a time (default 8, 1-32; config `probe_parallel`). Each probe is one request (no pagination), so a region with 500 instances costs the same as an empty one; the probe count is capped at 20.
+* Only regions where a probe found a DB instance or cluster are scanned in full. A cluster-only region (e.g. a headless Aurora global secondary) counts as having databases.
+* **A probe that fails (AccessDenied, SCP deny, throttling, timeout) is an error, never "empty":** it is listed under ERRORS and the region is still scanned in full, so nothing is silently skipped.
+* `--no-discover` (config `discover = no`) scans every enabled region in full, as before v1.2.0. Regions given with `-r` (or the profile default) are always scanned directly, with no probe.
+* `--dry-run` shows the probe commands and the full-scan commands; probes are counted in `aws_calls` (JSON `meta`, log `Result:` line).
+
+**Header.** Text, HTML and the summary show one line plus the empty regions (a collapsible list in HTML):
+
+```
+Accounts : 111111111111 (prod)   Regions: ca-central-1, us-east-1, us-west-2 (of 14 enabled)
+Regions  : 14 checked, 2 with databases, 11 empty, 1 error (discovery probe, 8 in parallel; full scan only where databases or a probe error)
+Empty    : 111111111111: ap-northeast-1, ap-northeast-2, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, eu-west-3, sa-east-1
+```
+
+**Region-wise breakdown.** One row per account + region (status `databases` / `error` / `empty`, total, compliant, non-compliant, unknown, % compliant, servers with pending maintenance, past standard support), then an **All regions** row. Order: regions with databases, then errors, then empty (0 rows); within that most servers first. Everywhere:
+
+* text: `PER REGION` section after `PER ENGINE / MAJOR VERSION`; summary txt: `PER REGION` table (regions with databases or errors; empties on one line).
+* HTML: a sortable, colour-coded table (% compliant bar: green >= 90 %, amber >= 70 %, red below), section `#regions`, linked from the header; a "Regions" summary card.
+* CSV: an extra file `<prefix>_<stamp>_regions.csv` (`account_id, profile, region, status, total, compliant, non_compliant, unknown, pct_compliant, servers_with_pending_maintenance, pending_actions, past_standard_support, aws_errors, probe_instances_max20, probe_clusters_max20`).
+* JSON: `summary.regions[]`, `summary.regions_total`, `summary.region_overview` (`mode`, `probe_parallel`, `checked`, `with_databases`, `empty`, `error`, `empty_regions`); `meta.region_status`, `meta.region_discovery`.
+
+```
+PER REGION (account x region; pending = servers with pending maintenance)
+  ACCOUNT       REGION          STATUS      TOTAL  COMPL  NON-C  UNKN  %COMPL  PEND  PAST-STD
+  111111111111  us-east-1       databases      19     11      7     1   57.9%     3         2
+  111111111111  us-west-2       databases       1      1      0     0    100%     0         0
+  111111111111  ca-central-1    error           0      0      0     0       -     0         0  see ERRORS (no data)
+  111111111111  ap-northeast-1  empty           0      0      0     0       -     0         0
+  ...
+  ALL           All regions                    20     12      7     1     60%     3         2
+```
 
 ## The compliance rule
 
@@ -136,7 +177,7 @@ In the summary table the Oracle "latest minor" is shown per patch line. Sample: 
 
 ### Output files
 
-With `-o DIR` each format is written to `DIR/<prefix>_<YYYYmmdd_HHMMSS>.<csv|html|txt|json>` (box local time, mode 0640); the log prints each absolute path. Without `-o` a single format goes to stdout. Samples: [samples/](samples/) (`sample_report.txt`, `.csv`, `.html`, `.json`, made with the test mock).
+With `-o DIR` each format is written to `DIR/<prefix>_<YYYYmmdd_HHMMSS>.<csv|html|txt|json>` (box local time, mode 0640); `csv` also writes `<prefix>_<YYYYmmdd_HHMMSS>_regions.csv` (region breakdown). The log prints each absolute path. Without `-o` a single format goes to stdout. Samples: [samples/](samples/) (`sample_report.txt`, `.csv`, `_regions.csv`, `.html`, `.json`, made with the test mock: `MOCK_SCENARIO=discover`, `-P prod,nonprod -A`).
 
 **Downloading from CloudShell:** copy the full path from the `Wrote ...` log line, then **Actions > Download file** and paste it, e.g. `/home/cloudshell-user/compliance/rds_patch_compliance_20261015_093000.html`. For several files: `cd ~ && zip -r compliance.zip compliance` and download `/home/cloudshell-user/compliance.zip`.
 
@@ -159,7 +200,8 @@ More in [EXAMPLES.md](EXAMPLES.md). `--help` lists every option.
 | Option | Meaning |
 |---|---|
 | `-P, --profile` | profile(s) / accounts; repeatable or comma-separated |
-| `-r, --region` / `-A, --all-regions` | regions (default: the profile's region) / every enabled region |
+| `-r, --region` / `-A, --all-regions` | regions (default: the profile's region; no probe) / every enabled region, probed first |
+| `--no-discover` / `--probe-parallel N` | with `-A`: scan every region in full / probes at a time (default 8, 1-32) |
 | `-e, --engine GLOB` / `-i, --identifier GLOB` | filters (case-insensitive globs; a cluster also matches by member name) |
 | `--max-behind N` | threshold, default 2 |
 | `--warn-days N` | "support ends soon" window, default 180 |
@@ -175,7 +217,7 @@ More in [EXAMPLES.md](EXAMPLES.md). `--help` lists every option.
 
 ### Exit codes
 
-`0` report produced (also when servers are non-compliant), `5` NON-COMPLIANT found with `--fail-on-noncompliant`, `1` usage, `2` pre-check (aws/jq missing, no profile usable), `4` output error, `130` interrupted. Partial AWS errors (a region denied) are listed under ERRORS in the report; they do not change the exit code.
+`0` report produced (also when servers are non-compliant), `5` NON-COMPLIANT found with `--fail-on-noncompliant`, `1` usage, `2` pre-check (aws/jq missing, no profile usable), `4` output error, `130` interrupted. Partial AWS errors (a region denied, a failed discovery probe) are listed under ERRORS in the report; they do not change the exit code.
 
 ## IAM policy (read-only)
 
@@ -208,11 +250,12 @@ See [rds_patch_compliance_report.conf.example](rds_patch_compliance_report.conf.
 
 No AWS account is used and nothing can reach AWS.
 
-* `tests/run_tests.sh` - 230+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers counting only from ValidUpgradeTarget (the mock's full list differs on purpose), major targets excluded, the default auto-upgrade target, current version not returned, pending-actions text, version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), a 3000-instance fleet (no ARG_MAX issues) and that no file is written into the tool folder. **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
-* `tests/validate_cli.sh` - replays every command line the script issues, and every printed `upgrade_command`, through the **real** AWS CLI v2 with fake credentials and a dead endpoint (`127.0.0.1:9`); checks mock output shapes against `--generate-cli-skeleton output`; and runs the script with the real CLI against a local fake endpoint that pages every list (Marker) to prove pagination. A wrapper refuses any real-CLI call without a loopback endpoint.
+* `tests/run_tests.sh` - 340+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers counting only from ValidUpgradeTarget (the mock's full list differs on purpose), major targets excluded, the default auto-upgrade target, current version not returned, pending-actions text, version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), region discovery (empty regions skipped, cluster-only region, probe AccessDenied scanned anyway, `--no-discover`, `-r` without probe, parallel probes faster than serial with the same result, dry-run, `aws_calls`), the region breakdown adding up to the totals in every format, a 3000-instance fleet (no ARG_MAX issues) and that no file is written into the tool folder. **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
+* `tests/validate_cli.sh` - replays every command line the script issues, and every printed `upgrade_command`, through the **real** AWS CLI v2 with fake credentials and a dead endpoint (`127.0.0.1:9`); checks mock output shapes against `--generate-cli-skeleton output`; and runs the script with the real CLI against a local fake endpoint that pages every list (Marker) to prove pagination, and `-A` against a region-aware fake endpoint to prove each discovery probe is a single request, a denied probe becomes an error region that is still scanned, and only regions with databases get a full scan. A wrapper refuses any real-CLI call without a loopback endpoint.
 
 ## Changelog
 
+* **1.2.0 / summary 1.1.0** - `--all-regions` discovery: per region two parallel one-page probes (`--max-records 20 --query length(...) --no-paginate`, `--probe-parallel`, default 8); full scan only where databases are found; a failed probe is an error and the region is still scanned; `--no-discover` / `discover = no`; `-r` regions are never probed; probes in `--dry-run` and `aws_calls`. Header `Regions  : N checked, M with databases, K empty, E errors` + empty-region list. Region-wise breakdown (account x region + All regions) in text, HTML (sortable, colour-coded), JSON, `*_regions.csv` and the summary script (txt / html / `*_regions.csv`).
 * **summary 1.0.0** - New `rds_patch_compliance_summary.sh` (+ `lib/summary.jq`, `tests/run_summary_tests.sh`): high-level summary and the NON-COMPLIANT servers only; reuses the full report for the scan and all counting.
 * **1.1.1** - Oracle: upgrade targets count only on the SAME patch line as the current version (mrp/rur/plain RU/spb; numeric ru date, line date, rN ordering); other lines are excluded with a note. Fixes `...mrp-2026-07.r1` showing `...spb-2026-07.r1` as latest (console offers `...mrp-2026-07.r2`). Same-major safety net for every engine (a target AWS marks as minor but in another major line is excluded and noted). New `--oracle-any-patch-line` / `oracle_any_patch_line`. JSON rows gain `excluded_targets`, `version_warnings`; meta gains `oracle_any_patch_line`. Shared logic in `lib/versions.jq` (same file in RDS_Pending_Maintenance and RDS_Patch_Runner). Mock scenario `oracle`.
 * **1.1.0** - Counting source is now RDS metadata only: per server `describe-db-engine-versions --engine E --engine-version <current>`, `ValidUpgradeTarget[]` with `IsMajorVersionUpgrade=false` (no more full-list counting or own derivation); new column `default_auto_upgrade_target`; current version not returned → UNKNOWN + deprecated note; cache per engine+version+region; summary latest minor = highest valid target seen. Pending maintenance is now `pending_actions_count` + readable `pending_actions` (action, on cluster / member, auto-apply / forced dates, opt-in status, short description), HTML badge with expandable list and IST tooltip, summary by action type, legend.

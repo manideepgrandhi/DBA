@@ -6,6 +6,8 @@
 profiles = prod,nonprod
 regions = us-east-1,ap-south-1
 # all_regions = yes
+# discover = yes             # with all_regions: probe each region first, full scan only where databases are (no = scan all)
+# probe_parallel = 8         # regions probed at the same time (1-32)
 # engines = aurora-*,postgres,sqlserver-*
 # identifiers = prod-*
 

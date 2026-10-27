@@ -39,7 +39,7 @@ P2=(-P prod,nonprod -r us-east-1,ap-south-1)
 
 echo "== usage"
 t help 0 fleet --help; has help out 'versions_behind > --max-behind'
-t version 0 fleet --version; has version out '1.0.0'
+t version 0 fleet --version; has version out '1.1.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t htmlnoout 1 fleet -r us-east-1 -F html
@@ -93,9 +93,39 @@ has ora out 'mrp: 19.0.0.0.ru-2026-10.mrp-2026-10.r1'
 t ora_any 0 oracle -P prod -r us-east-1 -e 'oracle-*' --max-behind 1 --oracle-any-patch-line
 has ora_any out 'ora-mrp'
 
+echo "== region discovery + region-wise breakdown (MOCK_SCENARIO=discover)"
+probes() { jq -c 'select(index("--query"))' "$MOCK_LOG" | wc -l; }
+: >"$MOCK_LOG"
+t disc 0 discover -P prod -A
+has disc out 'Regions  : 14 checked, 2 with databases, 11 empty, 1 error (discovery probe)'
+has disc out 'PER REGION'
+has disc out '  111111111111  us-east-1           19     11      7     1   57.9%     3'
+has disc out '  111111111111  us-west-2            1      1      0     0    100%     0'
+has disc out '  111111111111  ca-central-1         0      0      0     0       -     0  AWS error - see ERRORS'
+has disc out '  ALL           All regions         20     12      7     1     60%     3'
+has disc out '  Empty (no DB instance / cluster): ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1'
+hasnt disc out '  111111111111  eu-west-1 '
+chk "disc: 28 probes passed through the full report" test "$(probes)" -eq 28
+: >"$MOCK_LOG"
+t nodisc 0 discover -P prod -A --no-discover --probe-parallel 3
+chk "nodisc: --no-discover passed through (no probe)" test "$(probes)" -eq 0
+has nodisc out 'Regions  : 14 checked, 2 with databases, 11 empty, 1 error (all scanned in full, --no-discover)'
+t pp 0 discover -P prod -A --probe-parallel 3 -v;  chk "pp: --probe-parallel passed through" grep -q 'probing 14 region(s), 3 at a time' "$OUT/pp.err"
+t badpp 1 discover -P prod -A --probe-parallel 99
+t rdisc 0 discover -P prod -r us-east-1,eu-west-1
+has rdisc out 'Regions  : 2 checked, 1 with databases, 1 empty, 0 errors'
+t dfiles 0 discover -P prod -A -F html,csv -o "$OUT/dfiles"
+SRC="$(find "$OUT/dfiles" -name '*_regions.csv')"; SH="$(find "$OUT/dfiles" -name '*.html')"
+chk "summary regions csv: header + 14 regions + All regions" test "$(wc -l <"$SRC")" -eq 16
+chk "summary regions csv: totals row" grep -q '^"ALL","","All regions","",20,12,7,1,60,3,5,2$' "$SRC"
+chk "summary regions csv: empty region as 0 row" grep -q '^"111111111111","prod","sa-east-1","empty",0,0,0,0,"",0,0,0$' "$SRC"
+chk "summary html: sortable region table + All regions" grep -q '<table class="sortable"><thead><tr><th>Account</th><th>Region</th>.*<tfoot><tr><td><b>All regions</b>' "$SH"
+chk "summary html: AWS error badge + empty list" grep -q 'ca-central-1</b> <span class="err">AWS error</span>.*<details class="empty"><summary>11 empty region(s)' "$SH"
+chk "summary html: region totals = overall" grep -q '<td><b>All regions</b></td><td></td><td class="n">20</td><td class="n ok">12</td><td class="n bad">7</td><td class="n">1</td><td class="n bad">60%</td>' "$SH"
+
 echo "== outputs"
 t files 0 fleet "${P2[@]}" -F txt,html,csv -o "$OUT/files"
-chk "4 files written (txt, html, summary csv, noncompliant csv)" test "$(find "$OUT/files" -type f | wc -l)" -eq 4
+chk "5 files written (txt, html, summary, noncompliant and regions csv)" test "$(find "$OUT/files" -type f | wc -l)" -eq 5
 has files out 'OVERALL  :'
 H="$(ls "$OUT"/files/*.html)"; cp "$H" "$OUT/h.out"
 has h out 'table class="nc"'; has h out 'Non-compliant servers (8)'; has h out 'Rule:'; has h out '59.1%'

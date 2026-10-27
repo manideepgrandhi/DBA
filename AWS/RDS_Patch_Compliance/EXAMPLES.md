@@ -9,8 +9,15 @@ All examples are read-only. Run them in AWS CloudShell (or anywhere with AWS CLI
 # 2. Two accounts, two regions, every format into ~/compliance
 ./rds_patch_compliance_report.sh -P prod,nonprod -r us-east-1,ap-south-1 -F csv,html,txt,json -o ~/compliance
 
-# 3. Whole estate, every enabled region, HTML only
+# 3. Whole estate, every enabled region, HTML only (regions are probed first; only regions with databases are scanned)
 ./rds_patch_compliance_report.sh -P prod --all-regions -F html -o ~/compliance
+
+# 3a. Same, probing 16 regions at a time; or skip the probe and scan every region in full
+./rds_patch_compliance_report.sh -P prod,nonprod -A --probe-parallel 16 -F html,csv -o ~/compliance   # csv also writes *_regions.csv
+./rds_patch_compliance_report.sh -P prod -A --no-discover
+
+# 3b. See the discovery probes and the full-scan calls without making them
+./rds_patch_compliance_report.sh -P prod -A --dry-run
 
 # 4. Only Aurora PostgreSQL production clusters that need patching
 ./rds_patch_compliance_report.sh -e aurora-postgresql -i 'prod-*' --non-compliant-only
@@ -45,7 +52,6 @@ All examples are read-only. Run them in AWS CloudShell (or anywhere with AWS CLI
 
 # 14. All upgrade commands for one engine, to review (they are NOT run)
 ./rds_patch_compliance_report.sh -e aurora-mysql -F json | jq -r '.rows[].upgrade_command | select(. != "")'
-```
 
 # 15. Pending maintenance per server, readable
 ./rds_patch_compliance_report.sh -F json | jq -r '.rows[] | select(.pending_actions_count > 0) | "\(.identifier): \(.pending_actions)"'
@@ -56,21 +62,31 @@ All examples are read-only. Run them in AWS CloudShell (or anywhere with AWS CLI
 # 17. Check one server's valid minor targets yourself (the exact source the report uses)
 aws rds describe-db-engine-versions --engine aurora-postgresql --engine-version 15.8 --region us-east-1 \
   --query 'DBEngineVersions[].ValidUpgradeTarget[?IsMajorVersionUpgrade==`false`].[EngineVersion,AutoUpgrade]' --output table
+
+# 17a. Region-wise compliance as JSON lines, or only regions below 80 %
+./rds_patch_compliance_report.sh -P prod -A -F json | jq -c '.summary.regions[] | select(.total > 0) | {account_id, region, total, compliant, non_compliant, unknown, pct_compliant}'
+./rds_patch_compliance_report.sh -P prod -A -F json | jq -r '.summary.regions[] | select(.pct_compliant != null and .pct_compliant < 80) | "\(.region) \(.pct_compliant)%"'
+
+# 17b. Which regions are empty / could not be probed
+./rds_patch_compliance_report.sh -P prod -A -F json | jq '.summary.region_overview'
 ```
 
 Sample text summary (from the test mock, see `samples/sample_report.txt`):
 
 ```
-RDS PATCH COMPLIANCE REPORT - 2026-10-15 10:53 UTC (2026-10-15 16:23 IST)
-Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, us-east-1
+RDS PATCH COMPLIANCE REPORT - 2026-10-27 08:52 UTC (2026-10-27 14:22 IST)
+Accounts : 111111111111 (prod), 222222222222 (nonprod)   Regions: ap-south-1, ca-central-1, us-east-1, us-west-2 (of 14 enabled)
 Rule     : COMPLIANT when RDS lists at most 2 valid minor upgrade target(s) for the current version (NON-COMPLIANT = 3+; UNKNOWN = lookup failed or current version not returned)
 Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)
+Regions  : 28 checked, 3 with databases, 23 empty, 2 errors (discovery probe, 8 in parallel; full scan only where databases or a probe error) - per account x region
+Empty    : 111111111111: ap-northeast-1, ap-south-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-2, us-west-1; 222222222222: ap-northeast-1, ap-southeast-1, ap-southeast-2, eu-central-1, eu-north-1, eu-west-1, eu-west-2, sa-east-1, us-east-1, us-east-2, us-west-1, us-west-2
 
 SUMMARY
-  Servers/clusters : 22   COMPLIANT 13   NON-COMPLIANT 8   UNKNOWN 1   -> 59.1% compliant
+  Servers/clusters : 23   COMPLIANT 14   NON-COMPLIANT 8   UNKNOWN 1   -> 60.9% compliant
   Support          : 2 past standard support (Extended Support charges), 2 ending within 180 days
   Pending maint.   : on 3 server(s): os-upgrade 2, system-update 2, db-upgrade 1 (5 action(s))
   Other flags      : auto minor upgrade off 3, current version not returned / deprecated 1
+  AWS errors       : 4 (see ERRORS at the end; affected regions may be missing)
 
 PER ENGINE / MAJOR VERSION
   ENGINE                MAJOR      TOTAL  COMPL  NON-C  UNKN  LATEST MINOR                        SUPPORT
@@ -84,7 +100,7 @@ High-level summary plus the NON-COMPLIANT servers only (same scan and counting r
 # 18. Summary on the screen (txt)
 ./rds_patch_compliance_summary.sh -P prod,nonprod -r us-east-1,ap-south-1
 
-# 19. Summary as txt + one-page HTML + CSVs (non-compliant rows, and a summary CSV) into ~/compliance
+# 19. Summary as txt + one-page HTML + CSVs (non-compliant rows, summary, region breakdown) into ~/compliance
 ./rds_patch_compliance_summary.sh -P prod --all-regions -F txt,html,csv -o ~/compliance
 
 # 20. Only Oracle, stricter rule (non-compliant when 2 or more behind)
