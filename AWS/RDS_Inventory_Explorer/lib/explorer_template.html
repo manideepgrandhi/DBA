@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<meta name="referrer" content="no-referrer">
+<title>RDS Inventory Explorer</title>
+<script>
+/* theme: same "mg-theme" localStorage key as the rest of the site (light | dark | auto) */
+(function () {
+  var pref = 'auto';
+  try { pref = localStorage.getItem('mg-theme') || 'auto'; } catch (e) {}
+  var dark = pref === 'dark' || (pref !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme-pref', pref);
+})();
+</script>
+<style>
+:root{--bg:#f5f7fa;--panel:#fff;--panel2:#f0f3f7;--text:#1c2430;--muted:#5d6b7c;--border:#d8dee6;--accent:#1f6feb;--accent-bg:#e7f0fe;
+--ok:#1a7f37;--ok-bg:#dafbe1;--warn:#9a6700;--warn-bg:#fff4d1;--bad:#cf222e;--bad-bg:#ffebe9;--shadow:0 1px 3px rgba(20,30,50,.08);
+--g:#8250df;--c:#1f6feb;--i:#1a7f37;--m:#57606a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+[data-theme=dark]{--bg:#0d1117;--panel:#161b22;--panel2:#1c232c;--text:#e6edf3;--muted:#8d96a0;--border:#30363d;--accent:#58a6ff;--accent-bg:#13233a;
+--ok:#3fb950;--ok-bg:#12261a;--warn:#d29922;--warn-bg:#2b2210;--bad:#f85149;--bad-bg:#2d1416;--shadow:none;--g:#a371f7;--c:#58a6ff;--i:#3fb950;--m:#8d96a0;}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all}
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:14px 22px 12px}
+.top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+h1{font-size:19px;margin:0;font-weight:650}
+.gen{color:var(--muted);font-size:12.5px}
+.spacer{flex:1}
+button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 11px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+.counts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.chip{background:var(--panel2);border:1px solid var(--border);border-radius:999px;padding:2px 11px;font-size:12.5px;white-space:nowrap}
+.chip b{font-weight:650}
+.chip.err{background:var(--bad-bg);color:var(--bad);border-color:transparent;cursor:pointer}
+.chip.warnc{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 22px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+.search{position:relative;flex:1 1 340px;min-width:260px}
+.search input{width:100%;padding:8px 11px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:7px}
+.search input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:7px 8px;max-width:240px}
+.sugg{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-height:440px;overflow:auto;display:none;z-index:20}
+.sugg.open{display:block}
+.sg{display:flex;gap:10px;align-items:center;padding:7px 11px;cursor:pointer;border-bottom:1px solid var(--border)}
+.sg:last-child{border-bottom:0}
+.sg.active,.sg:hover{background:var(--accent-bg)}
+.sg .nm{font-weight:600}.sg .sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right}
+.sg.none{color:var(--muted);cursor:default}
+main{padding:18px 22px 40px;max-width:1400px;margin:0 auto}
+.badge{display:inline-block;font-size:11px;font-weight:650;letter-spacing:.02em;padding:1px 7px;border-radius:5px;color:#fff;white-space:nowrap}
+.b-global{background:var(--g)}.b-cluster{background:var(--c)}.b-instance{background:var(--i)}.b-member{background:var(--m)}
+.pill{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;font-weight:600}
+.p-ok{background:var(--ok-bg);color:var(--ok)}.p-warn{background:var(--warn-bg);color:var(--warn)}.p-bad{background:var(--bad-bg);color:var(--bad)}.p-mute{background:var(--panel2);color:var(--muted)}
+.muted{color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600;background:var(--panel2);position:sticky;top:0}
+tr:last-child td{border-bottom:0}
+.list tbody tr{cursor:pointer}.list tbody tr:hover{background:var(--accent-bg)}
+.listhead{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}
+.listhead h2{font-size:15px;margin:0}
+.card{padding:0;overflow:hidden}
+.card-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+.card-head h2{margin:0;font-size:20px;word-break:break-all}
+.card-head .meta{color:var(--muted);font-size:13px;margin-top:4px;display:flex;gap:6px 14px;flex-wrap:wrap}
+.actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0}
+.sec td{white-space:nowrap}.sec td code{word-break:normal}.sec td:nth-child(2) ~ td:last-child{white-space:normal}
+.pend td{white-space:normal}.pend td:nth-child(1),.pend td:nth-child(2){white-space:nowrap}
+.sec{padding:14px 20px;border-bottom:1px solid var(--border);border-right:1px solid var(--border)}
+.sec.wide{grid-column:1/-1}
+.sec h3{font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px}
+dl{display:grid;grid-template-columns:minmax(150px,max-content) 1fr;gap:5px 14px;margin:0}
+dt{color:var(--muted)}dd{margin:0;min-width:0;word-break:break-word}
+.sec table th{position:static}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.tag{border:1px solid var(--border);border-radius:6px;padding:1px 7px;font-size:12.5px;background:var(--panel2)}
+.tag .k{color:var(--muted)}
+.back{margin-bottom:12px}
+.errors{margin-top:18px}
+.errors summary{cursor:pointer;padding:10px 14px;font-weight:600;color:var(--bad)}
+.errors table{font-size:12.5px}
+.toast{position:fixed;right:20px;bottom:20px;background:var(--text);color:var(--bg);padding:8px 14px;border-radius:7px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+.scroll{overflow-x:auto}
+@media (max-width:1000px){.sections{grid-template-columns:1fr}}
+@media (max-width:700px){dl{grid-template-columns:1fr}dt{margin-top:6px}}
+</style>
+</head>
+<body>
+<noscript><p style="padding:20px">This report needs JavaScript (no network access is used).</p></noscript>
+<header>
+  <div class="top">
+    <h1>RDS Inventory Explorer</h1>
+    <span class="gen" id="gen"></span>
+    <span class="spacer"></span>
+    <button type="button" id="theme-btn" title="Theme: auto / light / dark"></button>
+  </div>
+  <div class="counts" id="counts"></div>
+</header>
+<div class="toolbar">
+  <div class="search">
+    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search name, endpoint, engine, account, region, tag value…  ( / to focus )" aria-label="Search" aria-autocomplete="list" aria-controls="sugg">
+    <div class="sugg" id="sugg" role="listbox"></div>
+  </div>
+  <select id="f-account" aria-label="Account"></select>
+  <select id="f-region" aria-label="Region"></select>
+  <select id="f-type" aria-label="Type"></select>
+  <select id="f-engine" aria-label="Engine"></select>
+  <button type="button" id="clear">Clear</button>
+</div>
+<main>
+  <div id="view"></div>
+  <div id="errors-wrap"></div>
+</main>
+<footer id="foot"></footer>
+<div class="toast" id="toast"></div>
+<script type="application/json" id="explorer-data">/*__EXPLORER_DATA__*/</script>
+<script>
+(function () {
+  'use strict';
+  var DATA = JSON.parse(document.getElementById('explorer-data').textContent);
+  var R = DATA.resources || [], M = DATA.meta || {}, C = M.counts || {}, ERR = DATA.errors || [];
+  var BY = {}; R.forEach(function (r) { BY[r.id] = r; });
+  var TYPE_LABEL = { global: 'Global cluster', cluster: 'Aurora / Multi-AZ cluster', instance: 'RDS instance', member: 'Cluster member instance' };
+  var BADGE = { global: 'GLOBAL', cluster: 'CLUSTER', instance: 'INSTANCE', member: 'MEMBER' };
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------- DOM helper: text is always set via textContent (no HTML from data) ---------- */
+  function h(tag, attrs) {
+    var el = document.createElement(tag), i;
+    if (attrs) for (var k in attrs) {
+      if (!Object.prototype.hasOwnProperty.call(attrs, k) || attrs[k] == null) continue;
+      if (k === 'text') el.textContent = attrs[k];
+      else if (k === 'cls') el.className = attrs[k];
+      else if (k.slice(0, 2) === 'on') el.addEventListener(k.slice(2), attrs[k]);
+      else el.setAttribute(k, attrs[k]);
+    }
+    function add(x) {
+      if (x == null || x === false) return;
+      if (Array.isArray(x)) { x.forEach(add); return; }
+      el.appendChild(typeof x === 'object' ? x : document.createTextNode(String(x)));
+    }
+    for (i = 2; i < arguments.length; i++) add(arguments[i]);
+    return el;
+  }
+  function dash() { return h('span', { cls: 'muted', text: '—' }); }
+  function v(x) { return (x == null || x === '' || (Array.isArray(x) && !x.length)) ? dash() : String(x); }
+  function mono(x) { return (x == null || x === '') ? dash() : h('code', { text: String(x) }); }
+  function pill(text, kind) { return h('span', { cls: 'pill p-' + kind, text: text }); }
+  function yn(b, goodWhen, warnOnly) {
+    if (b == null) return dash();
+    var good = goodWhen === undefined ? true : goodWhen;
+    return pill(b ? 'Yes' : 'No', b === good ? 'ok' : (warnOnly === false ? 'mute' : 'warn'));
+  }
+  function badge(t) { return h('span', { cls: 'badge b-' + t, text: BADGE[t] || t }); }
+  function hashFor(id) { return '#id=' + encodeURIComponent(id); }
+  function link(id, name, region) {
+    if (id && BY[id]) return h('a', { href: hashFor(id), text: name || BY[id].name, 'data-link': id });
+    return h('span', null, name || '?', h('span', { cls: 'muted', text: ' (' + (region ? region + ', ' : '') + 'not scanned)' }));
+  }
+  function when(w) {
+    if (!w) return dash();
+    var rel = w.days == null ? '' : (w.days > 0 ? 'in ' + w.days + ' d' : w.days === 0 ? 'today' : (-w.days) + ' d ago');
+    return h('span', null, w.utc, h('span', { cls: 'muted', text: '  ·  ' + w.local + (rel ? '  (' + rel + ')' : '') }));
+  }
+  function win(w) { return w ? h('span', null, w.utc, h('span', { cls: 'muted', text: '  ·  ' + w.local })) : dash(); }
+  function list(arr, fn) { if (!arr || !arr.length) return dash(); return h('span', null, arr.map(function (x, i) { return [i ? ', ' : '', fn ? fn(x) : h('code', { text: x })]; })); }
+  function caCell(ca) {
+    if (!ca) return dash();
+    var d = ca.valid_till && ca.valid_till.days, kind = d == null ? 'mute' : d < 0 ? 'bad' : d <= 90 ? 'warn' : 'ok';
+    return h('span', null, h('code', { text: ca.id }), ' ', ca.valid_till ? pill('expires ' + ca.valid_till.utc.slice(0, 10) + (d != null ? ' (' + d + ' d)' : ''), kind) : null);
+  }
+  function statusPill(s) { if (!s) return dash(); return pill(s, s === 'available' ? 'ok' : /fail|incompatible|inaccessible|stopped|storage-full/.test(s) ? 'bad' : 'warn'); }
+  function dl(rows) {
+    var el = h('dl');
+    rows.forEach(function (r) { if (!r) return; el.appendChild(h('dt', { text: r[0] })); el.appendChild(h('dd', null, r[1])); });
+    return el;
+  }
+  function sec(title, body, wide) { return h('section', { cls: 'sec' + (wide ? ' wide' : '') }, h('h3', { text: title }), body); }
+  function table(cols, rows) {
+    return h('div', { cls: 'scroll' }, h('table', null, h('thead', null, h('tr', null, cols.map(function (c) { return h('th', { text: c }); }))),
+      h('tbody', null, rows.map(function (r) { return h('tr', null, r.map(function (c) { return h('td', null, c); })); }))));
+  }
+  function tagsBlock(tags) {
+    if (!tags || !tags.length) return h('span', { cls: 'muted', text: 'No tags' });
+    return h('div', { cls: 'tags' }, tags.map(function (t) { return h('span', { cls: 'tag' }, h('span', { cls: 'k', text: t.k + ' = ' }), t.v); }));
+  }
+  function pendingTable(rows, withResource) {
+    if (!rows.length) return h('span', { cls: 'muted', text: 'No pending maintenance actions' });
+    var cols = (withResource ? ['Resource'] : []).concat(['Action', 'Description', 'Opt-in', 'Auto-applied after', 'Forced apply', 'Current apply']);
+    var t = table(cols, rows.map(function (p) {
+      return (withResource ? [p._res] : []).concat([h('code', { text: p.action }), v(p.description), v(p.opt_in), when(p.auto_applied_after), when(p.forced_apply), when(p.current_apply)]);
+    }));
+    t.classList.add('pend'); return t;
+  }
+  function masterRows(m) {
+    m = m || {};
+    return [['Master username', mono(m.username)],
+      ['Password managed (Secrets Manager)', yn(m.managed, true, false)],
+      m.managed ? ['Master user secret ARN', mono(m.secret_arn)] : null,
+      m.managed ? ['Secret status', v(m.secret_status)] : null,
+      m.managed ? ['Secret KMS key', mono(m.secret_kms)] : null];
+  }
+  function backupRows(b) {
+    b = b || {};
+    return [['Backup retention', b.retention_days == null ? dash() : (b.retention_days === 0 ? pill('0 days (backups off)', 'bad') : b.retention_days + ' days')],
+      ['Backup window', win(b.window)],
+      b.earliest_restorable !== undefined ? ['Earliest restorable', when(b.earliest_restorable)] : null,
+      ['Latest restorable', when(b.latest_restorable)],
+      ['Copy tags to snapshot', yn(b.copy_tags_to_snapshot)],
+      b.backtrack_window ? ['Backtrack window', b.backtrack_window + ' s'] : null];
+  }
+
+  /* ---------- copy ---------- */
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove('show'); }, 1600); }
+  function copyText(text, what) {
+    function fallback() {
+      var ta = h('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove();
+      toast(ok ? what + ' copied' : 'Copy failed - select and copy manually');
+    }
+    if (navigator.clipboard && window.isSecureContext !== false) navigator.clipboard.writeText(text).then(function () { toast(what + ' copied'); }, fallback);
+    else fallback();
+  }
+
+  /* ---------- cards ---------- */
+  function cardHead(r, extra) {
+    return h('div', { cls: 'card-head' },
+      h('div', null,
+        h('div', null, badge(r.type), ' ', h('span', { cls: 'muted', text: r.type_label })),
+        h('h2', { text: r.name }),
+        h('div', { cls: 'meta' },
+          h('span', null, 'Account ', h('b', { text: r.account }), r.profile ? ' (' + r.profile + ')' : ''),
+          h('span', null, 'Region ', h('b', { text: r.type === 'global' ? (r.region + ' (primary)') : r.region })),
+          h('span', null, 'Engine ', h('b', { text: r.engine + ' ' + r.version })),
+          r.status ? statusPill(r.status) : null, extra || null)),
+      h('div', { cls: 'actions' },
+        h('button', { type: 'button', id: 'copy-json', onclick: function () { copyText(JSON.stringify(r.raw, null, 2), 'JSON'); } }, 'Copy JSON'),
+        h('button', { type: 'button', id: 'copy-arn', onclick: function () { copyText(r.id, 'ARN'); } }, 'Copy ARN')));
+  }
+
+  function globalCard(r) {
+    var d = r.d;
+    return h('div', { cls: 'panel card', id: 'card', 'data-type': r.type }, cardHead(r),
+      h('div', { cls: 'sections' },
+        sec('Overview', dl([['Engine / version', r.engine + ' ' + r.version], ['Status', statusPill(r.status)],
+          ['Primary region', v(d.primary_region)], ['Secondary regions', list(d.secondary_regions, function (x) { return x; })],
+          ['Global writer endpoint', mono(d.endpoint)], ['Database name', v(d.database_name)],
+          ['Write forwarding', d.write_forwarding.length ? h('span', null, pill('Enabled', 'ok'), ' on ', d.write_forwarding.join(', ')) : pill('Not enabled', 'mute')]])),
+        sec('Protection', dl([['Deletion protection', yn(d.deletion_protection)], ['Storage encrypted', yn(d.storage_encrypted)],
+          ['Failover state', d.failover ? h('code', { text: JSON.stringify(d.failover) }) : h('span', { cls: 'muted', text: 'none in progress' })],
+          ['Engine lifecycle', v(d.engine_lifecycle)], ['Global resource id', mono(d.resource_id)], ['ARN', mono(r.id)]])),
+        sec('Member clusters', table(['Cluster', 'Account', 'Region', 'Role', 'Replication', 'Write forwarding'],
+          d.members.map(function (m) {
+            return [link(m.id, m.name, m.region), m.account, m.region, pill(m.role, m.role === 'primary' ? 'ok' : 'mute'),
+              v(m.sync), m.write_forwarding ? pill(m.write_forwarding, m.write_forwarding === 'enabled' ? 'ok' : 'mute') : dash()];
+          })), true),
+        sec('Tags', tagsBlock(r.tags), true)));
+  }
+
+  function clusterCard(r) {
+    var d = r.d, mem = d.members, autoMinor;
+    if (d.auto_minor_cluster != null) autoMinor = h('span', null, yn(d.auto_minor_cluster), h('span', { cls: 'muted', text: '  (cluster setting)' }));
+    else autoMinor = mem.length ? h('span', null, d.auto_minor_members.off ? pill(d.auto_minor_members.off + ' of ' + mem.length + ' instance(s) off', 'warn') : pill('On for all ' + mem.length + ' instance(s)', 'ok'))
+      : dash();
+    var pend = d.pending.map(function (p) { return Object.assign({ _res: h('span', null, r.name, h('span', { cls: 'muted', text: ' (cluster)' })) }, p); });
+    d.member_pending.forEach(function (mp) { mp.pending.forEach(function (p) { pend.push(Object.assign({ _res: link(mp.id, mp.name) }, p)); }); });
+    var cas = d.ca ? [d.ca] : d.member_cas;
+    return h('div', { cls: 'panel card', id: 'card', 'data-type': r.type },
+      cardHead(r, d.global ? h('span', null, 'Global ', link(d.global.id, d.global.name)) : null),
+      h('div', { cls: 'sections' },
+        sec('Endpoints', h('div', null, dl([['Writer (cluster) endpoint', mono(d.writer_endpoint)], ['Reader endpoint', mono(d.reader_endpoint)], ['Port', v(d.port)],
+          ['Custom endpoints', d.custom_endpoints.length ? h('div', null, d.custom_endpoints.map(function (c) {
+            return h('div', null, h('code', { text: c.endpoint }), ' ', c.type ? pill(c.type, 'mute') : null,
+              c.static.length ? h('span', { cls: 'muted', text: '  static: ' + c.static.join(', ') }) : null,
+              c.excluded.length ? h('span', { cls: 'muted', text: '  excluded: ' + c.excluded.join(', ') }) : null);
+          })) : h('span', { cls: 'muted', text: 'none' })]]))),
+        sec('Master user & encryption', dl(masterRows(d.master).concat([
+          ['Storage encrypted', yn(d.storage_encrypted)], ['Storage KMS key', mono(d.kms_key)],
+          ['Performance Insights KMS', d.pi_kms.length ? list(d.pi_kms) : h('span', { cls: 'muted', text: 'Performance Insights off' })],
+          ['IAM DB authentication', yn(d.iam_auth, true, false)], ['Deletion protection', yn(d.deletion_protection)]]))),
+        sec('Instances (' + mem.length + ')' + (d.writer ? ' - writer ' + d.writer : ''), mem.length ? table(
+          ['Instance', 'Role', 'Class', 'AZ', 'Status', 'Endpoint : port', 'Auto minor upgrade', 'PI', 'CA (expiry)', 'Pending'],
+          mem.map(function (m) {
+            return [link(m.id, m.name), pill(m.role, m.role === 'writer' ? 'ok' : 'mute'), v(m.class), v(m.az), statusPill(m.status),
+              m.endpoint ? h('code', { text: m.endpoint + ':' + m.port }) : dash(), yn(m.auto_minor), yn(m.pi, true, false), caCell(m.ca),
+              m.pending.length ? pill(m.pending.length + ' action(s)', 'warn') : h('span', { cls: 'muted', text: 'none' })];
+          })) : h('span', { cls: 'muted', text: 'No instances (cluster has no members, or they were not returned)' }), true),
+        sec('Backups', dl(backupRows(d.backup))),
+        sec('Maintenance & upgrades', dl([['Maintenance window', win(d.maintenance_window)], ['Auto minor version upgrade', autoMinor],
+          ['Pending actions', pend.length ? pill(pend.length + ' pending', 'warn') : pill('none', 'ok')]])),
+        sec('Pending maintenance', pendingTable(pend, true), true),
+        sec('Network & configuration', dl([['DB subnet group', mono(d.subnet_group)], ['Security groups', list(d.security_groups)],
+          ['Cluster parameter group', mono(d.param_group)], ['CA certificate', cas.length ? h('div', null, cas.map(function (c) { return h('div', null, caCell(c)); })) : dash()],
+          ['Network type', v(d.network_type)], ['Availability zones', list(d.azs, function (x) { return x; })]])),
+        sec('Engine & storage', dl([['Engine mode', v(d.engine_mode)], ['Instance class (cluster)', v(r.class)],
+          d.serverless_v2 ? ['Serverless v2 capacity', d.serverless_v2.MinCapacity + ' - ' + d.serverless_v2.MaxCapacity + ' ACU'] : null,
+          ['Storage type', v(d.storage_type)], d.allocated_gb ? ['Allocated storage', d.allocated_gb + ' GiB'] : null, d.iops ? ['Provisioned IOPS', d.iops] : null,
+          d.storage_throughput ? ['Storage throughput', d.storage_throughput + ' MiB/s'] : null,
+          ['Multi-AZ', yn(d.multi_az, true, false)], ['Database name', v(d.database_name)],
+          d.global ? ['Global write forwarding', v(d.global_write_forwarding)] : null, d.local_write_forwarding ? ['Local write forwarding', v(d.local_write_forwarding)] : null,
+          ['Replication source', mono(d.replication_source)], ['Log exports', list(d.logs_exports, function (x) { return x; })],
+          ['Activity stream', v(d.activity_stream)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
+          ['Resource id', mono(d.resource_id)], ['ARN', mono(r.id)]])),
+        sec('Tags', tagsBlock(r.tags), true)));
+  }
+
+  function instanceCard(r) {
+    var d = r.d, s = d.storage, pend = d.pending;
+    var extra = h('span', null, d.cluster ? h('span', null, 'Cluster ', link(d.cluster.id, d.cluster.name), d.cluster.role ? ' (' + d.cluster.role + ')' : '') : null,
+      d.global ? h('span', null, '  ·  Global ', link(d.global.id, d.global.name)) : null);
+    return h('div', { cls: 'panel card', id: 'card', 'data-type': r.type }, cardHead(r, (d.cluster || d.global) ? extra : null),
+      h('div', { cls: 'sections' },
+        sec('Connectivity', dl([['Endpoint', mono(d.endpoint)], ['Port', v(d.port)], ['Availability zone', v(d.az)],
+          ['Multi-AZ', d.multi_az ? h('span', null, pill('Yes', 'ok'), d.secondary_az ? ' standby in ' + d.secondary_az : '') : yn(d.multi_az, true, r.type === 'member' ? false : undefined)],
+          ['Publicly accessible', yn(d.public, false)], ['DB subnet group', h('span', null, mono(d.subnet_group), d.vpc ? h('span', { cls: 'muted', text: '  (' + d.vpc + ')' }) : null)],
+          ['Security groups', list(d.security_groups)], ['Network type', v(d.network_type)]])),
+        sec('Compute & storage', dl([['Instance class', v(r.class)], ['Storage type', v(s.type)],
+          ['Allocated storage', s.allocated_gb ? s.allocated_gb + ' GiB' : dash()], ['Max allocated (autoscaling)', s.max_allocated_gb ? s.max_allocated_gb + ' GiB' : h('span', { cls: 'muted', text: 'autoscaling off' })],
+          ['Provisioned IOPS', v(s.iops)], ['Storage throughput', s.throughput ? s.throughput + ' MiB/s' : dash()],
+          d.cluster ? ['Promotion tier', v(d.promotion_tier)] : null])),
+        sec('Master user & encryption', dl(masterRows(d.master).concat([['Storage encrypted', yn(d.storage_encrypted)], ['Storage KMS key', mono(d.kms_key)],
+          ['IAM DB authentication', yn(d.iam_auth, true, false)], ['Deletion protection', yn(d.deletion_protection)], ['CA certificate', caCell(d.ca)]]))),
+        sec('Replication', dl([['Source', d.source ? link(d.source.id, d.source.name, d.source.region) : h('span', { cls: 'muted', text: d.cluster ? 'n/a (cluster storage)' : 'none (primary)' })],
+          ['Read replicas', d.replicas.length ? h('div', null, d.replicas.map(function (x) { return h('div', null, link(x.id, x.name, x.region), h('span', { cls: 'muted', text: '  ' + x.region })); })) : h('span', { cls: 'muted', text: 'none' })]])),
+        sec('Monitoring', dl([['Performance Insights', d.pi.enabled ? h('span', null, pill('On', 'ok'), d.pi.retention_days ? '  ' + d.pi.retention_days + ' days retention' : '') : pill('Off', 'mute')],
+          ['Performance Insights KMS', mono(d.pi.kms)], ['Enhanced monitoring', d.monitoring_interval ? d.monitoring_interval + ' s' : h('span', { cls: 'muted', text: 'off' })],
+          ['Log exports', list(d.logs_exports, function (x) { return x; })]])),
+        sec('Backups', d.cluster ? h('div', null, h('span', { cls: 'muted', text: 'Backups are managed by the cluster: ' }), link(d.cluster.id, d.cluster.name)) : dl(backupRows(d.backup))),
+        sec('Maintenance & upgrades', dl([['Maintenance window', win(d.maintenance_window)], ['Auto minor version upgrade', yn(d.auto_minor)],
+          ['Parameter group(s)', d.param_groups.length ? h('span', null, d.param_groups.map(function (p, i) { return [i ? ', ' : '', h('code', { text: p.name }), p.status && p.status !== 'in-sync' ? [' ', pill(p.status, 'warn')] : '']; })) : dash()],
+          ['Option group(s)', list(d.option_groups)], ['License', v(d.license)], ['Engine lifecycle', v(d.engine_lifecycle)], ['Created', when(d.created)],
+          ['Database name', v(d.database_name)], ['Resource id', mono(d.resource_id)], ['ARN', mono(r.id)]])),
+        sec('Pending maintenance', pendingTable(pend, false), true),
+        sec('Tags', tagsBlock(r.tags), true)));
+  }
+
+  /* ---------- filters / search ---------- */
+  var F = { account: $('f-account'), region: $('f-region'), type: $('f-type'), engine: $('f-engine') };
+  function opts(sel, label, values) {
+    sel.appendChild(h('option', { value: '', text: 'All ' + label }));
+    values.forEach(function (x) { sel.appendChild(h('option', { value: x[0], text: x[1] })); });
+  }
+  function uniq(a) { return a.filter(function (x, i) { return x && a.indexOf(x) === i; }).sort(); }
+  var profOf = {}; (M.accounts || []).forEach(function (a) { (profOf[a.account] = profOf[a.account] || []).push(a.profile); });
+  opts(F.account, 'accounts', uniq(R.map(function (r) { return r.account; })).map(function (a) { return [a, a + (profOf[a] ? ' (' + profOf[a].join(', ') + ')' : '')]; }));
+  opts(F.region, 'regions', uniq([].concat.apply([], R.map(function (r) { return r.regions; }))).map(function (x) { return [x, x]; }));
+  opts(F.type, 'types', ['global', 'cluster', 'instance', 'member'].filter(function (t) { return R.some(function (r) { return r.type === t; }); }).map(function (t) { return [t, TYPE_LABEL[t]]; }));
+  opts(F.engine, 'engines', uniq(R.map(function (r) { return r.engine; })).map(function (x) { return [x, x]; }));
+
+  function filtered() {
+    var fa = F.account.value, fr = F.region.value, ft = F.type.value, fe = F.engine.value;
+    return R.filter(function (r) {
+      return (!fa || r.account === fa) && (!fr || r.regions.indexOf(fr) >= 0) && (!ft || r.type === ft) && (!fe || r.engine === fe);
+    });
+  }
+  function matches(rs, q) {
+    var toks = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!toks.length) return rs;
+    var out = rs.filter(function (r) { return toks.every(function (t) { return r.search.indexOf(t) >= 0; }); });
+    var t0 = toks[0];
+    return out.map(function (r, i) { var n = r.name.toLowerCase(); return { r: r, s: (n === t0 ? 0 : n.indexOf(t0) === 0 ? 1 : n.indexOf(t0) >= 0 ? 2 : 3), i: i }; })
+      .sort(function (a, b) { return a.s - b.s || a.i - b.i; }).map(function (x) { return x.r; });
+  }
+
+  var q = $('q'), sugg = $('sugg'), active = -1, shown = [];
+  function renderSugg() {
+    var text = q.value.trim();
+    sugg.textContent = ''; active = -1;
+    if (!text) { sugg.classList.remove('open'); shown = []; return; }
+    var all = matches(filtered(), text); shown = all.slice(0, 12);
+    if (!shown.length) sugg.appendChild(h('div', { cls: 'sg none', text: 'No match' + (F.account.value || F.region.value || F.type.value || F.engine.value ? ' (filters active)' : '') }));
+    shown.forEach(function (r, i) {
+      sugg.appendChild(h('div', { cls: 'sg', role: 'option', 'data-i': i, onmousedown: function (e) { e.preventDefault(); select(r.id); } },
+        badge(r.type), h('span', { cls: 'nm', text: r.name }),
+        h('span', { cls: 'sub', text: r.engine + ' ' + r.version + '  ·  ' + r.region + '  ·  ' + r.account })));
+    });
+    if (all.length > shown.length) sugg.appendChild(h('div', { cls: 'sg none', text: (all.length - shown.length) + ' more - press Esc to see all in the list' }));
+    sugg.classList.add('open');
+  }
+  function setActive(i) {
+    var els = sugg.querySelectorAll('.sg[data-i]');
+    if (!els.length) return;
+    active = (i + els.length) % els.length;
+    els.forEach(function (e, k) { e.classList.toggle('active', k === active); });
+    els[active].scrollIntoView({ block: 'nearest' });
+  }
+  function closeSugg() { sugg.classList.remove('open'); }
+  function select(id) { closeSugg(); if (location.hash !== hashFor(id)) location.hash = hashFor(id); else render(); }
+
+  q.addEventListener('input', function () { renderSugg(); if (!current()) renderList(); });
+  q.addEventListener('focus', function () { if (q.value.trim()) renderSugg(); });
+  q.addEventListener('blur', function () { setTimeout(closeSugg, 120); });
+  q.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!sugg.classList.contains('open')) renderSugg(); setActive(active + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); var r = shown[active >= 0 ? active : 0]; if (r) select(r.id); }
+    else if (e.key === 'Escape') { closeSugg(); if (current()) { history.pushState(null, '', location.pathname + location.search); render(); } }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && document.activeElement !== q && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); q.select(); }
+  });
+  Object.keys(F).forEach(function (k) {
+    F[k].addEventListener('change', function () {
+      var cur = current();
+      if (cur && filtered().indexOf(cur) < 0) { history.pushState(null, '', location.pathname + location.search); }
+      render(); if (q.value.trim() && document.activeElement === q) renderSugg();
+    });
+  });
+  $('clear').addEventListener('click', function () {
+    q.value = ''; Object.keys(F).forEach(function (k) { F[k].value = ''; });
+    history.pushState(null, '', location.pathname + location.search); render();
+  });
+
+  /* ---------- views ---------- */
+  function current() {
+    var m = /^#id=(.+)$/.exec(location.hash);
+    if (!m) return null;
+    var id; try { id = decodeURIComponent(m[1]); } catch (e) { return null; }
+    return BY[id] || null;
+  }
+  function renderList() {
+    var rs = matches(filtered(), q.value.trim()), view = $('view');
+    view.textContent = '';
+    var head = h('div', { cls: 'listhead' }, h('h2', { text: 'Resources' }), h('span', { cls: 'muted', id: 'shown', text: 'Showing ' + rs.length + ' of ' + R.length + ' - pick one to see only its details' }));
+    view.appendChild(head);
+    if (!R.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'No RDS / Aurora resources were found in the scanned accounts and regions.' })); return; }
+    if (!rs.length) { view.appendChild(h('div', { cls: 'panel empty', text: 'Nothing matches the search / filters.' })); return; }
+    view.appendChild(h('div', { cls: 'panel scroll' }, h('table', { cls: 'list', id: 'list' },
+      h('thead', null, h('tr', null, ['Type', 'Name', 'Engine / version', 'Account', 'Region', 'Status', 'Class', 'Endpoint'].map(function (c) { return h('th', { text: c }); }))),
+      h('tbody', null, rs.map(function (r) {
+        return h('tr', { 'data-id': r.id, onclick: function () { select(r.id); } },
+          h('td', null, badge(r.type)), h('td', null, h('a', { href: hashFor(r.id), text: r.name })),
+          h('td', { text: r.engine + ' ' + r.version }), h('td', { text: r.account }),
+          h('td', { text: r.type === 'global' ? r.regions.join(', ') : r.region }), h('td', null, statusPill(r.status)),
+          h('td', null, v(r.class)), h('td', null, r.endpoint ? h('code', { text: r.endpoint }) : dash()));
+      })))));
+  }
+  function render() {
+    var r = current(), view = $('view');
+    if (location.hash && /^#id=/.test(location.hash) && !r) {
+      view.textContent = '';
+      view.appendChild(h('div', { cls: 'panel empty', text: 'That resource is not in this report.' }));
+      return;
+    }
+    if (!r) { document.title = 'RDS Inventory Explorer'; renderList(); return; }
+    view.textContent = '';
+    view.appendChild(h('div', { cls: 'back' }, h('button', { type: 'button', id: 'back', onclick: function () { history.pushState(null, '', location.pathname + location.search); render(); } }, '← All resources')));
+    view.appendChild(r.type === 'global' ? globalCard(r) : r.type === 'cluster' ? clusterCard(r) : instanceCard(r));
+    document.title = r.name + ' - RDS Inventory Explorer';
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener('hashchange', render);
+  window.addEventListener('popstate', render);
+
+  /* ---------- header, errors, theme ---------- */
+  $('gen').textContent = 'Generated ' + M.generated_utc + '  ·  ' + M.generated_local;
+  function chip(n, label, cls, title) { return h('span', { cls: 'chip' + (cls ? ' ' + cls : ''), title: title || null }, h('b', { text: String(n) }), ' ' + label); }
+  var counts = $('counts');
+  counts.appendChild(chip(C.accounts, C.accounts === 1 ? 'account' : 'accounts'));
+  counts.appendChild(chip(C.regions_with_databases, 'region(s) with databases', null, 'account + region pairs that have at least one DB; empty regions are not listed'));
+  counts.appendChild(chip(C.global_clusters, 'global cluster(s)'));
+  counts.appendChild(chip(C.clusters, 'cluster(s)'));
+  counts.appendChild(chip(C.instances, 'instance(s)  (' + C.standalone_instances + ' standalone · ' + C.cluster_members + ' cluster members)'));
+  if (C.pending_maintenance) counts.appendChild(chip(C.pending_maintenance, 'with pending maintenance', 'warnc'));
+  if (C.errors) { var ec = chip(C.errors, 'error(s)', 'err', 'Show errors'); ec.id = 'err-chip'; ec.addEventListener('click', function () { var d = $('errors'); d.open = true; d.scrollIntoView(); }); counts.appendChild(ec); }
+  if (ERR.length) {
+    $('errors-wrap').appendChild(h('details', { cls: 'panel errors', id: 'errors' },
+      h('summary', { text: ERR.length + ' error(s) while collecting - the affected account / region data may be incomplete' }),
+      table(['Account', 'Profile', 'Region', 'Call', 'Message'], ERR.map(function (e) { return [e.account, e.profile, e.region, h('code', { text: e.call }), e.message]; }))));
+  }
+  $('foot').textContent = M.script + ' v' + M.version + '  ·  read-only (rds describe-* only, no CloudWatch)  ·  ' + (M.aws_calls || 0) + ' AWS calls  ·  times shown in UTC and ' + M.tz + '  ·  works offline';
+
+  var tb = $('theme-btn');
+  function themeLabel() { var p = document.documentElement.getAttribute('data-theme-pref') || 'auto'; tb.textContent = 'Theme: ' + p; }
+  function applyTheme(p) {
+    var dark = p === 'dark' || (p === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme-pref', p);
+    try { localStorage.setItem('mg-theme', p); } catch (e) {}
+    themeLabel();
+  }
+  tb.addEventListener('click', function () {
+    var order = ['auto', 'light', 'dark'], p = document.documentElement.getAttribute('data-theme-pref') || 'auto';
+    applyTheme(order[(order.indexOf(p) + 1) % 3]);
+  });
+  if (window.matchMedia) { var mq = window.matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', function () { if ((document.documentElement.getAttribute('data-theme-pref') || 'auto') === 'auto') applyTheme('auto'); }); }
+  themeLabel();
+  render();
+})();
+</script>
+</body>
+</html>
