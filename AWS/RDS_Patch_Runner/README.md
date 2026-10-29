@@ -2,7 +2,7 @@
 
 Applies the **pending maintenance of ONE Aurora cluster** in a safe, logged order. It works with Aurora PostgreSQL and Aurora MySQL, and also with DocumentDB and Neptune clusters. It is the next step after [RDS_Pending_Maintenance](../RDS_Pending_Maintenance/README.md): the report tells you what is pending, and this tool applies it to one cluster at a time.
 
-Sibling tool: [RDS_Patch_Compliance](../RDS_Patch_Compliance/README.md) is a read-only report of how many minor versions each database is behind (compliance rule, Extended Support / end-of-support flags) - use it to decide which clusters to patch next.
+Sibling tool: [rds-patch-compliance](https://github.com/manideepgrandhi/rds-patch-compliance/blob/main/README.md) is a read-only report of how many minor versions each database is behind (compliance rule, Extended Support / end-of-support flags) - use it to decide which clusters to patch next.
 
 ```
 # 1. look first (DEFAULT: dry run, read-only)
@@ -276,7 +276,7 @@ tests/validate_cli.sh  # replays every generated command through the REAL AWS CL
 
 ## Oracle versions (patch lines)
 
-`--minor-upgrade latest` (and an explicit `--minor-upgrade <version>`) uses minor targets from `lib/versions.jq`, shared byte-for-byte with [RDS_Patch_Compliance](../RDS_Patch_Compliance/README.md#oracle-versions-patch-lines) (full explanation there). Oracle targets count only on the **same major and the same patch line** as the current version (mrp -> mrp, rur -> rur, plain RU -> plain RU, spb -> spb), ordered numerically (ru date, line date, `r10 > r9`), like the RDS console Modify page. For every engine a target in another major line is never offered, even when AWS lists it with `IsMajorVersionUpgrade=false` (SQL Server 15 vs 16, MySQL 8.0 vs 8.4, Aurora MySQL 2 vs 3, Oracle 19 vs 26). Excluded targets are shown in the preflight as `not offered`, e.g. `excluded 19.0.0.0.ru-2026-07.spb-2026-07.r1 (different patch line spb; current is mrp)`.
+`--minor-upgrade latest` (and an explicit `--minor-upgrade <version>`) uses minor targets from `lib/versions.jq`, shared byte-for-byte with [rds-patch-compliance](https://github.com/manideepgrandhi/rds-patch-compliance/blob/main/README.md#oracle-versions-patch-lines) (full explanation there). Oracle targets count only on the **same major and the same patch line** as the current version (mrp -> mrp, rur -> rur, plain RU -> plain RU, spb -> spb), ordered numerically (ru date, line date, `r10 > r9`), like the RDS console Modify page. For every engine a target in another major line is never offered, even when AWS lists it with `IsMajorVersionUpgrade=false` (SQL Server 15 vs 16, MySQL 8.0 vs 8.4, Aurora MySQL 2 vs 3, Oracle 19 vs 26). Excluded targets are shown in the preflight as `not offered`, e.g. `excluded 19.0.0.0.ru-2026-07.spb-2026-07.r1 (different patch line spb; current is mrp)`.
 
 The runner has no "any patch line" switch: `--minor-upgrade latest` never picks, and an explicit `--minor-upgrade <version>` refuses, a cross-major or cross-line target even if AWS lists it.
 

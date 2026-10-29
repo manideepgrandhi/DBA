@@ -1,4 +1,0 @@
-"account_id","profile","region","status","total","compliant","non_compliant","unknown","pct_compliant","servers_with_pending_maintenance","pending_actions","past_standard_support","aws_errors","probe_instances_max20","probe_clusters_max20"
-"111111111111","prod","us-east-1","databases",19,11,7,1,57.9,3,5,2,0,20,11
-"222222222222","nonprod","ap-south-1","databases",3,2,1,0,66.7,0,0,0,0,3,1
-"ALL","","All regions","",22,13,8,1,59.1,3,5,2,0,"",""
