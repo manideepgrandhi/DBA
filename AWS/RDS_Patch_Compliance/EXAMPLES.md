@@ -110,3 +110,14 @@ High-level summary plus the NON-COMPLIANT servers only (same scan and counting r
 ```
 
 Sample output: [samples/sample_summary.txt](samples/sample_summary.txt), [samples/sample_summary.html](samples/sample_summary.html), screenshot [samples/sample_summary.png](samples/sample_summary.png).
+
+## Summary only, several accounts: save in CloudShell, merge in Git Bash (summary v1.3.0)
+
+```bash
+# CloudShell, once per account (read-only; writes rds_patch_<ACCOUNTID>_<YYYYMMDD>.json into ./data)
+./rds_patch_compliance_summary.sh --all-regions --save-data -o data
+# Git Bash on the laptop, offline (0 AWS calls); full-report --save-data files work too
+./rds_patch_compliance_summary.sh --merge "C:\Users\me\Downloads\rds data" -F txt,html,csv -o combined
+./rds_patch_compliance_summary.sh --merge data/*.json --max-behind 1 --fail-on-noncompliant   # exit 5 if any NON-COMPLIANT
+./rds_patch_compliance_summary.sh --merge data --alert-email dba@example.com                  # alert from merged data
+```

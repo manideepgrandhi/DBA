@@ -905,7 +905,7 @@ merge_main() {
         i=$(( i + 1 ))
     done
     mb="null"; (( MAX_BEHIND_SET )) && mb="$MAX_BEHIND"
-    jq -c -s --argjson mb "$mb" -f "$MERGE_LIB" "$WORK/inputs.jsonl" | tr -d '\r' >"$WORK/merged.json" || die 4 "Merging the data files failed"
+    jq -c -s --argjson mb "$mb" --argjson oal "$( (( ORACLE_ANY_LINE )) && echo true || echo null)" -f "$MERGE_LIB" "$WORK/inputs.jsonl" | tr -d '\r' >"$WORK/merged.json" || die 4 "Merging the data files failed"
     while IFS= read -r l; do log_info "$l"; done < <(jq -r '.superseded[] | if .same_time
         then "Account \(.account): in \(.dropped) and \(.kept) with the same collection time; using \(.kept) (given later)"
         else "Account \(.account): using newer \(.kept) (\(.kept_utc)); ignoring older \(.dropped) (\(.dropped_utc))" end' "$WORK/merged.json" | tr -d '\r')

@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # jq programs are single-quoted on purpose
 # rds_patch_compliance_summary.sh - high-level RDS patch compliance summary + the NON-COMPLIANT servers only.
 #
 # READ-ONLY. The scan and every counting rule come from rds_patch_compliance_report.sh in this folder (it is run
 # with -F json and its lib/compliance.jq + lib/versions.jq do the work), so the numbers are identical to the full
 # report: valid RDS minor upgrade targets only, same major line, Oracle same patch line, deprecated -> UNKNOWN.
 # This script only renders a short summary (lib/summary.jq) and optionally alerts.
+# --save-data and --merge are passed to the full report too, so the data files are the same format
+# (rds_patch_<ACCOUNTID>_<YYYYMMDD>.json) and files saved by either script can be merged by either script.
 #
-# Exit codes: 0 ok, 1 usage, 2 pre-check / collection failed, 4 output error, 5 NON-COMPLIANT found with
+# Exit codes: 0 ok, 1 usage, 2 pre-check / collection failed, 3 bad --merge input file, 4 output error, 5 NON-COMPLIANT found with
 #             --fail-on-noncompliant, 130 interrupted.
 set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="rds_patch_compliance_summary.sh"
-readonly SCRIPT_VERSION="1.1.1"
+readonly SCRIPT_VERSION="1.3.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 FULL="${RDS_PCS_FULL:-$SCRIPT_DIR/rds_patch_compliance_report.sh}"
+[[ "$FULL" == /* ]] || FULL="$PWD/$FULL"
 LIB="$SCRIPT_DIR/lib/summary.jq"
 
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
@@ -24,7 +28,7 @@ fi
 
 PROFILES=(); REGIONS=(); ALL_REGIONS=0; NO_DISCOVER=0; PROBE_PARALLEL=""; ENGINES=(); IDENTIFIERS=()
 FORMATS=(); OUTPUT_DIR=""; PREFIX="rds_patch_compliance_summary"
-MAX_BEHIND=2; WARN_DAYS=180; ORACLE_ANY_LINE=0; FAIL_ON_NC=0; VERBOSE=0
+MAX_BEHIND=2; MAX_BEHIND_SET=0; WARN_DAYS=180; SAVE_DATA=0; SAVE_DATA_FILE=""; MERGE=0; MERGE_ARGS=(); ORACLE_ANY_LINE=0; FAIL_ON_NC=0; VERBOSE=0
 ALERT_EMAILS=(); ALERT_WEBHOOKS=(); ALERT_ON="noncompliant"; ALERT_WEBHOOK_FORMAT="slack"; ALERT_FROM=""
 readonly SLACK_MAX_CHARS=35000
 WORK=""; WRITTEN=()
@@ -67,6 +71,11 @@ Usage: $SCRIPT_NAME [options]
   -F, --format F[,F]        txt | html | csv  (default txt to the screen; csv = non-compliant rows + summary CSV)
   -o, --output-dir DIR      Write files there (needed for html / csv / several formats)
       --prefix NAME         File name prefix (default $PREFIX)
+      --save-data [FILE.json]  Also save the raw data (same format as rds_patch_compliance_report.sh --save-data):
+                            default rds_patch_<ACCOUNTID>_<YYYYMMDD>.json per account in -o DIR (or the current folder)
+      --merge FILE|DIR...   Offline: summarise --save-data files of either script (a DIR = its *.json data files).
+                            0 AWS calls, jq only; the newer collection wins per account; days recomputed now.
+                            -P / -r / -A / --no-discover / --probe-parallel / -e / -i / --save-data do not apply.
       --fail-on-noncompliant  Exit 5 when any NON-COMPLIANT server is found
       --alert-email ADDR    E-mail the text summary (mail/mailx/sendmail)        [repeatable]
       --alert-webhook URL   POST the summary to a webhook (curl)                 [repeatable]
@@ -75,8 +84,9 @@ Usage: $SCRIPT_NAME [options]
       --alert-from ADDR     From address for e-mail
   -v, --verbose             Debug log of the scan
   -h, --help | -V, --version
-Exit codes: 0 ok, 1 usage, 2 pre-check / collection failed, 4 output error, 5 non-compliant (--fail-on-noncompliant), 130 interrupted.
-Needs: aws CLI v2, jq 1.6+, and rds_patch_compliance_report.sh + lib/ next to this script.
+Merge example (Git Bash):  $SCRIPT_NAME --merge "C:\\Users\\me\\Downloads\\patch data" -F txt,html,csv -o out
+Exit codes: 0 ok, 1 usage, 2 pre-check / collection failed, 3 bad --merge input, 4 output error, 5 non-compliant (--fail-on-noncompliant), 130 interrupted.
+Needs: aws CLI v2 (not for --merge), jq 1.6+, and rds_patch_compliance_report.sh + lib/ next to this script.
 USAGE
 }
 
@@ -93,7 +103,9 @@ parse_args() {
             --probe-parallel)   need_arg "$opt" $#; PROBE_PARALLEL="$2"; shift 2 ;;
             -e|--engine)        need_arg "$opt" $#; add_list ENGINES "$2"; shift 2 ;;
             -i|--identifier)    need_arg "$opt" $#; add_list IDENTIFIERS "$2"; shift 2 ;;
-            --max-behind)       need_arg "$opt" $#; MAX_BEHIND="$2"; shift 2 ;;
+            --max-behind)       need_arg "$opt" $#; MAX_BEHIND="$2"; MAX_BEHIND_SET=1; shift 2 ;;
+            --save-data)        SAVE_DATA=1; if [[ $# -ge 2 && "$2" != -* ]]; then SAVE_DATA_FILE="$2"; shift; fi; shift ;;
+            --merge)            MERGE=1; shift; while (( $# )) && [[ "$1" != -* ]]; do MERGE_ARGS+=("$1"); shift; done ;;
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
             --oracle-any-patch-line) ORACLE_ANY_LINE=1; shift ;;
             -F|--format)        need_arg "$opt" $#; add_list FORMATS "$2"; shift 2 ;;
@@ -132,6 +144,17 @@ validate() {
         [[ "$x" =~ ^[^[:space:]@\;\|\&\$\`]+@[^[:space:]@\;\|\&\$\`]+$ ]] || die 1 "Invalid --alert-email address: $x"
     done
     for x in "${ALERT_WEBHOOKS[@]}"; do [[ "$x" =~ ^https?:// ]] || die 1 "--alert-webhook must be an http(s) URL: $(redact_url "$x")"; done
+    if (( MERGE )); then
+        (( ${#MERGE_ARGS[@]} )) || die 1 "--merge needs at least one --save-data file or directory"
+        (( ${#PROFILES[@]} || ${#REGIONS[@]} || ALL_REGIONS || NO_DISCOVER )) && die 1 "--merge works offline on saved data: -P / -r / -A / --no-discover do not apply"
+        [[ -n "$PROBE_PARALLEL" ]] && die 1 "--merge: --probe-parallel does not apply"
+        (( ${#ENGINES[@]} || ${#IDENTIFIERS[@]} )) && die 1 "--merge: -e / -i do not apply"
+        (( SAVE_DATA )) && die 1 "--merge cannot be combined with --save-data"
+    fi
+    if [[ -n "$SAVE_DATA_FILE" ]]; then
+        [[ "$SAVE_DATA_FILE" == *.json ]] || die 1 "--save-data FILE must end in .json"
+        [[ "$SAVE_DATA_FILE" == /* ]] || SAVE_DATA_FILE="$PWD/$SAVE_DATA_FILE"
+    fi
     command -v jq >/dev/null 2>&1 || die 2 "jq not found in PATH"
     [[ -x "$FULL" ]] || die 2 "Full report script not found or not executable: $FULL"
     [[ -r "$LIB" && -r "$SCRIPT_DIR/lib/versions.jq" ]] || die 2 "lib/summary.jq or lib/versions.jq missing next to $SCRIPT_NAME"
@@ -139,8 +162,21 @@ validate() {
 
 # the full report does the read-only scan; its JSON is the single source of the numbers
 collect() {
-    local -a a=(-F json --max-behind "$MAX_BEHIND" --warn-days "$WARN_DAYS")
-    local x rc=0
+    local -a a=(-F json --warn-days "$WARN_DAYS")
+    local x rc=0 dir=.
+    if (( MERGE )); then
+        # offline: the full report merges (0 AWS calls, exit 3 on a bad file); --max-behind only when given (default: from the files)
+        a=(--merge "${MERGE_ARGS[@]}" "${a[@]}")
+        (( MAX_BEHIND_SET )) && a+=(--max-behind "$MAX_BEHIND")
+        (( ORACLE_ANY_LINE )) && a+=(--oracle-any-patch-line)
+        (( VERBOSE )) && a+=(-v)
+        REPORT="$WORK/report.json"
+        "$FULL" "${a[@]}" >"$REPORT" || rc=$?
+        (( rc == 0 )) || die "$rc" "Merge failed (rds_patch_compliance_report.sh --merge exit $rc)"
+        jq -e '.summary.total != null' "$REPORT" >/dev/null 2>&1 || die 2 "Merge returned no report"
+        return 0
+    fi
+    a+=(--max-behind "$MAX_BEHIND")
     for x in "${PROFILES[@]}"; do a+=(-P "$x"); done
     for x in "${REGIONS[@]}"; do a+=(-r "$x"); done
     for x in "${ENGINES[@]}"; do a+=(-e "$x"); done
@@ -150,19 +186,32 @@ collect() {
     [[ -n "$PROBE_PARALLEL" ]] && a+=(--probe-parallel "$PROBE_PARALLEL")
     (( ORACLE_ANY_LINE )) && a+=(--oracle-any-patch-line)
     (( VERBOSE )) && a+=(-v)
+    if (( SAVE_DATA )); then
+        # the full report writes the data file(s); default names go to -o DIR (or the current folder)
+        if [[ -n "$SAVE_DATA_FILE" ]]; then a+=(--save-data "$SAVE_DATA_FILE")
+        else a+=(--save-data); [[ -n "$OUTPUT_DIR" ]] && { mkdir -p -- "$OUTPUT_DIR" || die 4 "Cannot create $OUTPUT_DIR"; dir="$OUTPUT_DIR"; }; fi
+    fi
     REPORT="$WORK/report.json"
-    "$FULL" "${a[@]}" >"$REPORT" || rc=$?
+    ( cd -- "$dir" && exec "$FULL" "${a[@]}" ) >"$REPORT" || rc=$?
     (( rc == 0 )) || die "$rc" "Scan failed (rds_patch_compliance_report.sh exit $rc)"
     jq -e '.summary.total != null' "$REPORT" >/dev/null 2>&1 || die 2 "Scan returned no report"
 }
 
-render() { jq -r --arg mode "$1" --arg version "$SCRIPT_VERSION" -f "$LIB" "$REPORT"; }
+# jq.exe (Git Bash on Windows) writes CRLF: every jq output used here is made LF-only
+JQ_CRLF=0
+detect_jq_eol() { if [[ "$(jq -jn '"x\n"' | wc -c | tr -d ' \r')" != 2 ]]; then JQ_CRLF=1; fi; }
+unix_eol() { if (( JQ_CRLF )); then tr -d '\r'; else cat; fi; }
+jqr() { jq "$@" | unix_eol; }
+render() { jqr -r --arg mode "$1" --arg version "$SCRIPT_VERSION" -f "$LIB" "$REPORT"; }
 
 write_outputs() {
-    local f stamp file
+    local f stamp file acct
     if [[ -z "$OUTPUT_DIR" ]]; then render text || die 4 "Rendering failed"; return 0; fi
     mkdir -p -- "$OUTPUT_DIR" || die 4 "Cannot create $OUTPUT_DIR"
     stamp="$(date -u +%Y%m%d_%H%M%S)"
+    # one account: its number goes into the file names
+    acct="$(jqr -r 'if (.meta.accounts | length) == 1 then .meta.accounts[0].account else "" end' "$REPORT")"
+    [[ "$acct" =~ ^[0-9]{12}$ ]] && stamp="${acct}_$stamp"
     for f in "${FORMATS[@]}"; do
         case "$f" in
             txt|text) file="$OUTPUT_DIR/${PREFIX}_$stamp.txt"; render text >"$file" || die 4 "Writing $file failed" ;;
@@ -170,6 +219,8 @@ write_outputs() {
             csv)      file="$OUTPUT_DIR/${PREFIX}_${stamp}_summary.csv"; render csv_summary >"$file" || die 4 "Writing $file failed"
                       WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
                       file="$OUTPUT_DIR/${PREFIX}_${stamp}_noncompliant.csv"; render csv_nc >"$file" || die 4 "Writing $file failed"
+                      WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
+                      file="$OUTPUT_DIR/${PREFIX}_${stamp}_accounts.csv"; render csv_accounts >"$file" || die 4 "Writing $file failed"
                       WRITTEN+=("$(cd -- "$OUTPUT_DIR" && pwd -P)/${file##*/}")
                       file="$OUTPUT_DIR/${PREFIX}_${stamp}_regions.csv"; render csv_regions >"$file" || die 4 "Writing $file failed" ;;
         esac
@@ -208,15 +259,15 @@ send_webhook_alert() {   # <url> <payload-file>
 send_alerts() {
     (( ${#ALERT_EMAILS[@]} + ${#ALERT_WEBHOOKS[@]} )) || return 0
     local body="$WORK/alert_body.txt" payload="$WORK/alert_payload.json" status subject url
-    if [[ "$ALERT_ON" == noncompliant ]] && [[ "$(jq -r '.summary.non_compliant + .summary.errors' "$REPORT")" == 0 ]]; then return 0; fi
-    status="$(jq -r 'if .summary.non_compliant > 0 then "NON-COMPLIANT" elif .summary.errors > 0 then "ERRORS" else "COMPLIANT" end' "$REPORT")"
-    subject="[rds_patch_compliance_summary] $status: $(jq -r '"\(.summary.non_compliant) non-compliant of \(.summary.total), \(.summary.pct_compliant)% compliant"' "$REPORT")"
+    if [[ "$ALERT_ON" == noncompliant ]] && [[ "$(jqr -r '.summary.non_compliant + .summary.errors' "$REPORT")" == 0 ]]; then return 0; fi
+    status="$(jqr -r 'if .summary.non_compliant > 0 then "NON-COMPLIANT" elif .summary.errors > 0 then "ERRORS" else "COMPLIANT" end' "$REPORT")"
+    subject="[rds_patch_compliance_summary] $status: $(jqr -r '"\(.summary.non_compliant) non-compliant of \(.summary.total), \(.summary.pct_compliant)% compliant"' "$REPORT")"
     render text >"$body" || { log_warn "Alert: rendering failed"; return 0; }
     if [[ "$ALERT_WEBHOOK_FORMAT" == slack ]]; then
-        jq -cn --arg h "$subject" --rawfile b "$body" --argjson max "$SLACK_MAX_CHARS" \
+        jqr -cn --arg h "$subject" --rawfile b "$body" --argjson max "$SLACK_MAX_CHARS" \
             '{text: ("*" + $h + "*\n```" + (if ($b | length) > $max then $b[0:$max] + "\n... (truncated)" else $b end) + "```")}' >"$payload"
     else
-        render alert | jq -c --arg s "$subject" --arg st "$status" --rawfile b "$body" '. + {status: $st, text: ($s + "\n\n" + $b)}' >"$payload" \
+        render alert | jqr -c --arg s "$subject" --arg st "$status" --rawfile b "$body" '. + {status: $st, text: ($s + "\n\n" + $b)}' >"$payload" \
             || { log_warn "Alert: building the payload failed"; return 0; }
     fi
     if (( ${#ALERT_EMAILS[@]} )); then
@@ -237,12 +288,13 @@ main() {
     trap on_signal INT TERM
     parse_args "$@"
     validate
+    detect_jq_eol
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/rds_pcs.XXXXXX")"
     collect
     write_outputs
     local rc=0
-    (( FAIL_ON_NC )) && [[ "$(jq -r '.summary.non_compliant' "$REPORT")" != 0 ]] && rc=5
-    log_info "$(jq -r '"Summary: \(.summary.total) server(s)/cluster(s): COMPLIANT \(.summary.compliant), NON-COMPLIANT \(.summary.non_compliant), UNKNOWN \(.summary.unknown) (\(.summary.pct_compliant)% compliant)"' "$REPORT"); exit $rc"
+    (( FAIL_ON_NC )) && [[ "$(jqr -r '.summary.non_compliant' "$REPORT")" != 0 ]] && rc=5
+    log_info "$(jqr -r '"\(if .meta.merge then "Merged \(.meta.accounts | length) account(s) from \(.meta.merge.files) file(s), 0 AWS calls. " else "" end)Summary: \(.summary.total) server(s)/cluster(s): COMPLIANT \(.summary.compliant), NON-COMPLIANT \(.summary.non_compliant), UNKNOWN \(.summary.unknown) (\(.summary.pct_compliant)% compliant)"' "$REPORT"); exit $rc"
     send_alerts
     exit "$rc"
 }

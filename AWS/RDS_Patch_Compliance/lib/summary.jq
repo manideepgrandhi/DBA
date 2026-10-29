@@ -1,6 +1,7 @@
 # lib/summary.jq - rendering for rds_patch_compliance_summary.sh (high-level summary + NON-COMPLIANT list)
 # Input: the finalized JSON report of rds_patch_compliance_report.sh (all counting is done there, with
-# lib/compliance.jq + lib/versions.jq, so the numbers are identical). Modes ($mode): text | html | csv_nc | csv_summary | csv_regions | alert
+# lib/compliance.jq + lib/versions.jq, so the numbers are identical). Modes ($mode): text | html | csv_nc | csv_summary | csv_regions | csv_accounts | alert
+# A --merge report (meta.merge) adds the merged input files; per-account rows come from summary.accounts.
 include "versions" {search: "./"};
 def h: tostring | @html;
 def dash: if . == null or . == "" then "-" else tostring end;
@@ -19,7 +20,12 @@ def accts: .meta.accounts | map("\(.account) (\(.profile))") | join(", ");
 def ro: .summary.region_overview // {checked: (.meta.regions | length), with_databases: 0, empty: 0, error: 0, empty_regions: [], mode: "explicit"};
 def multi: (.meta.accounts | length) > 1;
 def region_line: "\(.checked) checked, \(.with_databases) with databases, \(.empty) empty, \(.error) error\(if .error == 1 then "" else "s" end)"
-  + {"discover": " (discovery probe)", "full": " (all scanned in full, --no-discover)", "explicit": ""}[.mode];
+  + ({"discover": " (discovery probe)", "full": " (all scanned in full, --no-discover)", "explicit": "", "merge": " (merged from saved data)"}[.mode] // "");
+def merged: .meta.merge != null;
+def acct_rows: .summary.accounts // [];
+def src_state: if (.used | length) > 0 and (.superseded | length) == 0 then "used"
+               elif (.used | length) == 0 then "superseded (newer data used)" else "partly used" end;
+def merge_line: "\(.meta.merge.files) file(s), offline (0 AWS calls); days counted from \(.meta.generated_utc)";
 def shown_regions: [.summary.regions // [] | .[] | select(.status != "empty")];
 def pct_txt: if . == null then "-" else "\(.)%" end;
 def pctc: if . == null then "" elif . >= 100 then "ok" elif . >= 80 then "warn" else "bad" end;
@@ -30,12 +36,19 @@ def text:
   | ($s.engines | map(.engine | length) | max // 6 | [., 6] | max + 2) as $ew
   | [ "RDS PATCH COMPLIANCE - SUMMARY",
       "Run      : \($r.meta.generated_utc) / \($r.meta.generated_local)",
-      "Scanned  : accounts \($r | accts)" + (if ($r | ro).mode == "explicit" then "; regions \($r.meta.regions | join(", "))" else "; all enabled regions" end) + (if $r.meta.filters_text != "" then "; filters: \($r.meta.filters_text)" else "" end),
+      (if $r | merged then "Merged   : \($r | merge_line); accounts \($r | accts)" else
+      "Scanned  : accounts \($r | accts)" + (if ($r | ro).mode == "explicit" then "; regions \($r.meta.regions | join(", "))" else "; all enabled regions" end) + (if $r.meta.filters_text != "" then "; filters: \($r.meta.filters_text)" else "" end) end),
       "Rule     : " + rule($s),
       "",
       "Regions  : \($r | ro | region_line)",
       "",
       "OVERALL  : \($s.total) servers/clusters | COMPLIANT \($s.compliant) | NON-COMPLIANT \($s.non_compliant) | UNKNOWN \($s.unknown) | \($s.pct_compliant)% compliant",
+      "",
+      "PER ACCOUNT",
+      "  " + ("ACCOUNT" | pad(14)) + ("NAME" | pad(14)) + ("COLLECTED" | pad(22)) + ("REGIONS" | rpad(8)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("%COMPL" | rpad(8)) + ("PEND" | rpad(6)),
+      ( $r | acct_rows[] | "  " + (.account_id | pad(14)) + (.profile | dash | pad(14)) + (.collected_utc | dash | pad(22)) + (.regions_with_databases | rpad(8))
+          + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + (.pct_compliant | pct_txt | rpad(8)) + (.with_pending | rpad(6))
+          + (if .errors > 0 then "  \(.errors) AWS error(s)" else "" end) ),
       "",
       "PER REGION",
       "  " + ("ACCOUNT" | pad(14)) + ("REGION" | pad(16)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("%COMPL" | rpad(8)) + ("PEND" | rpad(6)),
@@ -59,6 +72,8 @@ def text:
                  ($nc[] | "!! " + (.account_id | pad(14)) + (.region | pad($rw + 2)) + (.engine | pad($gw + 2)) + (.identifier | pad($iw + 2))
                           + ("\(.current_version) -> \(.latest_minor_version | dash)" | pad($vw + 2)) + (.versions_behind | rpad(6)) + "  " + .support_flag) ) end ),
       ( if ($uk | length) > 0 then "", "UNKNOWN (\($uk | length))", ($uk[] | "?  \(.account_id)  \(.region)  \(.engine)  \(.identifier)  \(.current_version): \(why)") else empty end ),
+      ( if $r | merged then "", "MERGED INPUTS (\($r.meta.merge.files))",
+          ($r.meta.merge.sources[] | "   \(.file)  collected \(.collected_utc)  account(s) \((.used + .superseded) | join(", "))  \(src_state)") else empty end ),
       ( if ($r.errors | length) > 0 then "", "ERRORS", ($r.errors[] | "   \(.profile)/\(.region): \(.call): \(.message)") else empty end ),
       "",
       "Read-only summary; full per-server details: rds_patch_compliance_report.sh" ] | join("\n");
@@ -77,7 +92,7 @@ def html:
   + ".allok{background:#e6f4ea;color:#1b5e20;border:2px solid #2e7d32;border-radius:8px;padding:12px 16px;font-weight:700;margin-bottom:16px}footer{padding:8px 26px 22px;color:#7b8794;font-size:12px}"
   + "table.sortable th{cursor:pointer}td.warn{color:#b26a00;font-weight:600}tfoot td{border-top:2px solid #232f3e;background:#f0f3f7;font-weight:600}h2 .sub{font-size:12px;font-weight:400;color:#52606d}"
   + ".err{background:#fdecea;color:#c62828;border-radius:8px;padding:1px 6px;font-size:11px;font-weight:600}</style></head><body>"
-  + "<header><h1>RDS patch compliance - summary</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r | accts | h) &middot; Regions: \($r | ro | region_line | h)\(if $r.meta.filters_text != "" then " &middot; filters: " + ($r.meta.filters_text | h) else "" end)</p></header><main>"
+  + "<header><h1>RDS patch compliance - summary</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r | accts | h) &middot; Regions: \($r | ro | region_line | h)\(if $r | merged then " &middot; merged from \($r.meta.merge.files) file(s)" else "" end)\(if $r.meta.filters_text != "" then " &middot; filters: " + ($r.meta.filters_text | h) else "" end)</p></header><main>"
   + "<div class=\"rule\"><b>Rule:</b> \(rule($s) | h)</div><div class=\"cards\">"
   + card("Servers / clusters"; $s.total; ""; "\($r.meta.accounts | length) account(s), \($r.meta.regions | length) region(s)")
   + card("% compliant"; "\($s.pct_compliant)%"; (if $s.non_compliant > 0 then "warn" else "ok" end); "of all servers")
@@ -92,6 +107,8 @@ def html:
   + (if ($nc | length) == 0 then "<div class=\"allok\">All servers compliant - no server is more than \($s.max_behind) minor versions behind.</div>"
      else "<h2 class=\"bad\">Non-compliant servers (\($nc | length)) - most behind first</h2><table class=\"nc\"><tr><th>Account</th><th>Region</th><th>Engine</th><th>Identifier</th><th>Current &rarr; latest minor</th><th>Behind</th><th>Support</th></tr>"
           + ($nc | map("<tr><td>\(.account_id | h)</td><td>\(.region | h)</td><td>\(.engine | h)</td><td><b>\(.identifier | h)</b></td><td class=\"mono\">\(.current_version | h) &rarr; \(.latest_minor_version | dash | h)</td><td class=\"n bad\">\(.versions_behind)</td><td>\(.support_flag | h)</td></tr>") | join("")) + "</table>" end)
+  + "<h2>Per account <span class=\"sub\">\($r.meta.accounts | length) account(s) &middot; click a header to sort</span></h2><table class=\"sortable\" id=\"accounts\"><thead><tr><th>Account</th><th>Name</th><th>Collected</th><th>Regions with DBs</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>% compliant</th><th>Pending maint.</th><th>Past standard support</th></tr></thead><tbody>"
+  + ($r | acct_rows | map("<tr><td><b>\(.account_id | h)</b></td><td>\(.profile | dash | h)</td><td>\(.collected_utc | dash | h)\(if .source then "<br><span class=\"sub\">" + (.source | h) + "</span>" else "" end)</td><td class=\"n\">\(.regions_with_databases)</td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td class=\"n \(.pct_compliant | pctc)\" data-s=\"\(.pct_compliant // -1)\">\(.pct_compliant | pct_txt)</td><td class=\"n \(if .with_pending > 0 then "warn" else "" end)\">\(.with_pending)</td><td class=\"n \(if .past_standard_support > 0 then "bad" else "" end)\">\(.past_standard_support)</td></tr>") | join("")) + "</tbody></table>"
   + "<h2>Per region <span class=\"sub\">\($r | ro | region_line | h) &middot; click a header to sort</span></h2><table class=\"sortable\"><thead><tr><th>Account</th><th>Region</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>% compliant</th><th>Pending maint.</th></tr></thead><tbody>"
   + ($r | shown_regions | map("<tr><td>\(.account_id | h)</td><td><b>\(.region | h)</b>\(if .status == "error" then " <span class=\"err\">AWS error</span>" else "" end)</td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td class=\"n \(.pct_compliant | pctc)\" data-s=\"\(.pct_compliant // -1)\">\(.pct_compliant | pct_txt)</td><td class=\"n \(if .with_pending > 0 then "warn" else "" end)\">\(.with_pending)</td></tr>") | join(""))
   + "</tbody>" + ($s.regions_total // null | if . == null then "" else "<tfoot><tr><td><b>All regions</b></td><td></td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td class=\"n \(.pct_compliant | pctc)\">\(.pct_compliant | pct_txt)</td><td class=\"n\">\(.with_pending)</td></tr></tfoot>" end) + "</table>"
@@ -101,6 +118,8 @@ def html:
         + ($e.majors | map("<tr><td></td><td>\(.major | h)</td><td class=\"n\">\(.total)</td><td class=\"n ok\">\(.compliant)</td><td class=\"n \(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td class=\"n\">\(.unknown)</td><td></td><td class=\"mono\">\(latest_txt | h)</td></tr>") | join(""))] | join("")) + "</table>"
   + (if ($uk | length) > 0 then "<h2>Unknown (\($uk | length))</h2><table><tr><th>Account</th><th>Region</th><th>Engine</th><th>Identifier</th><th>Current</th><th>Why</th></tr>"
        + ($uk | map("<tr><td>\(.account_id | h)</td><td>\(.region | h)</td><td>\(.engine | h)</td><td>\(.identifier | h)</td><td class=\"mono\">\(.current_version | h)</td><td>\(why | h)</td></tr>") | join("")) + "</table>" else "" end)
+  + (if $r | merged then "<h2>Merged inputs <span class=\"sub\">\($r | merge_line | h)</span></h2><table id=\"sources\"><tr><th>File</th><th>Collected</th><th>Account(s)</th><th>Used</th><th>Script</th></tr>"
+       + ($r.meta.merge.sources | map("<tr><td class=\"mono\">\(.file | h)</td><td>\(.collected_utc | h)<br><span class=\"sub\">\(.collected_local // "" | h)</span></td><td>\((.used + .superseded) | join(", ") | h)</td><td>\(src_state | h)</td><td>v\(.script_version // "?" | h)</td></tr>") | join("")) + "</table>" else "" end)
   + (if ($r.errors | length) > 0 then "<h2>Errors</h2><ul>" + ($r.errors | map("<li>\(.profile | h)/\(.region | h): \(.call | h): \(.message | h)</li>") | join("")) + "</ul>" else "" end)
   + "</main><script>(function(){Array.prototype.forEach.call(document.querySelectorAll('table.sortable'),function(t){var hs=t.tHead.rows[0].cells;"
   + "Array.prototype.forEach.call(hs,function(th,i){var asc=false;th.title='Sort';th.addEventListener('click',function(){asc=!asc;var b=t.tBodies[0];"
@@ -125,9 +144,14 @@ def csv_regions:
   (["account_id","profile","region","status","total","compliant","non_compliant","unknown","pct_compliant","servers_with_pending_maintenance","pending_actions","aws_errors"] | @csv),
   (shown_regions + [.summary.regions_total // empty] | .[]
    | [.account_id, .profile, .region, .status, .total, .compliant, .non_compliant, .unknown, (.pct_compliant // ""), .with_pending, .pending_total, .errors] | @csv);
+def csv_accounts:
+  (["account_id","profile","collected_utc","source_file","regions_with_databases","total","compliant","non_compliant","unknown","pct_compliant","servers_with_pending_maintenance","past_standard_support","aws_errors"] | @csv),
+  (acct_rows[] | [.account_id, .profile, .collected_utc, (.source // ""), .regions_with_databases, .total, .compliant, .non_compliant, .unknown, (.pct_compliant // ""), .with_pending, .past_standard_support, .errors] | @csv);
 def alert: {summary: (.summary | {total, compliant, non_compliant, unknown, pct_compliant, max_behind, errors}),
             regions: (ro | {checked, with_databases, empty, error}),
+            accounts: [acct_rows[] | {account_id, profile, total, compliant, non_compliant, unknown, pct_compliant}],
+            merged_files: (.meta.merge.files // null),
             non_compliant: [nc_rows[] | {account_id, region, engine, identifier, current_version, latest_minor_version, versions_behind, support_flag}]};
 
 if $mode == "text" then text elif $mode == "html" then html elif $mode == "csv_nc" then csv_nc
-elif $mode == "csv_summary" then csv_summary elif $mode == "csv_regions" then csv_regions elif $mode == "alert" then alert else . end
+elif $mode == "csv_summary" then csv_summary elif $mode == "csv_accounts" then csv_accounts elif $mode == "csv_regions" then csv_regions elif $mode == "alert" then alert else . end

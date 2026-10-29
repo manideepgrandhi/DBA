@@ -39,7 +39,7 @@ P2=(-P prod,nonprod -r us-east-1,ap-south-1)
 
 echo "== usage"
 t help 0 fleet --help; has help out 'versions_behind > --max-behind'
-t version 0 fleet --version; has version out '1.1.1'
+t version 0 fleet --version; has version out '1.3.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t htmlnoout 1 fleet -r us-east-1 -F html
@@ -131,7 +131,7 @@ chk "summary html: region totals = overall" grep -q '<td><b>All regions</b></td>
 
 echo "== outputs"
 t files 0 fleet "${P2[@]}" -F txt,html,csv -o "$OUT/files"
-chk "5 files written (txt, html, summary, noncompliant and regions csv)" test "$(find "$OUT/files" -type f | wc -l)" -eq 5
+chk "6 files written (txt, html, summary, noncompliant, regions and accounts csv)" test "$(find "$OUT/files" -type f | wc -l)" -eq 6
 has files out 'OVERALL  :'
 H="$(ls "$OUT"/files/*.html)"; cp "$H" "$OUT/h.out"
 has h out 'table class="nc"'; has h out 'Non-compliant servers (8)'; has h out 'Rule:'; has h out '59.1%'
@@ -170,6 +170,48 @@ chk "json webhook payload" bash -c "grep . '$OUT/hook.txt' | tail -1 | jq -e '.s
 t al_slack 0 fleet -P prod -r us-east-1 -e docdb,neptune --alert-on always --alert-webhook "$HOOK"
 chk "slack payload" bash -c "grep . '$OUT/hook.txt' | tail -1 | jq -e '.text | contains(\"All servers compliant\")' >/dev/null"
 hasnt al_slack err '/SECRET'
+
+echo "== --save-data and --merge (offline)"
+NOAWS="$OUT/noaws"; mkdir -p "$NOAWS"; printf '#!/bin/sh\necho AWS-CALLED >>"%s/aws_called"; exit 99\n' "$OUT" >"$NOAWS/aws"; chmod +x "$NOAWS/aws"
+MG="$OUT/mg data"; mkdir -p "$MG"
+RDS_PCR_NOW=1790000000 t sd_sum 0 fleet -P prod -r us-east-1 --save-data -o "$MG" -F txt
+chk "summary --save-data default name in -o dir" test -s "$MG/rds_patch_111111111111_$(TZ=UTC date -d @1790000000 +%Y%m%d 2>/dev/null || date -u +%Y%m%d).json"
+RDS_PCR_NOW=1790100000 MOCK_SCENARIO=fleet "$FULL" -P nonprod -r ap-south-1 --save-data "$MG/nonprod full.json" -o "$OUT/fullnp" -F json >/dev/null 2>&1
+RDS_PCR_NOW=1790200000 t sd_named 0 fleet -P dev -r eu-west-1 --save-data "$MG/dev.json"
+chk "summary --save-data FILE" jq -e '.accounts[0].account == "333333333333"' "$MG/dev.json"
+chk "summary file merges in the full report (interchange)" bash -c "PATH='$NOAWS:$PATH' '$FULL' --merge '$MG' -F json -o '$OUT/fm' >/dev/null 2>&1 && jq -e '.summary.total == 24' '$OUT'/fm/*.json >/dev/null"
+sm() { local name="$1" exp="$2"; shift 2; PATH="$NOAWS:$PATH" RDS_PCR_NOW=1791000000 t "$name" "$exp" fleet "$@"; }
+sm m_txt 0 --merge "$MG"
+has m_txt out 'Merged   : 3 file(s), offline (0 AWS calls)'
+has m_txt out 'OVERALL  : 24 servers/clusters | COMPLIANT 14 | NON-COMPLIANT 9 | UNKNOWN 1'
+has m_txt out 'PER ACCOUNT'; has m_txt out '333333333333  dev'
+has m_txt out 'MERGED INPUTS (3)'; has m_txt out 'PER ENGINE'
+hasnt m_txt out 'regions us-east-1'
+sm m_all 0 --merge "$MG/dev.json" "$MG/nonprod full.json" "$MG" -o "$OUT/mo" -F txt,html,csv
+chk "merge writes txt/html/csv + accounts csv" bash -c "ls '$OUT/mo' | grep -q '_accounts.csv' && ls '$OUT/mo' | grep -q '.html' && ls '$OUT/mo' | grep -q '_noncompliant.csv'"
+chk "accounts csv has 3 accounts" test "$(tail -n +2 "$OUT"/mo/*_accounts.csv | wc -l)" = 3
+chk "html has per-account + merged inputs" bash -c "grep -q 'id=\"accounts\"' '$OUT'/mo/*.html && grep -q 'Merged inputs' '$OUT'/mo/*.html"
+sm m_max 0 --merge "$MG" --max-behind 0
+has m_max out 'more than 0 valid minor versions behind'
+sm m_fail 5 --merge "$MG" --fail-on-noncompliant
+sm m_warn 0 --merge "$MG" --warn-days 400; has m_warn out 'ending within 400 days'
+sm m_rej1 1 --merge "$MG" -P prod
+sm m_rej2 1 --merge "$MG" -r us-east-1
+sm m_rej3 1 --merge "$MG" --save-data
+sm m_rej4 1 --merge
+echo '{"x":1}' >"$OUT/bad.json"; sm m_bad 3 --merge "$OUT/bad.json"
+: >"$MAIL_SINK"
+sm m_alert 0 --merge "$MG" --alert-email dba@example.com
+chk "merge alert e-mail sent with summary body" bash -c "grep -q 'NON-COMPLIANT:' '$MAIL_SINK' && grep -q 'OVERALL  : 24 servers' '$MAIL_SINK'"
+CR="$OUT/crlfjq"; mkdir -p "$CR"; REALJQ="$(command -v jq)"
+printf '#!/bin/bash\n"%s" "$@" | sed '"'"'s/$/\\r/'"'"'; exit "${PIPESTATUS[0]}"\n' "$REALJQ" >"$CR/jq"; chmod +x "$CR/jq"
+mkdir -p "$OUT/drv/c/Users/DBA Team/patch data"; cp "$MG"/*.json "$OUT/drv/c/Users/DBA Team/patch data/"
+PATH="$CR:$NOAWS:$PATH" RDS_PCR_DRIVE_ROOT="$OUT/drv" RDS_PCR_NOW=1791000000 t m_win 0 fleet --merge 'C:\Users\DBA Team\patch data' -o "$OUT/win out" -F txt,html,csv
+chk "git bash: no CR in outputs, same totals" bash -c "! grep -lq $'\r' '$OUT/win out'/* && grep -q 'OVERALL  : 24 servers' '$OUT/win out'/*.txt"
+MOCK_SCENARIO=oracle RDS_PCR_NOW=1790000000 "$FULL" -P prod -r us-east-1 --save-data "$OUT/ora.json" -o "$OUT/ora" -F json >/dev/null 2>&1
+sm m_ora 0 --merge "$OUT/ora.json" --oracle-any-patch-line
+chk "oracle any-line recounted at merge = live any-line" bash -c "MOCK_SCENARIO=oracle RDS_PCR_NOW=1791000000 '$S' -P prod -r us-east-1 --oracle-any-patch-line 2>/dev/null | grep OVERALL | diff - <(grep OVERALL '$OUT/m_ora.out')"
+chk "merge mode made 0 AWS calls" test ! -e "$OUT/aws_called"
 
 echo "== hygiene"
 chk "shellcheck summary script" shellcheck "$S"
