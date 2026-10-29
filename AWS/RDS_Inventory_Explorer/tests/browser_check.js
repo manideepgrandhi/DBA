@@ -360,6 +360,37 @@ function parseCsv(t) {   // RFC 4180 parser (test oracle)
   await g.setViewport({width: 1440, height: 1000});
   await g.evaluate(() => localStorage.removeItem('mg-theme'));
 
+  // v1.2: merged report header (MERGED=<expected file count>, SHOTS_V120=<dir>)
+  {
+    const want = process.env.MERGED, g4 = await b.newPage(); g4.on('pageerror', e => errs.push('merge page: ' + e.message));
+    await g4.setViewport({width: 1440, height: 900}); await g4.goto(url); await sleep(200);
+    r.mh = await g4.evaluate(() => ({gen: document.getElementById('gen').textContent, src: document.getElementById('sources'),
+      vis: document.getElementById('sources').getClientRects().length > 0,
+      n: document.querySelectorAll('#sources .src').length, sup: document.querySelectorAll('#sources .sup').length,
+      txt: document.getElementById('sources').textContent, foot: document.querySelector('footer').textContent,
+      note: document.body.textContent.includes('vs. merge time')}));
+    if (want) {
+      ok(/^Merged 2026-10-17 06:30 UTC/.test(r.mh.gen) && r.mh.gen.includes('from ' + want + ' file(s)'), 'merged header: ' + r.mh.gen);
+      ok(r.mh.vis && r.mh.n === +want, 'merged header lists each source file: ' + r.mh.n);
+      ok(r.mh.sup >= 1 && /older duplicate/.test(r.mh.txt), 'merged header marks the superseded duplicate');
+      ok(!/(us|eu|ap|me|sa|ca|af)-[a-z]+-\d/.test(r.mh.gen + r.mh.txt), 'merged header lists no region names');
+      ok(/merged offline/.test(r.mh.foot) && /0 AWS calls/.test(r.mh.foot), 'footer: merged offline, 0 AWS calls');
+      if (process.env.SHOTS_V120) {
+        await g4.screenshot({path: path.join(process.env.SHOTS_V120, '01_merged_header.png'), fullPage: false});
+        await g4.goto(url + '#tab=pending'); await sleep(250);
+        ok(await g4.evaluate(() => document.body.textContent.includes('vs. merge time')), 'pending note: urgency vs. merge time');
+        await g4.screenshot({path: path.join(process.env.SHOTS_V120, '02_merged_pending.png'), fullPage: true});
+        await g4.setViewport({width: 390, height: 844}); await g4.evaluate(() => localStorage.setItem('mg-theme', 'dark')); await g4.reload(); await sleep(250);
+        ok(await g4.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 0, 'merged mobile: no sideways scroll');
+        await g4.screenshot({path: path.join(process.env.SHOTS_V120, '03_merged_mobile_dark.png'), fullPage: true});
+        await g4.evaluate(() => localStorage.removeItem('mg-theme'));
+      }
+    } else {
+      ok(/^Generated /.test(r.mh.gen) && !r.mh.vis && !/merged offline/.test(r.mh.foot), 'single-run header: no merge sources');
+    }
+    await g4.close();
+  }
+
   ok(errs.length === 0, 'no JS errors: ' + errs.join('; '));
   ok(net.length === 0, 'self-contained (no network): ' + net.join(' '));
   console.log(JSON.stringify(process.env.DEBUG ? {fails, r} : {fails, passed: nchk - fails.length, total: nchk}));

@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 1\.1\.0"; has help out "--csv"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 1\.2\.0"; has help out "--csv"; has help out "--save-data"; has help out "--merge FILE"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -219,11 +219,107 @@ PY
 chk "inventory CSV: header, shape and values match the model" csvcheck inventory "$CI"
 chk "pending CSV: header, shape and values match the model" csvcheck pending "$CP"
 
+echo "== --save-data / --merge"
+: >"$MOCK_LOG"
+t sd 0 fleet "${FLEET[@]}" --save-data --csv
+SD="$OUT/sd/rds_inventory_explorer_data_20261017_063000.json"
+chk "data file written next to the HTML" test -s "$SD"
+chk "data file mode 640" test "$(stat -c %a "$SD")" == 640
+chk "no data file without --save-data" test -z "$(find "$OUT/fleet" -name '*_data_*' 2>/dev/null)"
+dj() { if jq -e --slurpfile m "$OUT/sd.json" "$1" "$SD" >/dev/null 2>&1; then ok "data: $1"; else bad "data: $1 (got $(jq -c "$1" --slurpfile m "$OUT/sd.json" "$SD" 2>&1 | head -c 300))"; fi; }
+dj '.schema == "rds-inventory-explorer/data" and .schema_version == 1 and .script_version == "1.2.0" and .merged == false'
+dj '.generated_epoch == 1792218600 and .generated_utc == "2026-10-17 06:30 UTC"'
+dj '[.accounts[] | [.account, .profile, .alias, .collected_epoch]] == [["111111111111","prod",null,1792218600],["222222222222","nonprod",null,1792218600]]'
+dj '.regions_scanned | any(.region == "eu-west-1" and .status == "probed: no databases") and any(.status == "read")'
+dj '.resources == $m[0].resources and .pending == $m[0].pending and .errors == $m[0].errors and .counts == $m[0].meta.counts'
+dj '(.source.regions | length) > 0 and .source.include_docdb == false'
+chk "--save-data leaves the HTML model unchanged" test "$(jq -cS 'del(.meta.generated_local)' "$OUT/sd.json")" == "$(jq -cS 'del(.meta.generated_local)' "$OUT/fleet.json")"
+
+# the CloudShell side: one run per account, collected at different times
+MD="$OUT/dl dir/Mani Deep"; mkdir -p "$MD" "$OUT/root/c/Users/Mani Deep/Downloads"
+t sdA 0 fleet -P prod -A --save-data
+RDS_EXPLORER_NOW=1792222200 t sdB 0 fleet -P nonprod,broken -A --save-data
+cp "$OUT"/sdA/*_data_*.json "$OUT/root/c/Users/Mani Deep/Downloads/"
+cp "$OUT"/sdB/*_data_*.json "$MD/"
+# an older prod download with stale contents: must lose to the newer prod file whatever the order
+jq '.generated_epoch -= 86400 | .accounts[].collected_epoch -= 86400 | .generated_utc = "2026-10-16 06:30 UTC"
+    | .source.regions |= (map(tostring | gsub("hr-sqlserver"; "hr-sqlserver-OLD") | fromjson))' "$OUT"/sdA/*_data_*.json >"$MD/old prod_data_20261016.json"
+dfiles=("$MD"/*.json "$OUT/root/c/Users/Mani Deep/Downloads"/*.json); chk "prepared 3 data files (2 prod, 1 nonprod)" test "${#dfiles[@]}" == 3
+mcalls_before="$(wc -l <"$MOCK_LOG")"
+
+# Git Bash simulation: no aws on PATH, jq.exe-style CRLF output, date without -d/-r, Windows + spaced paths, no AWS env
+GB="$OUT/gbbin"; mkdir -p "$GB"
+for x in bash env tr wc head grep sort mkdir mktemp cp mv chmod rm dirname cat sed basename ls; do ln -sf "$(command -v "$x")" "$GB/$x"; done
+printf '#!%s\nset -o pipefail\n%s "$@" | %s '"'"'s/$/\\r/'"'"'\n' "$(command -v bash)" "$(command -v jq)" "$(command -v sed)" >"$GB/jq"
+printf '#!%s\nfor a in "$@"; do case "$a" in -d|-d*|--date*|-r) echo "date: no $a" >&2; exit 1;; esac; done\nexec %s "$@"\n' "$(command -v bash)" "$(command -v date)" >"$GB/date"
+chmod +x "$GB/jq" "$GB/date"
+chk "sim: no aws on PATH" bash -c "PATH='$GB'; ! command -v aws"
+chk "sim: jq prints CRLF" test "$(PATH="$GB" jq -n 1 | od -An -c | tr -d ' \n')" == '1\r\n'
+chk "sim: date -d is unavailable" bash -c "! PATH='$GB' date -d @0 >/dev/null 2>&1"
+gbm() {  # gbm <name> <expected-rc> [args...]   merge under the Git Bash simulation
+    local name="$1" exp="$2"; shift 2
+    env -i PATH="$GB" HOME="$OUT" TZ=UTC RDS_EXPLORER_NOW="${MNOW:-1792218600}" RDS_EXPLORER_DRIVE_ROOT="$OUT/root" \
+        "$SCRIPT" -o "$OUT/$name out" "$@" >"$OUT/$name.out" 2>"$OUT/$name.err"
+    local rc=$?
+    if [[ "$rc" == "$exp" ]]; then ok "$name (rc=$rc)"; else bad "$name: rc=$rc expected $exp"; sed 's/^/       /' "$OUT/$name.err" | tail -5; fi
+    local h; h="$(find "$OUT/$name out" -name '*.html' 2>/dev/null | head -1)"
+    [[ -n "$h" ]] && sed -n 's|.*<script type="application/json" id="explorer-data">\(.*\)</script>.*|\1|p' "$h" >"$OUT/$name.json"
+    return 0
+}
+gbm mg 0 --merge 'C:\Users\Mani Deep\Downloads\rds_inventory_explorer_data_*.json' "$MD/"*.json --csv --save-data
+chk "merge made 0 AWS calls" test "$(wc -l <"$MOCK_LOG")" == "$mcalls_before"
+has mg err "Input [0-9]: .*old prod_data_20261016\.json"
+has mg err "Account 111111111111: using newer rds_inventory_explorer_data_20261017_063000\.json .*ignoring older old prod_data_20261016\.json"
+has mg err "Merged 2 account\(s\) from 3 file\(s\).*relative to merge time.*0 AWS calls"
+jqt mg '.meta.merge.files == 3 and .meta.aws_calls == 0 and .meta.region_mode == "merge" and .meta.counts.accounts == 2'
+jqt mg '[.resources[].name] | index("hr-sqlserver-OLD") == null and index("hr-sqlserver") != null'
+jqt mg '[.meta.merge.sources[] | select(.superseded == ["111111111111"])] | length == 1 and .[0].file == "old prod_data_20261016.json"'
+chk "merged model == single fleet run (resources, pending, errors, counts)" test \
+    "$(jq -cS '[.resources, .pending, (.errors | sort), .meta.counts]' "$OUT/mg.json")" == "$(jq -cS '[.resources, .pending, (.errors | sort), .meta.counts]' "$OUT/sd.json")"
+for k in inventory pending; do
+    chk "merged $k CSV (CRLF jq) is byte-identical to the scan's" cmp -s "$OUT/mg out/rds_inventory_explorer_${k}_20261017_063000.csv" "$OUT/sd/rds_inventory_explorer_${k}_20261017_063000.csv"
+done
+chk "merged CSVs have no doubled CR" bash -c "! grep -q \$'\\r\\r' '$OUT/mg out/'*.csv"
+chk "merged HTML: empty region eu-west-1 never appears" bash -c "! grep -q eu-west-1 '$OUT/mg out/'*.html"
+chk "merged HTML: no CR characters" bash -c "! grep -q \$'\\r' '$OUT/mg out/'*.html"
+MGD="$OUT/mg out/rds_inventory_explorer_data_20261017_063000.json"
+chk "merged --save-data: valid merged data file" jq -e >/dev/null '.merged == true and (.accounts|length) == 2 and (.sources|length) == 3 and any(.regions_scanned[]; .region == "eu-west-1")' "$MGD"
+gbm mg2 0 --merge "$MGD"
+chk "re-merging the merged data file gives the same model" test \
+    "$(jq -cS '[.resources, .pending, .errors]' "$OUT/mg2.json")" == "$(jq -cS '[.resources, .pending, .errors]' "$OUT/mg.json")"
+gbm mgdir 0 --merge "$MD" "/c/Users/Mani Deep/Downloads"
+jqt mgdir '.meta.merge.files == 3 and .meta.counts.accounts == 2'
+# urgency is relative to merge time: 7 days later orders-2 (due in 6 d at scan time) is past due
+MNOW=1792823400 gbm mglate 0 --merge "$MD/"*.json "$OUT/root/c/Users/Mani Deep/Downloads/"*.json
+jqt mglate '.meta.now == 1792823400 and .meta.merge.urgency_basis == "merge time"'
+jqt mg '.meta.counts.pending_past_due == 1 and ([.pending[] | select(.res_name == "orders-2")][0].urgency == "lt7")'
+jqt mglate '.meta.counts.pending_past_due == 2 and ([.pending[] | select(.res_name == "orders-2")][0].urgency == "past_due")'
+# bad input -> exit 3 with a clear message
+printf '{"schema":' >"$OUT/bad.json"
+cp "$(find "$OUT/fleet" -name '*.html' | head -1)" "$OUT/report.html"
+jq '.schema_version = 0' "$SD" >"$OUT/old0.json"; jq 'del(.schema_version)' "$SD" >"$OUT/old_nov.json"
+jq '.schema_version = 2' "$SD" >"$OUT/newer.json"; jq 'del(.schema)' "$SD" >"$OUT/noschema.json"; jq 'del(.source)' "$SD" >"$OUT/partial.json"
+gbm mbad 3 --merge "$OUT/bad.json";        has mbad err "not valid JSON"
+gbm mhtml 3 --merge "$OUT/report.html";    has mhtml err "HTML report"
+gbm mold 3 --merge "$OUT/old0.json";       has mold err "old data schema 0"
+gbm moldv 3 --merge "$OUT/old_nov.json";   has moldv err "no schema_version"
+gbm mnew 3 --merge "$OUT/newer.json";      has mnew err "newer"
+gbm mnos 3 --merge "$OUT/noschema.json";   has mnos err "not an RDS Inventory Explorer data file"
+gbm mpart 3 --merge "$OUT/partial.json";   has mpart err "missing accounts / source data"
+gbm mmiss 3 --merge "$OUT/nope_*.json";    has mmiss err "No file matches"
+gbm mmix 3 --merge "$SD" "$OUT/bad.json"
+chk "bad merge input writes no report" test -z "$(find "$OUT/mbad out" "$OUT/mmix out" -name '*.html' 2>/dev/null)"
+t mP 1 fleet --merge "$SD" -P prod;  has mP err "--merge"
+t mnone 1 fleet --merge;              has mnone err "--merge"
+
 echo "== browser (headless Chrome)"
 if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then
     res="$(CSV_DIR="$OUT/csv" EMPTY_HTML="$(find "$OUT/empty" -name '*.html' | head -1)" node "$HERE/browser_check.js" "$F" ${SHOTS:+"$SHOTS"} 2>&1)"; rc=$?
     if (( rc == 0 )); then ok "browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks - search, filters, card, links, hash, copy JSON, dark mode, pending tab, CSV export, mobile, no JS errors, no network"
     else bad "browser check: ${res:0:800}"; fi
+    res="$(MERGED=3 CSV_DIR="$OUT/mg out" SHOTS_V120="${SHOTS_V120:-}" node "$HERE/browser_check.js" "$(find "$OUT/mg out" -name '*.html' | head -1)" 2>&1)"; rc=$?
+    if (( rc == 0 )); then ok "browser on the merged HTML: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks (same fleet checks + merged header)"
+    else bad "browser check (merged): ${res:0:800}"; fi
 else echo "  skip browser check (needs node + puppeteer-core on NODE_PATH + Chrome)"; fi
 
 echo "== dry run / safety"

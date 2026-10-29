@@ -93,15 +93,49 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
 | `--aws-timeout SEC` / `--max-attempts N` | CLI connect/read timeout (default 30) and retry attempts (default 5). |
 | `--keep-workdir` | Keep the raw AWS responses for debugging. |
 | `--dry-run` | Print the calls that would run, and call nothing. |
-| `-v`, `-h`, `-V` | Verbose, help, version (1.1.0). |
+| `--save-data` | Also write `<prefix>_data_<ts>.json`: the page's dataset plus the raw describe output, with the schema version, script version, generation time, accounts and the regions scanned. This is the input for `--merge`. |
+| `--merge FILE...` | Build one report from saved data files, with no AWS calls and no credentials (see below). Takes files, globs or folders. Works with `-o`, `--prefix`, `--csv`, `--save-data` and `--tz`. |
+| `-v`, `-h`, `-V` | Verbose, help, version (1.2.0). |
 
 **Exit codes:**
 
 - `0`: the report was written. It may contain recorded errors.
 - `1`: usage error.
 - `2`: pre-check failed (aws or jq missing, or no profile has valid credentials).
+- `3`: bad `--merge` input (file not found, not JSON, an HTML report, or an old or unknown data schema).
 - `4`: output error.
 - `130`: interrupted.
+
+## Merging reports from several accounts on your desktop (Git Bash)
+
+You do not need to copy files between accounts. Run the script in each account's CloudShell with `--save-data`, download the data files, and merge them on your own computer. The merge reads only the files, so it needs no AWS CLI, no credentials and no network.
+
+1. In each account's CloudShell:
+
+   ```bash
+   ./rds_inventory_explorer.sh -A --save-data -o ~/rds_out
+   ls ~/rds_out      # rds_inventory_explorer_data_<ts>.json is the file to download
+   ```
+
+2. Download it: **Actions → Download file**, then enter the full path, for example `/home/cloudshell-user/rds_out/rds_inventory_explorer_data_20261017_063000.json`. Put the files from every account in one folder, for example `C:\Users\<you>\Downloads\rds`.
+3. Install jq once: run `winget install jqlang.jq` in PowerShell, then reopen Git Bash and check with `jq --version` (1.6 or later).
+4. In Git Bash, from the folder that holds the script and its `lib/` folder:
+
+   ```bash
+   ./rds_inventory_explorer.sh --merge ~/Downloads/rds/*_data_*.json --csv -o ~/Downloads/rds/merged
+   # a folder works too, as do Windows paths in quotes:
+   ./rds_inventory_explorer.sh --merge "C:\Users\<you>\Downloads\rds" --csv
+   start ~/Downloads/rds/merged/rds_inventory_explorer_*.html
+   ```
+
+How the merge works:
+
+- The page is rebuilt from the raw data in each file, so it has the same tabs, filters, cards and Export CSV buttons as a normal report. `--csv` writes the two CSVs, and `--save-data` writes the merged data file, which you can merge again later.
+- **Urgency is relative to the merge time.** Days left, past due and the 7 / 30 day counts on the Pending tab are worked out at the time you merge, not at the time each file was collected. The header says "Merged" and lists every source file with its collection time.
+- If two files hold the same account, the file collected later is used and the older one is ignored. The log says which file won, and the header marks the ignored one.
+- The header shows counts only, never lists of region names.
+- A file that is not a data file stops the merge with exit code 3 and says why. Examples are an HTML report instead of the `_data_` JSON, a damaged download, or a file from an older script version.
+- Requirements: Bash 4.4 or later (Git for Windows ships 5.x) and jq. The script copes with jq.exe's CRLF output, `C:\` and `/c/` paths, paths with spaces, and a `date` without `-d`.
 
 ## IAM permissions
 
@@ -143,6 +177,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
   - It checks the call log: only allowed operations, and probes are the only `--no-paginate` calls.
   - It runs the failure scenarios (throttled global clusters, empty fleet, no valid profile), the dry run (no calls), and a 1,950-resource scale run.
   - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, the Pending tab (hash, filters, search, sort, count strip, badge navigation, empty state), CSV export (the downloaded bytes are compared with the `--csv` files, plus one real Chrome download), layout at 680 / 900 / 1280 px and mobile dark, and no JS errors or network requests.
+  - It checks `--save-data` and `--merge`: the data file round trip, a merge of three files where one account appears twice (the newer file wins and the log says so), and that the merged model and CSVs match a single scan. It also checks that urgency is recomputed at merge time, that bad, HTML, old-schema, newer-schema and partial files fail with exit code 3, and that the merge makes 0 AWS calls. The merge runs in a simulated Git Bash: no `aws` on PATH, a jq that writes CRLF, a `date` without `-d`, `C:\` and `/c/` paths, and spaces in paths. The browser check is run again on the merged page.
   - It checks the `--csv` files: names, mode 640, BOM, CRLF, quoting, the formula guard, and that header and values match the model (Python's `csv` module as the parser).
 - **`validate_cli.sh`** replays every command line the script issues through the real CLI, so syntax, `--query` and parameter validation are checked. It also runs negative controls, checks the mock output shapes against `--generate-cli-skeleton output`, and runs a full `-A` end to end through `tests/fake_aws_endpoint.py`. That run checks paging, that the probe skips the empty region, and that no CloudWatch, Secrets Manager or KMS request is made.
 
@@ -152,6 +187,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
 rds_inventory_explorer.sh        the script
 lib/explorer.jq                  raw AWS JSON -> page model
 lib/csv.jq                       page model -> CSV (used by --csv)
+lib/merge.jq                     saved data files -> one dataset (used by --merge)
 lib/explorer_template.html       page (CSS + JS), data placeholder /*__EXPLORER_DATA__*/
 samples/sample.html              page built from the test mock (fake accounts)
 docs/screenshot.png              cluster card from the sample

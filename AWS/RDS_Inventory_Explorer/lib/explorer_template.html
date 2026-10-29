@@ -88,6 +88,11 @@ dt{color:var(--muted)}dd{margin:0;min-width:0;word-break:break-word}
 .errors table{font-size:12.5px}
 .toast{position:fixed;right:20px;bottom:20px;background:var(--text);color:var(--bg);padding:8px 14px;border-radius:7px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+.sources{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;font-size:12px;color:var(--muted)}
+.sources b{color:var(--fg);font-weight:600}
+.sources .src{white-space:nowrap}
+.sources .sup{color:var(--warn,#b45309)}
+@media (max-width:760px){.sources .src{white-space:normal}}
 footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .scroll{overflow-x:auto}
@@ -135,6 +140,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     <button type="button" id="theme-btn" title="Theme: auto / light / dark"></button>
   </div>
   <div class="counts" id="counts"></div>
+  <div class="sources" id="sources" hidden></div>
 </header>
 <nav class="tabs" role="tablist" aria-label="Views">
   <button type="button" class="tab" role="tab" id="tab-inventory" aria-controls="view">Inventory</button>
@@ -596,7 +602,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
     }
     var ps = psorted(pfiltered(o));
     view.appendChild(h('div', { cls: 'listhead' }, h('h2', { text: 'Pending maintenance actions' }),
-      h('span', { cls: 'muted', id: 'pm-shown', text: 'Showing ' + ps.length + ' of ' + P.length + '  ·  urgency = earliest of auto-applied / forced / current apply date vs. report time ' + M.generated_utc })));
+      h('span', { cls: 'muted', id: 'pm-shown', text: 'Showing ' + ps.length + ' of ' + P.length + '  ·  urgency = earliest of auto-applied / forced / current apply date vs. ' + (M.merge ? 'merge time ' : 'report time ') + M.generated_utc })));
     if (!ps.length) { view.appendChild(h('div', { cls: 'panel empty', id: 'pm-none', text: 'No pending action matches the search / filters.' })); return; }
     var head = h('tr', null, PCOLS.map(function (c) {
       return h('th', { 'data-key': c[0], 'aria-sort': SORT.key === c[0] ? (SORT.dir > 0 ? 'ascending' : 'descending') : null },
@@ -677,7 +683,19 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
   window.addEventListener('popstate', render);
 
   /* ---------- header, errors, theme ---------- */
-  $('gen').textContent = 'Generated ' + M.generated_utc + '  ·  ' + M.generated_local;
+  var MG = M.merge || null;
+  $('gen').textContent = (MG ? 'Merged ' : 'Generated ') + M.generated_utc + '  ·  ' + M.generated_local + (MG ? '  ·  from ' + MG.files + ' file(s)' : '');
+  if (MG) {
+    var sw = $('sources'); sw.hidden = false;
+    sw.appendChild(h('span', { text: 'Sources (collected):' }));
+    (MG.sources || []).forEach(function (x) {
+      var sp = h('span', { cls: 'src', title: 'accounts in file: ' + x.accounts.join(', ') },
+        h('b', { text: x.file }), ' ' + (x.generated_utc || '') + (x.generated_local ? ' · ' + x.generated_local : '') +
+        ' · ' + x.used.length + ' account(s)');
+      if (x.superseded.length) sp.appendChild(h('span', { cls: 'sup', text: ' · ' + x.superseded.length + ' older duplicate(s) ignored: ' + x.superseded.join(', ') }));
+      sw.appendChild(sp);
+    });
+  }
   function chip(n, label, cls, title) { return h('span', { cls: 'chip' + (cls ? ' ' + cls : ''), title: title || null }, h('b', { text: String(n) }), ' ' + label); }
   var counts = $('counts');
   counts.appendChild(chip(C.accounts, C.accounts === 1 ? 'account' : 'accounts'));
@@ -692,7 +710,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 28px}
       h('summary', { text: ERR.length + ' error(s) while collecting - the affected account / region data may be incomplete' }),
       table(['Account', 'Profile', 'Region', 'Call', 'Message'], ERR.map(function (e) { return [e.account, e.profile, e.region, h('code', { text: e.call }), e.message]; }))));
   }
-  $('foot').textContent = M.script + ' v' + M.version + '  ·  read-only (rds describe-* only, no CloudWatch)  ·  ' + (M.aws_calls || 0) + ' AWS calls  ·  times shown in UTC and ' + M.tz + '  ·  works offline';
+  $('foot').textContent = M.script + ' v' + M.version + '  ·  read-only (rds describe-* only, no CloudWatch)  ·  ' + (M.merge ? 'merged offline from saved data, 0 AWS calls' : (M.aws_calls || 0) + ' AWS calls') + '  ·  times shown in UTC and ' + M.tz + '  ·  works offline';
 
   var tb = $('theme-btn');
   function themeLabel() { var p = document.documentElement.getAttribute('data-theme-pref') || 'auto'; tb.textContent = 'Theme: ' + p; }

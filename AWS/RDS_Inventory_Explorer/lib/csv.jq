@@ -14,4 +14,5 @@ if $kind == "inventory" then
 else
     [.meta.csv_columns.pending] + [.pending[].csv]
 end
-| "\ufeff" + (map(line) | join("\r\n")) + "\r\n"
+| ($ARGS.named.eol // "\r\n") as $eol   # --arg eol "\n" when a Windows jq.exe adds the CR itself
+| "\ufeff" + (map(line) | join($eol)) + $eol
