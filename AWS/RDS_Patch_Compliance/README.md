@@ -37,6 +37,41 @@ Samples: [txt](samples/sample_summary.txt), [html](samples/sample_summary.html),
 
 ![Summary HTML](samples/sample_summary.png)
 
+## Several accounts: collect in CloudShell, merge in Git Bash (v1.3.0)
+
+Run the report in **CloudShell of each account** and save the raw data with `--save-data`. Then download the JSON files and merge them **offline** on a laptop with Git Bash, WSL, macOS or Linux. The merge needs only bash and jq, and makes **zero AWS calls**.
+
+```
+# 1) CloudShell, in each account (read-only: describe calls + sts get-caller-identity)
+cd ~/DBA/AWS/RDS_Patch_Compliance && git pull --ff-only
+./rds_patch_compliance_report.sh -A -F html -o ~/compliance --save-data
+#   -> ~/compliance/rds_patch_compliance_<ACCOUNTID>_<YYYYmmdd_HHMMSS>.html
+#   -> ~/compliance/rds_patch_<ACCOUNTID>_<YYYYMMDD>.json          (download this one)
+./rds_patch_compliance_report.sh -r us-east-1 --save-data ~/prod_patch.json   # or name the file
+
+# 2) Git Bash on Windows: put the downloaded files in one folder, then
+cd ~/DBA/AWS/RDS_Patch_Compliance
+./rds_patch_compliance_report.sh --merge "C:\Users\me\Downloads\patch data" -o combined.html
+./rds_patch_compliance_report.sh --merge prod.json nonprod.json dev.json -o combined.html -F html,csv
+```
+
+* `--save-data [FILE.json]` writes the raw data next to the normal output. Default name: `rds_patch_<ACCOUNTID>_<YYYYMMDD>.json` in `-o DIR` (or the current folder), one file per account. With `FILE.json`, all accounts of that run go into one file. `-P`, `-r`/`-A` and `-o` work as before.
+* `--merge FILE|DIR...` reads files and folders. A folder means every `*.json` in it that is a `--save-data` file; other JSON files are skipped with a log line. Windows paths (`C:\...`), `/c/...` paths and paths with spaces work. CRLF output from `jq.exe` is handled.
+* The same account in two files: the newer `collected_at` wins, and the log names the file it ignored.
+* Days (support end, next maintenance) are recomputed at merge time. The status is recomputed with `--max-behind` if given (default: the largest value in the files).
+* A bad input (missing file, broken JSON, an HTML report, a `-F json` report, another schema, a newer data version) stops with a clear message and **exit 3**.
+* `-o combined.html` names the file (other formats get the same base name). Without `-F`, merge writes html. `-P`, `-r`, `-A`, `-e`, `-i`, `--dry-run`, `--save-data` and `--alert-test` are refused with `--merge`.
+
+**Account number everywhere.** Single-account runs put the account number in the default html / csv / txt / json names (`rds_patch_compliance_111111111111_20261015_093000.html`). Every report has a **Per account** table, and the account is shown in the header, the per-region table and every row.
+
+**Merged report.** It has the totals, a **Per account** table, a **Per region** table by account and region with an **All regions** total, and a **Merged inputs** note listing each file (collected time, accounts, used or superseded). The header shows region **counts** only, never names, and empty regions get no row.
+
+**Filters (every HTML report).** There are dropdowns for account (number and name), region, engine and status, plus a DB-name search. The cards, **Per account** and **Per region** tables recompute for the filtered servers. **Export CSV** saves the filtered rows: RFC 4180 quoting, UTF-8 BOM, and cells starting with `= + - @` are prefixed with `'` so Excel does not run them as formulas. With `--non-compliant-only`, only the shown rows are in the page.
+
+![Merged HTML report: 3 accounts, filters, per account and per region tables](docs/sample_merged_html.png)
+
+Sample: [samples/sample_merged.html](samples/sample_merged.html) (test mock: accounts 111111111111, 222222222222, 333333333333).
+
 ## Regions: discovery and region-wise breakdown (v1.2.0, v1.2.1)
 
 **Discovery (`-A` / `--all-regions`).** Most accounts have databases in a few of their ~17 enabled regions. Instead of the full scan (clusters, instances, pending maintenance, version lookups) everywhere, each enabled region is first **probed** with two read-only one-page calls:
@@ -176,7 +211,7 @@ In the summary table the Oracle "latest minor" is shown per patch line. Sample: 
 
 ### Output files
 
-With `-o DIR` each format is written to `DIR/<prefix>_<YYYYmmdd_HHMMSS>.<csv|html|txt|json>` (box local time, mode 0640); `csv` also writes `<prefix>_<YYYYmmdd_HHMMSS>_regions.csv` (region breakdown). The log prints each absolute path. Without `-o` a single format goes to stdout. Samples: [samples/](samples/) (`sample_report.txt`, `.csv`, `_regions.csv`, `.html`, `.json`, made with the test mock: `MOCK_SCENARIO=discover`, `-P prod,nonprod -A`).
+With `-o DIR` each format is written to `DIR/<prefix>_[<ACCOUNTID>_]<YYYYmmdd_HHMMSS>.<csv|html|txt|json>` (box local time, mode 0640); `csv` also writes `<prefix>_<YYYYmmdd_HHMMSS>_regions.csv` (region breakdown). The log prints each absolute path. Without `-o` a single format goes to stdout. Samples: [samples/](samples/) (`sample_report.txt`, `.csv`, `_regions.csv`, `.html`, `.json`, made with the test mock: `MOCK_SCENARIO=discover`, `-P prod,nonprod -A`).
 
 **Downloading from CloudShell:** copy the full path from the `Wrote ...` log line, then **Actions > Download file** and paste it, e.g. `/home/cloudshell-user/compliance/rds_patch_compliance_20261015_093000.html`. For several files: `cd ~ && zip -r compliance.zip compliance` and download `/home/cloudshell-user/compliance.zip`.
 
@@ -211,12 +246,14 @@ More in [EXAMPLES.md](EXAMPLES.md). `--help` lists every option.
 | `--top N` | size of the most-behind list, default 10 |
 | `-l, --log-file` | append timestamped log lines |
 | `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-test` | optional alerts (Slack text truncated at 35 000 chars) |
+| `--save-data [FILE.json]` | also write the raw data for a later `--merge` (v1.3.0) |
+| `--merge FILE\|DIR...` | offline merge of `--save-data` files, 0 AWS calls; `-o combined.html` names the output (v1.3.0) |
 | `--config FILE` | key=value file, **parsed, never sourced**; CLI options override it; credentials are refused |
 | `--aws-timeout`, `--max-attempts`, `--keep-workdir`, `--dry-run`, `-v` | behaviour |
 
 ### Exit codes
 
-`0` report produced (also when servers are non-compliant), `5` NON-COMPLIANT found with `--fail-on-noncompliant`, `1` usage, `2` pre-check (aws/jq missing, no profile usable), `4` output error, `130` interrupted. Partial AWS errors (a region denied, a failed discovery probe) are listed under ERRORS in the report; they do not change the exit code.
+`0` report produced (or merged) (also when servers are non-compliant), `5` NON-COMPLIANT found with `--fail-on-noncompliant`, `1` usage, `2` pre-check (aws/jq missing, no profile usable), `3` bad `--merge` input file, `4` output error, `130` interrupted. Partial AWS errors (a region denied, a failed discovery probe) are listed under ERRORS in the report; they do not change the exit code.
 
 ## IAM policy (read-only)
 
@@ -249,11 +286,12 @@ See [rds_patch_compliance_report.conf.example](rds_patch_compliance_report.conf.
 
 No AWS account is used and nothing can reach AWS.
 
-* `tests/run_tests.sh` - 340+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers counting only from ValidUpgradeTarget (the mock's full list differs on purpose), major targets excluded, the default auto-upgrade target, current version not returned, pending-actions text, version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), region discovery (empty regions skipped, cluster-only region, probe AccessDenied scanned anyway, `--no-discover`, `-r` without probe, parallel probes faster than serial with the same result, dry-run, `aws_calls`), the region breakdown adding up to the totals in every format, a 3000-instance fleet (no ARG_MAX issues) and that no file is written into the tool folder. **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
+* `tests/run_tests.sh` - 420+ checks against `tests/mock/aws` (realistic fleet: Aurora PostgreSQL 11/12/14/15/16 incl. Extended Support, Aurora MySQL 3, RDS PostgreSQL 13/16/17, MySQL 8.0/8.4, MariaDB, SQL Server, Oracle, Multi-AZ DB cluster, DocumentDB, Neptune). Covers counting only from ValidUpgradeTarget (the mock's full list differs on purpose), major targets excluded, the default auto-upgrade target, current version not returned, pending-actions text, version compare units (`15.10 > 15.9`, Aurora MySQL, SQL Server, Oracle), the 2/3 boundary, `--max-behind`, lookup failure (UNKNOWN), deprecated version, lifecycle API missing / denied, multi-profile / multi-region, all regions, filters, outputs, alerts (local stubs), region discovery (empty regions skipped, cluster-only region, probe AccessDenied scanned anyway, `--no-discover`, `-r` without probe, parallel probes faster than serial with the same result, dry-run, `aws_calls`), the region breakdown adding up to the totals in every format, a 3000-instance fleet (no ARG_MAX issues), v1.3.0 `--save-data` / `--merge` (names, contents, read-only calls, zero AWS calls during merge, newer file wins, days recomputed, exit 3 inputs, Windows paths with spaces and a CRLF `jq` stub), and that no file is written into the tool folder. When node, `puppeteer-core` (on `NODE_PATH`) and Chrome are present it also runs `tests/browser_check.js`: filters, recomputed totals and per-region rows, and the CSV export (quoting, BOM, formula guard). **Guard:** it refuses to run unless `aws` on PATH is the mock, and sets fake credentials and a dead endpoint.
 * `tests/validate_cli.sh` - replays every command line the script issues, and every printed `upgrade_command`, through the **real** AWS CLI v2 with fake credentials and a dead endpoint (`127.0.0.1:9`); checks mock output shapes against `--generate-cli-skeleton output`; and runs the script with the real CLI against a local fake endpoint that pages every list (Marker) to prove pagination, and `-A` against a region-aware fake endpoint to prove each discovery probe is a single request, a denied probe becomes an error region that is still scanned, and only regions with databases get a full scan. A wrapper refuses any real-CLI call without a loopback endpoint.
 
 ## Changelog
 
+* **1.3.0** - `--save-data [FILE.json]` (raw data, `rds_patch_<ACCOUNTID>_<YYYYMMDD>.json`) and `--merge FILE|DIR... -o combined.html`: offline (jq only, 0 AWS calls), Git Bash safe (CRLF, Windows paths, spaces), newest `collected_at` wins per account, days recomputed at merge time, exit 3 on a bad input. Account number in single-account file names and in the header, tables and every row; new Per account table; Merged inputs note. HTML filters (account, region, engine, status, DB-name search) that recompute the cards and tables, and Export CSV of the filtered rows. CSV adds `next_maintenance` and `days_until_maintenance` (30 columns).
 * **1.2.1 / summary 1.1.1** - No region names at the top of the HTML report or summary: the report header `<details>` list (with databases / errors / empty) and the summary header list of every enabled region are gone; the header keeps one count line (`Regions: N checked, M with databases, K empty, E errors`). Empty regions are no longer listed anywhere in txt / HTML / CSV: no `Empty :` line, no collapsible empty list, no 0-rows in the per-region table or `*_regions.csv` (counts only). Text header shows region names only for `-r`. JSON unchanged (keeps empty regions and `empty_regions`).
 * **1.2.0 / summary 1.1.0** - `--all-regions` discovery: per region two parallel one-page probes (`--max-records 20 --query length(...) --no-paginate`, `--probe-parallel`, default 8); full scan only where databases are found; a failed probe is an error and the region is still scanned; `--no-discover` / `discover = no`; `-r` regions are never probed; probes in `--dry-run` and `aws_calls`. Header `Regions  : N checked, M with databases, K empty, E errors` + empty-region list. Region-wise breakdown (account x region + All regions) in text, HTML (sortable, colour-coded), JSON, `*_regions.csv` and the summary script (txt / html / `*_regions.csv`).
 * **summary 1.0.0** - New `rds_patch_compliance_summary.sh` (+ `lib/summary.jq`, `tests/run_summary_tests.sh`): high-level summary and the NON-COMPLIANT servers only; reuses the full report for the scan and all counting.

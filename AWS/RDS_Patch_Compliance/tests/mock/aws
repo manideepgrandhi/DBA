@@ -10,7 +10,7 @@ Lifecycle dates are relative to now. Env:
                 cluster, no instances) and ca-central-1 denies rds:DescribeDBInstances (SCP); the rest are empty
   MOCK_PROBE_DELAY = seconds each discovery probe (--query length(...)) sleeps; MOCK_TIMING = JSONL of
                      [start, end, region] per probe (to measure the real parallelism)
-Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1 fleet), (none) -> prod,
+Profiles: prod -> 111111111111 (us-east-1 fleet), nonprod -> 222222222222 (ap-south-1 fleet), dev -> 333333333333 (eu-west-1, merge tests), (none) -> prod,
           broken -> invalid credentials. Other regions are empty.
 """
 import json, os, sys
@@ -77,7 +77,7 @@ SVC, OP = pos
 OPNAME = "".join(p.capitalize() for p in OP.split("-")).replace("Db", "DB")
 if PROFILE == "broken" or SCEN == "badcreds":
     fail("InvalidClientTokenId", OPNAME if SVC != "sts" else "GetCallerIdentity", "The security token included in the request is invalid.")
-ACCT = {"": "111111111111", "prod": "111111111111", "nonprod": "222222222222"}.get(PROFILE)
+ACCT = {"": "111111111111", "prod": "111111111111", "nonprod": "222222222222", "dev": "333333333333"}.get(PROFILE)
 if ACCT is None:
     sys.stderr.write("\nThe config profile (%s) could not be found\n" % PROFILE); sys.exit(255)
 
@@ -319,6 +319,10 @@ elif SCEN != "empty" and REGION == "us-east-1" and PROFILE in ("", "prod"):
 elif SCEN == "discover" and REGION == "us-west-2" and PROFILE in ("", "prod"):
     # cluster-only region: an Aurora global-database secondary with no instances (headless)
     cluster("dr-aurora-pg15", "aurora-postgresql", "15.10", [], tags("dr", "orders", "orders-dr"))
+elif SCEN != "empty" and REGION == "eu-west-1" and PROFILE == "dev":
+    # third account for --merge tests; tag values exercise the CSV formula-injection guard and RFC 4180 quoting
+    inst("sandbox-pg", "postgres", "16.8", tg=tags("dev", "=HYPERLINK(\"http://x\")", 'app, "quoted"'))
+    inst("sandbox-mysql", "mysql", "8.0.36", tg=tags("dev", "@owner", "-1+2"))
 elif SCEN != "empty" and REGION == "ap-south-1" and PROFILE == "nonprod":
     cluster("dev-aurora-pg15", "aurora-postgresql", "15.4", ["dev-pg15-1"], tags("dev", "platform", "dev"))
     inst("qa-pg", "postgres", "17.4", tg=tags("qa", "platform", "qa"))

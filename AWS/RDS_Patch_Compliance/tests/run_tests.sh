@@ -118,7 +118,7 @@ vce oracle-ee "${O}2026-10.mrp-2026-10.r1" 1 "${O}2026-07.mrp-2026-07.r10"
 
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.2\.1'
+t version 0 fleet --version;         has version out '1\.3\.0'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -271,9 +271,9 @@ mapfile -t F < <(find "$OUT/rep" -type f | sort)
 chk "5 files written (txt, html, json, csv, regions csv)" test "${#F[@]}" -eq 5
 chk "files are 0640" test "$(stat -c %a "${F[@]}" | sort -u)" = 640
 CSV="$(find "$OUT/rep" -name '*.csv' ! -name '*_regions.csv')"; HTML="$(find "$OUT/rep" -name '*.html')"; TXT="$(find "$OUT/rep" -name '*.txt')"
-chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","default_auto_upgrade_target","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions_count","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note"'
+chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","default_auto_upgrade_target","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions_count","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note","next_maintenance","days_until_maintenance"'
 chk "csv rows = 22" test "$(python3 -c 'import csv,sys; print(sum(1 for _ in csv.reader(open(sys.argv[1])))-1)' "$CSV")" -eq 22
-chk "csv parses with 28 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{28}"
+chk "csv parses with 30 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{30}"
 for p in 'id="q"' 'class="cp"' 'class="badge">2<' 'details class="pend"' '01:30 IST' "haven't been applied yet" 'Valid minor targets' 'Auto-upgrade default' 'table class="main"' 'st bad' 'st ok' 'Extended Support' 'Top 10 most behind' 'Per engine and major version' 'localeCompare' 'href="#eng-aurora-postgresql"'; do
     if grep -qF -- "$p" "$HTML"; then ok "html has $p"; else bad "html lacks $p"; fi
 done
@@ -334,14 +334,14 @@ chk "regions csv: no empty-region rows" test "$(grep -c '"empty"' "$RCSV")" -eq 
 chk "regions csv: All regions row" grep -q '^"ALL","","All regions","",20,12,7,1,60,3,5,2,2,"",""$' "$RCSV"
 chk "regions csv parses with 15 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$RCSV")" == "{15}"
 chk "html: sortable region table" grep -q '<table class="sortable regions"><thead><tr><th>Account</th><th>Region</th><th>Status</th><th>Total</th>' "$RHTML"
-chk "html: All regions total row in tfoot" grep -q '<tfoot><tr><td><b>All regions</b></td>' "$RHTML"
+chk "html: All regions total row in tfoot" grep -q '<tfoot><tr class="foot"><td><b>All regions</b></td>' "$RHTML"
 chk "html: colour-coded % compliant" grep -q 'class="n bad" data-s="57.9">57.9%<div class="bar"><i class="bad"' "$RHTML"
 chk "html: no empty-regions list" test "$(grep -c 'details class="empty"\|empty region(s)' "$RHTML")" -eq 0
 chk "html: header region line is counts only" grep -q '&middot; Regions: 14 checked, 2 with databases, 11 empty, 1 error</p></header>' "$RHTML"
 TOPH="$(cat "$RHTML")"; TOPH="${TOPH%%<table*}"   # everything above the first table
 chk "html: no region names above the first table" test "$(grep -oE '[a-z]{2}-[a-z]+-[0-9]' <<<"$TOPH" | wc -l)" -eq 0
 chk "html: no <details> in the header" test "$(grep -o '<header.*</header>' "$RHTML" | grep -c '<details')" -eq 0
-chk "html: region table = 3 rows (databases + error), no empty rows" test "$(grep -oP '<table class="sortable regions">.*?</tbody>' "$RHTML" | grep -o '<tr>' | wc -l)" -eq 4
+chk "html: region table = 3 rows (databases + error), no empty rows" test "$(grep -oP '<table class="sortable regions">.*?</tbody>' "$RHTML" | grep -o '<tr[ >]' | wc -l)" -eq 4
 chk "html: no empty status chip" test "$(grep -c 'class="st unk">empty<' "$RHTML")" -eq 0
 chk "html: sort script covers the region table" grep -q "querySelectorAll('table.main,table.sortable')" "$RHTML"
 echo "-- --no-discover / config / explicit -r"
@@ -428,6 +428,89 @@ t al_slack 0 fleet "${P2[@]}" --alert-webhook "$HOOK"
 chk "slack webhook payload" bash -c "grep . '$OUT/webhook.txt' | tail -1 | jq -e '.text | startswith(\"*[rds_patch_compliance]\")' >/dev/null"
 hasnt al_slack err 'SECRET'
 t al_test 0 fleet --alert-test --alert-email dba@example.com;  chk "test alert" grep -q 'Test alert from' "$MAIL_SINK"
+
+echo "== v1.3.0: account number in file names, --save-data, --merge (offline)"
+MG="$OUT/mg in"; mkdir -p "$MG"
+RDS_PCR_NOW=1790000000 t sd_prod 0 fleet -P prod -r us-east-1,ap-south-1 -F html,csv -o "$MG" --save-data
+chk "single account: html name has the account number" test -f "$MG/rds_patch_compliance_111111111111_20260921_194320.html"
+chk "single account: csv + regions csv names have the account number" test -f "$MG/rds_patch_compliance_111111111111_20260921_194320_regions.csv"
+SD1="$MG/rds_patch_111111111111_20260921.json"
+chk "save-data default name rds_patch_<acct>_<date>.json" test -f "$SD1"
+chk "save-data: schema, account, profile, collected_at UTC" jq -e '.schema == "rds_patch_compliance_data" and .schema_version == 1 and .accounts == [{account: "111111111111", profile: "prod", collected_epoch: 1790000000, collected_at: "2026-09-21T14:13:20Z"}] and .collected_at == "2026-09-21T14:13:20Z"' "$SD1"
+chk "save-data: regions with databases only" jq -e '.regions == ["us-east-1"]' "$SD1"
+chk "save-data: per DB engine / versions / status / pending" jq -e '(.rows | length) == 19 and all(.rows[]; has("engine") and has("current_version") and has("latest_minor_version") and has("compliance_status") and has("pending_actions_detail") and .account_id == "111111111111")' "$SD1"
+chk "save-data: region_status kept (empty ap-south-1 counted)" jq -e '[.region_status[] | select(.region == "ap-south-1")] | length == 1' "$SD1"
+calls_before="$(wc -l <"$MOCK_LOG")"
+RDS_PCR_NOW=1790000000 t sd_prod_calls 0 fleet -P prod -r us-east-1 --save-data "$OUT/sdcalls/x.json"
+chk "save-data adds no AWS call (describe + sts only)" bash -c "tail -n +$(( calls_before + 1 )) '$MOCK_LOG' | grep -qE '\"(create|modify|delete|apply|reboot|start|stop|put|add|remove|restore|copy|failover|promote)-' && exit 1 || tail -n +$(( calls_before + 1 )) '$MOCK_LOG' | grep -q describe-db"
+RDS_PCR_NOW=1790100000 t sd_np 0 fleet -P nonprod -r ap-south-1 --save-data "$MG/nonprod data.json"
+chk "save-data FILE with a space" test -f "$MG/nonprod data.json"
+RDS_PCR_NOW=1790200000 t sd_dev 0 fleet -P dev -r eu-west-1 -F json -o "$MG" --save-data
+SD3="$MG/rds_patch_333333333333_20260923.json"; chk "dev data file" test -f "$SD3"
+RDS_PCR_NOW=1790000000 t sd_multi 0 fleet -P prod,nonprod -r us-east-1,ap-south-1 -F html -o "$OUT/sdm" --save-data
+chk "multi-account run: one data file per account" test "$(find "$OUT/sdm" -name 'rds_patch_[0-9]*_*.json' | wc -l)" -eq 2
+chk "multi-account run: html name without an account number" test "$(find "$OUT/sdm" -name 'rds_patch_compliance_2026*.html' | wc -l)" -eq 1
+t sd_badname 1 fleet -P prod -r us-east-1 --save-data "$OUT/x.txt"
+t sd_badname2 1 fleet -P prod -r us-east-1 --save-data "$OUT/x.txt"; has sd_badname2 err 'must end in .json'
+
+# older prod copy: the newer collection must win
+jq '.collected_epoch = 1780000000 | .collected_at = "2026-05-28T20:26:40Z" | .accounts[0].collected_epoch = 1780000000 | .rows |= map(.compliance_status = "NON-COMPLIANT" | .versions_behind = 9)' "$SD1" >"$OUT/old_prod.json"
+calls_before="$(wc -l <"$MOCK_LOG")"
+NOAWS="$OUT/noaws"; mkdir -p "$NOAWS"; printf '#!/bin/sh\necho AWS-CALLED >>"%s/aws_called"; exit 99\n' "$OUT" >"$NOAWS/aws"; chmod +x "$NOAWS/aws"
+mg() { local name="$1" exp="$2"; shift 2; PATH="$NOAWS:$PATH" RDS_PCR_NOW=1791000000 t "$name" "$exp" fleet "$@"; }
+mg merge 0 --merge "$OUT/old_prod.json" "$MG" -o "$OUT/mg out/combined.html" -F html,json
+MH="$OUT/mg out/combined.html"; MJ="$OUT/mg out/combined.json"
+chk "merge: -o FILE.html written" test -s "$MH"
+chk "merge: json next to it" test -s "$MJ"
+chk "merge: zero AWS calls (no aws exec, mock log unchanged)" test ! -e "$OUT/aws_called" -a "$(wc -l <"$MOCK_LOG")" -eq "$calls_before"
+has merge err 'Skipping .*rds_patch_compliance_333333333333_.*\.json \(not a --save-data file\)'
+has merge err 'Account 111111111111: using newer rds_patch_111111111111_20260921\.json .* ignoring older old_prod\.json'
+has merge err '0 AWS calls'
+chk "merge: 3 accounts, 24 rows, newer prod data used" jq -e '(.meta.accounts | map(.account)) == ["111111111111","222222222222","333333333333"] and (.rows | length) == 24 and .summary.non_compliant == 9' "$MJ"
+chk "merge: totals = sum of single runs" jq -e '.summary.total == 24 and .summary.compliant == 14 and .summary.unknown == 1' "$MJ"
+chk "merge: per-account breakdown" jq -e '[.summary.accounts[] | [.account_id, .total, .non_compliant]] == [["111111111111",19,7],["222222222222",3,1],["333333333333",2,1]]' "$MJ"
+chk "merge: per region by account, empty regions left out" jq -e '[.summary.regions[] | select(.status != "empty") | .account_id + "|" + .region] == ["111111111111|us-east-1","222222222222|ap-south-1","333333333333|eu-west-1"]' "$MJ"
+chk "merge: support days recomputed at merge time" jq -e '[.rows[] | select(.standard_support_end != null and .standard_support_end != "")] | length > 5 and all(.[]; .support_days_left == (((.standard_support_end + "T00:00:00Z" | fromdateiso8601) - 1791000000) / 86400 | floor))' "$MJ"
+chk "merge: days differ from the collection-time copy" test "$(jq '[.rows[] | select(.identifier == "shop-aurora-mysql") | .support_days_left][0]' "$SD1")" != "$(jq '[.rows[] | select(.identifier == "shop-aurora-mysql") | .support_days_left][0]' "$MJ")"
+chk "merge: days until maintenance recomputed" jq -e '[.rows[] | select(.pending_actions_count > 0) | .days_until_maintenance | numbers] | length >= 1' "$MJ"
+chk "merge: sources note data" jq -e '.meta.merge.files == 4 and ([.meta.merge.sources[] | select(.file == "old_prod.json") | .superseded] == [["111111111111"]])' "$MJ"
+chk "merge html: header has counts, no region names" bash -c "grep -oP '<header id=\"top\">.*?</header>' '$MH' | grep -q 'Regions: 4 checked, 3 with databases, 1 empty, 0 errors' && ! grep -oP '<header id=\"top\">.*?</header>' '$MH' | grep -qE '[a-z]{2}-[a-z]+-[0-9]'"
+chk "merge html: account dropdown, region / engine / status selects, name search, Export CSV" bash -c "grep -q 'id=\"f-acct\"' '$MH' && grep -q 'id=\"f-region\"' '$MH' && grep -q 'id=\"f-engine\"' '$MH' && grep -q 'id=\"f-status\"' '$MH' && grep -q 'id=\"q\"' '$MH' && grep -q 'id=\"f-csv\"' '$MH'"
+chk "merge html: per account table + merged inputs note" bash -c "grep -q '<section id=\"accounts\">' '$MH' && grep -q '<section id=\"sources\">' '$MH' && grep -q 'old_prod.json' '$MH'"
+chk "merge html: no empty region rows" test "$(grep -oP '<table class="sortable regions">.*?</tbody>' "$MH" | grep -o '<tr[ >]' | wc -l)" -eq 4
+chk "merge html: embedded data cannot close the script tag" bash -c "grep -oP '<script type=\"application/json\" id=\"pc-data\">\K.*?(?=</script>)' '$MH' | grep -q . && ! grep -oP '<script type=\"application/json\" id=\"pc-data\">\K.*?(?=</script>)' '$MH' | grep -q '<'"
+mg merge_txt 0 --merge "$SD1" "$MG/nonprod data.json" "$SD3" -F text; has merge_txt out '^PER ACCOUNT'; has merge_txt out '^Accounts : 111111111111 \(prod\), 222222222222 \(nonprod\), 333333333333 \(dev\)   Merged: 3 file\(s\)'
+mg merge_dir_default 0 --merge "$MG" -o "$OUT/mgd"
+chk "merge: default format html, -o DIR" test "$(find "$OUT/mgd" -name 'rds_patch_compliance_2026*.html' | wc -l)" -eq 1
+mg merge_mb 0 --merge "$SD1" --max-behind 9 -F json; jqt merge_mb '.summary.non_compliant == 0'
+mg merge_glob 0 --merge "$MG/rds_patch_1*.json" -F json; jqt merge_glob '(.meta.accounts | length) == 1'
+# errors -> exit 3
+mg mbad_missing 3 --merge "$OUT/nope.json";           has mbad_missing err 'File not found'
+printf '{"rows": [' >"$OUT/trunc.json";  mg mbad_trunc 3 --merge "$OUT/trunc.json";   has mbad_trunc err 'not valid JSON'
+mg mbad_html 3 --merge "$MH";                         has mbad_html err 'is an HTML report'
+mg mbad_report 3 --merge "$MJ";                        has mbad_report err 'is a -F json report'
+echo '{"schema":"rds_patch_compliance_data","schema_version":2,"accounts":[{"account":"1"}],"rows":[],"collected_epoch":1}' >"$OUT/v2.json"
+mg mbad_v2 3 --merge "$OUT/v2.json";                  has mbad_v2 err 'newer data schema 2'
+echo '{"schema":"x"}' >"$OUT/other.json"; mg mbad_other 3 --merge "$OUT/other.json"; has mbad_other err 'not a patch compliance data file'
+mkdir -p "$OUT/emptydir"; mg mbad_dir 3 --merge "$OUT/emptydir";  has mbad_dir err 'No --save-data JSON file'
+mg mbad_noargs 1 --merge
+mg mbad_profile 1 --merge "$SD1" -P prod
+mg mbad_region 1 --merge "$SD1" -r us-east-1
+# Git Bash: jq.exe writes CRLF, Windows paths, spaces
+CR="$OUT/crlfjq"; mkdir -p "$CR"; REALJQ="$(command -v jq)"
+printf '#!/bin/bash\n"%s" "$@" | sed '"'"'s/$/\\r/'"'"'; exit "${PIPESTATUS[0]}"\n' "$REALJQ" >"$CR/jq"; chmod +x "$CR/jq"
+mkdir -p "$OUT/drv/c/Users/DBA Team/patch data"; cp "$SD1" "$MG/nonprod data.json" "$SD3" "$OUT/drv/c/Users/DBA Team/patch data/"
+PATH="$CR:$NOAWS:$PATH" RDS_PCR_DRIVE_ROOT="$OUT/drv" RDS_PCR_NOW=1791000000 t merge_win 0 fleet --merge 'C:\Users\DBA Team\patch data' -o "$OUT/win out/combined.html" -F html,json,csv
+chk "git bash: CRLF jq output -> HTML has no CR" bash -c "test -s '$OUT/win out/combined.html' && ! grep -q $'\r' '$OUT/win out/combined.html'"
+chk "git bash: same numbers as the LF merge" test "$(jq -c '[.summary.total, .summary.non_compliant, (.summary.accounts | length)]' "$OUT/win out/combined.json")" = '[24,9,3]'
+chk "git bash: windows path with spaces resolved" grep -q 'Input 1: .*drv/c/Users/DBA Team/patch data/' "$OUT/merge_win.err"
+chk "git bash: no aws executed" test ! -e "$OUT/aws_called"
+if command -v node >/dev/null 2>&1 && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]] && NODE_PATH="${NODE_PATH:-}" node -e 'require("puppeteer-core")' 2>/dev/null; then
+    res="$(node "$HERE/browser_check.js" "$MH" ${SHOTS:+"$SHOTS"} 2>&1)"; rc=$?
+    chk "browser: filters, totals, per region, CSV export ($(jq -r '.checks' <<<"$res" 2>/dev/null) checks) ${res:0:300}" test "$rc" -eq 0
+    res="$(node "$HERE/browser_check.js" "$(find "$MG" -name 'rds_patch_compliance_111111111111_*.html' | head -1)" 2>&1)"; rc=$?
+    chk "browser: single-account report ${res:0:300}" test "$rc" -eq 0
+else echo "  skip browser check (node + puppeteer-core on NODE_PATH + Chrome not found)"; fi
 
 echo "== hygiene"
 chk "shellcheck script" shellcheck "$SCRIPT"

@@ -1,9 +1,9 @@
 {
   "meta": {
     "script": "rds_patch_compliance_report.sh",
-    "version": "1.2.1",
-    "generated_utc": "2026-10-27 09:53 UTC",
-    "generated_local": "2026-10-27 15:23 IST",
+    "version": "1.3.0",
+    "generated_utc": "2026-09-21 14:13 UTC",
+    "generated_local": "2026-09-21 19:43 IST",
     "tz": "Asia/Kolkata",
     "host": "grok-bot-vm-256144679",
     "accounts": [
@@ -306,9 +306,9 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "mixed",
-      "standard_support_end": "2029-04-14",
-      "extended_support_end": "2032-04-18",
-      "support_days_left": 899,
+      "standard_support_end": "2029-04-16",
+      "extended_support_end": "2032-04-20",
+      "support_days_left": 937,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -325,7 +325,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:shop-aurora-mysql",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier shop-aurora-mysql --engine-version 8.0.mysql_aurora.3.10.0 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together; auto minor upgrade is off on some members"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together; auto minor upgrade is off on some members",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -349,9 +351,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2029-04-14",
-      "extended_support_end": "2032-04-18",
-      "support_days_left": 899,
+      "standard_support_end": "2029-04-16",
+      "extended_support_end": "2032-04-20",
+      "support_days_left": 937,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -368,7 +370,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:cms-aurora-mysql",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier cms-aurora-mysql --engine-version 8.0.mysql_aurora.3.10.0 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "222222222222",
@@ -398,9 +402,9 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-02-08",
-      "extended_support_end": "2033-02-12",
-      "support_days_left": 1199,
+      "standard_support_end": "2030-02-10",
+      "extended_support_end": "2033-02-14",
+      "support_days_left": 1237,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -417,7 +421,9 @@
       },
       "arn": "arn:aws:rds:ap-south-1:222222222222:cluster:dev-aurora-pg15",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier dev-aurora-pg15 --engine-version 15.13 --region ap-south-1 --profile nonprod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -446,9 +452,9 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2025-03-26",
-      "extended_support_end": "2029-01-04",
-      "support_days_left": -581,
+      "standard_support_end": "2025-03-28",
+      "extended_support_end": "2029-01-06",
+      "support_days_left": -543,
       "support_flag": "past standard support (Extended Support charges)",
       "past_standard_support": true,
       "nearing_end_of_support": false,
@@ -465,7 +471,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:legacy-aurora-pg12",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier legacy-aurora-pg12 --engine-version 12.22 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -491,9 +499,9 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "false",
-      "standard_support_end": "2029-01-04",
-      "extended_support_end": "2032-01-09",
-      "support_days_left": 799,
+      "standard_support_end": "2029-01-06",
+      "extended_support_end": "2032-01-11",
+      "support_days_left": 837,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -510,7 +518,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:reports-aurora-pg14",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier reports-aurora-pg14 --engine-version 14.17 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together; auto minor upgrade is off"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together; auto minor upgrade is off",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -532,9 +542,9 @@
       "version_warnings": [],
       "compliance_status": "UNKNOWN",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2025-03-06",
-      "extended_support_end": "2028-03-10",
-      "support_days_left": -601,
+      "standard_support_end": "2025-03-08",
+      "extended_support_end": "2028-03-12",
+      "support_days_left": -563,
       "support_flag": "past standard support (Extended Support charges)",
       "past_standard_support": true,
       "nearing_end_of_support": false,
@@ -551,7 +561,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:old-aurora-pg11",
       "upgrade_command": "",
-      "note": "current version not returned by describe-db-engine-versions (deprecated or not offered in us-east-1); no valid upgrade targets known"
+      "note": "current version not returned by describe-db-engine-versions (deprecated or not offered in us-east-1); no valid upgrade targets known",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -576,9 +588,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-02-08",
-      "extended_support_end": "2033-02-12",
-      "support_days_left": 1199,
+      "standard_support_end": "2030-02-10",
+      "extended_support_end": "2033-02-14",
+      "support_days_left": 1237,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -595,7 +607,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:crm-aurora-pg15",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier crm-aurora-pg15 --engine-version 15.13 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -620,9 +634,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "unknown",
-      "standard_support_end": "2030-02-08",
-      "extended_support_end": "2033-02-12",
-      "support_days_left": 1199,
+      "standard_support_end": "2030-02-10",
+      "extended_support_end": "2033-02-14",
+      "support_days_left": 1237,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -639,7 +653,9 @@
       },
       "arn": "arn:aws:rds:us-west-2:111111111111:cluster:dr-aurora-pg15",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier dr-aurora-pg15 --engine-version 15.13 --region us-west-2 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -664,29 +680,31 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-02-08",
-      "extended_support_end": "2033-02-12",
-      "support_days_left": 1199,
+      "standard_support_end": "2030-02-10",
+      "extended_support_end": "2033-02-14",
+      "support_days_left": 1237,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
       "deprecated_version": false,
       "pending_actions_count": 2,
-      "pending_actions": "system-update on cluster (auto-apply 2026-11-13, forced 2026-12-13) - Upgrade to Aurora PostgreSQL 15.8.1 patch; os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available",
+      "pending_actions": "system-update on cluster (auto-apply 2026-11-15, forced 2026-12-15) - Upgrade to Aurora PostgreSQL 15.8.1 patch; os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available",
       "pending_actions_detail": [
         {
           "action": "system-update",
           "on": "cluster",
           "description": "Upgrade to Aurora PostgreSQL 15.8.1 patch",
           "opt_in_status": "",
-          "auto_applied_after": "2026-11-13",
-          "forced_apply": "2026-12-13",
-          "current_apply": "2026-11-13",
-          "auto_applied_after_ist": "2026-11-14 01:30 IST",
-          "forced_apply_ist": "2026-12-14 01:30 IST",
-          "auto_applied_after_utc": "2026-11-13 20:00 UTC",
-          "forced_apply_utc": "2026-12-13 20:00 UTC",
-          "text": "system-update on cluster (auto-apply 2026-11-13, forced 2026-12-13) - Upgrade to Aurora PostgreSQL 15.8.1 patch"
+          "auto_applied_after": "2026-11-15",
+          "forced_apply": "2026-12-15",
+          "current_apply": "2026-11-15",
+          "auto_applied_after_ist": "2026-11-16 01:30 IST",
+          "forced_apply_ist": "2026-12-16 01:30 IST",
+          "auto_applied_after_utc": "2026-11-15 20:00 UTC",
+          "forced_apply_utc": "2026-12-15 20:00 UTC",
+          "text": "system-update on cluster (auto-apply 2026-11-15, forced 2026-12-15) - Upgrade to Aurora PostgreSQL 15.8.1 patch",
+          "next_date": "2026-11-15",
+          "days_until": 54
         },
         {
           "action": "os-upgrade",
@@ -695,12 +713,14 @@
           "opt_in_status": "next-maintenance",
           "auto_applied_after": null,
           "forced_apply": null,
-          "current_apply": "2026-11-03",
+          "current_apply": "2026-11-05",
           "auto_applied_after_ist": null,
           "forced_apply_ist": null,
           "auto_applied_after_utc": null,
           "forced_apply_utc": null,
-          "text": "os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available"
+          "text": "os-upgrade on member orders-pg15-2 (opt-in: next-maintenance) - New Operating System update is available",
+          "next_date": "2026-11-05",
+          "days_until": 44
         }
       ],
       "maint_window_utc": "sat:21:00-sat:21:30",
@@ -712,7 +732,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:orders-aurora-pg15",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier orders-aurora-pg15 --engine-version 15.12 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
+      "next_maintenance": "2026-11-05",
+      "days_until_maintenance": 44
     },
     {
       "account_id": "111111111111",
@@ -734,9 +756,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-12-05",
-      "extended_support_end": "2033-12-09",
-      "support_days_left": 1499,
+      "standard_support_end": "2030-12-07",
+      "extended_support_end": "2033-12-11",
+      "support_days_left": 1537,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -753,7 +775,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:pay-aurora-pg16",
       "upgrade_command": "",
-      "note": ""
+      "note": "",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -783,21 +807,23 @@
       "nearing_end_of_support": false,
       "deprecated_version": false,
       "pending_actions_count": 1,
-      "pending_actions": "system-update on member catalog-docdb-2 (auto-apply 2026-11-26, forced 2026-12-26) - Upgrades to the DocumentDB engine",
+      "pending_actions": "system-update on member catalog-docdb-2 (auto-apply 2026-11-28, forced 2026-12-28) - Upgrades to the DocumentDB engine",
       "pending_actions_detail": [
         {
           "action": "system-update",
           "on": "member catalog-docdb-2",
           "description": "Upgrades to the DocumentDB engine",
           "opt_in_status": "",
-          "auto_applied_after": "2026-11-26",
-          "forced_apply": "2026-12-26",
-          "current_apply": "2026-11-26",
-          "auto_applied_after_ist": "2026-11-27 01:30 IST",
-          "forced_apply_ist": "2026-12-27 01:30 IST",
-          "auto_applied_after_utc": "2026-11-26 20:00 UTC",
-          "forced_apply_utc": "2026-12-26 20:00 UTC",
-          "text": "system-update on member catalog-docdb-2 (auto-apply 2026-11-26, forced 2026-12-26) - Upgrades to the DocumentDB engine"
+          "auto_applied_after": "2026-11-28",
+          "forced_apply": "2026-12-28",
+          "current_apply": "2026-11-28",
+          "auto_applied_after_ist": "2026-11-29 01:30 IST",
+          "forced_apply_ist": "2026-12-29 01:30 IST",
+          "auto_applied_after_utc": "2026-11-28 20:00 UTC",
+          "forced_apply_utc": "2026-12-28 20:00 UTC",
+          "text": "system-update on member catalog-docdb-2 (auto-apply 2026-11-28, forced 2026-12-28) - Upgrades to the DocumentDB engine",
+          "next_date": "2026-11-28",
+          "days_until": 67
         }
       ],
       "maint_window_utc": "sat:21:00-sat:21:30",
@@ -809,7 +835,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:catalog-docdb",
       "upgrade_command": "",
-      "note": ""
+      "note": "",
+      "next_maintenance": "2026-11-28",
+      "days_until_maintenance": 67
     },
     {
       "account_id": "222222222222",
@@ -834,9 +862,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2029-07-23",
+      "standard_support_end": "2029-07-25",
       "extended_support_end": null,
-      "support_days_left": 999,
+      "support_days_left": 1037,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -853,7 +881,9 @@
       },
       "arn": "arn:aws:rds:ap-south-1:222222222222:db:dev-mariadb",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier dev-mariadb --engine-version 10.11.11 --region ap-south-1 --profile nonprod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -882,29 +912,31 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "false",
-      "standard_support_end": "2027-04-15",
-      "extended_support_end": "2030-04-09",
-      "support_days_left": 169,
-      "support_flag": "standard support ends in 169 days",
+      "standard_support_end": "2027-04-17",
+      "extended_support_end": "2030-04-11",
+      "support_days_left": 207,
+      "support_flag": "ok",
       "past_standard_support": false,
-      "nearing_end_of_support": true,
+      "nearing_end_of_support": false,
       "deprecated_version": false,
       "pending_actions_count": 2,
-      "pending_actions": "db-upgrade (auto-apply 2026-11-06) - Automatic minor version upgrade to 8.0.40; os-upgrade (no date, optional) - New Operating System update is available; it includes sec...",
+      "pending_actions": "db-upgrade (auto-apply 2026-11-08) - Automatic minor version upgrade to 8.0.40; os-upgrade (no date, optional) - New Operating System update is available; it includes sec...",
       "pending_actions_detail": [
         {
           "action": "db-upgrade",
           "on": "",
           "description": "Automatic minor version upgrade to 8.0.40",
           "opt_in_status": "",
-          "auto_applied_after": "2026-11-06",
+          "auto_applied_after": "2026-11-08",
           "forced_apply": null,
-          "current_apply": "2026-11-06",
-          "auto_applied_after_ist": "2026-11-07 01:30 IST",
+          "current_apply": "2026-11-08",
+          "auto_applied_after_ist": "2026-11-09 01:30 IST",
           "forced_apply_ist": null,
-          "auto_applied_after_utc": "2026-11-06 20:00 UTC",
+          "auto_applied_after_utc": "2026-11-08 20:00 UTC",
           "forced_apply_utc": null,
-          "text": "db-upgrade (auto-apply 2026-11-06) - Automatic minor version upgrade to 8.0.40"
+          "text": "db-upgrade (auto-apply 2026-11-08) - Automatic minor version upgrade to 8.0.40",
+          "next_date": "2026-11-08",
+          "days_until": 47
         },
         {
           "action": "os-upgrade",
@@ -918,7 +950,9 @@
           "forced_apply_ist": null,
           "auto_applied_after_utc": null,
           "forced_apply_utc": null,
-          "text": "os-upgrade (no date, optional) - New Operating System update is available; it includes sec..."
+          "text": "os-upgrade (no date, optional) - New Operating System update is available; it includes sec...",
+          "next_date": null,
+          "days_until": null
         }
       ],
       "maint_window_utc": "sun:20:00-sun:20:30",
@@ -930,7 +964,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:inv-mysql",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier inv-mysql --engine-version 8.0.43 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); auto minor upgrade is off"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately); auto minor upgrade is off",
+      "next_maintenance": "2026-11-08",
+      "days_until_maintenance": 47
     },
     {
       "account_id": "111111111111",
@@ -952,9 +988,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2032-04-18",
-      "extended_support_end": "2035-04-23",
-      "support_days_left": 1999,
+      "standard_support_end": "2032-04-20",
+      "extended_support_end": "2035-04-25",
+      "support_days_left": 2037,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -971,7 +1007,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:app-mysql84",
       "upgrade_command": "",
-      "note": ""
+      "note": "",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1015,7 +1053,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:graph-neptune",
       "upgrade_command": "aws neptune modify-db-cluster --db-cluster-identifier graph-neptune --engine-version 1.3.4.0 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1059,7 +1099,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:fin-ora",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier fin-ora --engine-version 19.0.0.0.ru-2025-07.rur-2025-07.r1 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1085,10 +1127,10 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2027-02-24",
-      "extended_support_end": "2030-02-08",
-      "support_days_left": 119,
-      "support_flag": "standard support ends in 119 days",
+      "standard_support_end": "2027-02-26",
+      "extended_support_end": "2030-02-10",
+      "support_days_left": 157,
+      "support_flag": "standard support ends in 157 days",
       "past_standard_support": false,
       "nearing_end_of_support": true,
       "deprecated_version": false,
@@ -1104,7 +1146,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:analytics-pg",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier analytics-pg --engine-version 13.22 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1130,9 +1174,9 @@
       "version_warnings": [],
       "compliance_status": "NON-COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-12-05",
-      "extended_support_end": "2033-12-09",
-      "support_days_left": 1499,
+      "standard_support_end": "2030-12-07",
+      "extended_support_end": "2033-12-11",
+      "support_days_left": 1537,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -1149,7 +1193,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:ledger-maz",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier ledger-maz --engine-version 16.10 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1174,9 +1220,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-12-05",
-      "extended_support_end": "2033-12-09",
-      "support_days_left": 1499,
+      "standard_support_end": "2030-12-07",
+      "extended_support_end": "2033-12-11",
+      "support_days_left": 1537,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -1193,7 +1239,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:billing-pg",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier billing-pg --engine-version 16.10 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1218,9 +1266,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2030-12-05",
-      "extended_support_end": "2033-12-09",
-      "support_days_left": 1499,
+      "standard_support_end": "2030-12-07",
+      "extended_support_end": "2033-12-11",
+      "support_days_left": 1537,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -1237,7 +1285,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:billing-pg-replica",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier billing-pg-replica --engine-version 16.10 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "222222222222",
@@ -1262,9 +1312,9 @@
       "version_warnings": [],
       "compliance_status": "COMPLIANT",
       "auto_minor_upgrade": "true",
-      "standard_support_end": "2031-10-01",
-      "extended_support_end": "2034-10-05",
-      "support_days_left": 1799,
+      "standard_support_end": "2031-10-03",
+      "extended_support_end": "2034-10-07",
+      "support_days_left": 1837,
       "support_flag": "ok",
       "past_standard_support": false,
       "nearing_end_of_support": false,
@@ -1281,7 +1331,9 @@
       },
       "arn": "arn:aws:rds:ap-south-1:222222222222:db:qa-pg",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier qa-pg --engine-version 17.6 --region ap-south-1 --profile nonprod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1326,7 +1378,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:hr-sql",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier hr-sql --engine-version 15.00.4430.1.v1 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     },
     {
       "account_id": "111111111111",
@@ -1369,7 +1423,9 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:db:erp-sql",
       "upgrade_command": "aws rds modify-db-instance --db-instance-identifier erp-sql --engine-version 16.00.4185.3.v1 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately)"
+      "note": "upgrade applies in the next maintenance window (no --apply-immediately)",
+      "next_maintenance": null,
+      "days_until_maintenance": null
     }
   ],
   "errors": [
@@ -1412,7 +1468,7 @@
     "max_behind": 2,
     "warn_days": 180,
     "past_standard_support": 2,
-    "nearing_end_of_support": 2,
+    "nearing_end_of_support": 1,
     "auto_minor_off": 3,
     "with_pending": 3,
     "pending_total": 5,
@@ -1929,6 +1985,40 @@
         "past_standard_support": 0
       }
     ],
+    "accounts": [
+      {
+        "account_id": "111111111111",
+        "profile": "prod",
+        "collected_utc": "2026-09-21 14:13 UTC",
+        "source": null,
+        "regions_with_databases": 2,
+        "errors": 2,
+        "total": 20,
+        "compliant": 12,
+        "non_compliant": 7,
+        "unknown": 1,
+        "pct_compliant": 60,
+        "with_pending": 3,
+        "pending_total": 5,
+        "past_standard_support": 2
+      },
+      {
+        "account_id": "222222222222",
+        "profile": "nonprod",
+        "collected_utc": "2026-09-21 14:13 UTC",
+        "source": null,
+        "regions_with_databases": 1,
+        "errors": 2,
+        "total": 3,
+        "compliant": 2,
+        "non_compliant": 1,
+        "unknown": 0,
+        "pct_compliant": 66.7,
+        "with_pending": 0,
+        "pending_total": 0,
+        "past_standard_support": 0
+      }
+    ],
     "regions_total": {
       "account_id": "ALL",
       "profile": "",
@@ -2004,7 +2094,7 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "8.0.mysql_aurora.3.10.0",
-            "standard_support_end": "2029-04-14",
+            "standard_support_end": "2029-04-16",
             "support_flag": "ok"
           }
         ]
@@ -2025,7 +2115,7 @@
             "non_compliant": 0,
             "unknown": 0,
             "latest_minor": "16.9",
-            "standard_support_end": "2030-12-05",
+            "standard_support_end": "2030-12-07",
             "support_flag": "ok"
           },
           {
@@ -2035,7 +2125,7 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "15.13",
-            "standard_support_end": "2030-02-08",
+            "standard_support_end": "2030-02-10",
             "support_flag": "ok"
           },
           {
@@ -2045,7 +2135,7 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "14.17",
-            "standard_support_end": "2029-01-04",
+            "standard_support_end": "2029-01-06",
             "support_flag": "ok"
           },
           {
@@ -2055,7 +2145,7 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "12.22",
-            "standard_support_end": "2025-03-26",
+            "standard_support_end": "2025-03-28",
             "support_flag": "past standard support (Extended Support charges)"
           },
           {
@@ -2065,7 +2155,7 @@
             "non_compliant": 0,
             "unknown": 1,
             "latest_minor": null,
-            "standard_support_end": "2025-03-06",
+            "standard_support_end": "2025-03-08",
             "support_flag": "past standard support (Extended Support charges)"
           }
         ]
@@ -2107,7 +2197,7 @@
             "non_compliant": 0,
             "unknown": 0,
             "latest_minor": "10.11.11",
-            "standard_support_end": "2029-07-23",
+            "standard_support_end": "2029-07-25",
             "support_flag": "ok"
           }
         ]
@@ -2128,7 +2218,7 @@
             "non_compliant": 0,
             "unknown": 0,
             "latest_minor": "8.4.6",
-            "standard_support_end": "2032-04-18",
+            "standard_support_end": "2032-04-20",
             "support_flag": "ok"
           },
           {
@@ -2138,8 +2228,8 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "8.0.43",
-            "standard_support_end": "2027-04-15",
-            "support_flag": "standard support ends in 169 days"
+            "standard_support_end": "2027-04-17",
+            "support_flag": "ok"
           }
         ]
       },
@@ -2201,7 +2291,7 @@
             "non_compliant": 0,
             "unknown": 0,
             "latest_minor": "17.6",
-            "standard_support_end": "2031-10-01",
+            "standard_support_end": "2031-10-03",
             "support_flag": "ok"
           },
           {
@@ -2211,7 +2301,7 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "16.10",
-            "standard_support_end": "2030-12-05",
+            "standard_support_end": "2030-12-07",
             "support_flag": "ok"
           },
           {
@@ -2221,8 +2311,8 @@
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "13.22",
-            "standard_support_end": "2027-02-24",
-            "support_flag": "standard support ends in 119 days"
+            "standard_support_end": "2027-02-26",
+            "support_flag": "standard support ends in 157 days"
           }
         ]
       },
