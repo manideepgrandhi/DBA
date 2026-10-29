@@ -55,7 +55,7 @@ chk "script never calls CloudWatch / Secrets Manager / KMS" bash -c "! grep -nE 
 
 echo "== usage / validation"
 t help 0 fleet --help; has help out "--probe-parallel"; has help out "no CloudWatch"; has help out "-P prod,dev -A"
-t version 0 fleet -V; has version out "rds_inventory_explorer.sh 1\.0\.0"
+t version 0 fleet -V; has version out "rds_inventory_explorer.sh 1\.1\.0"; has help out "--csv"
 t badopt 1 fleet --bogus
 t noarg 1 fleet -P
 t both_regions 1 fleet -r us-east-1 -A
@@ -74,7 +74,7 @@ t fleet 0 fleet "${FLEET[@]}"
 F="$(find "$OUT/fleet" -name '*.html')"
 chk "file name <prefix>_YYYYmmdd_HHMMSS.html" test "${F##*/}" == "rds_inventory_explorer_20261017_063000.html"
 chk "file mode 0640" test "$(stat -c %a "$F")" == 640
-jqt fleet '.meta.counts == {accounts: 2, regions_with_databases: 3, global_clusters: 1, clusters: 4, instances: 14, standalone_instances: 5, cluster_members: 9, pending_maintenance: 3, errors: 7}'
+jqt fleet '.meta.counts == {accounts: 2, regions_with_databases: 3, global_clusters: 1, clusters: 4, instances: 14, standalone_instances: 5, cluster_members: 9, pending_maintenance: 5, pending_actions: 5, pending_past_due: 1, pending_due_7d: 1, pending_due_30d: 2, errors: 7}'
 jqt fleet '.meta.generated_utc == "2026-10-17 06:30 UTC" and .meta.generated_local == "2026-10-17 12:00 IST" and .meta.tz_offset == 19800'
 jqt fleet '.meta.cloudwatch_calls == 0 and .meta.region_mode == "discover"'
 jqt fleet '[.resources[] | select(.engine | test("docdb|neptune"))] == []'
@@ -164,14 +164,65 @@ t unknownprof 2 fleet -P nosuch -r us-east-1
 echo "== failure scenarios"
 t globalfail 0 globalfail -P prod -r us-east-1
 jqt globalfail '.meta.counts.global_clusters == 0 and .meta.counts.clusters == 3 and ([.errors[] | select(.call == "rds describe-global-clusters")][0].message | test("Throttling"))'
-t empty 0 empty -P prod -A
+t empty 0 empty -P prod -A --csv
+jqt empty '.pending == [] and .meta.counts.pending_actions == 0'
+EP="$(find "$OUT/empty" -name '*_pending_*.csv' | head -1)"
+chk "empty fleet --csv: pending CSV is BOM + header only" bash -c "[[ -n '$EP' ]] && test \"\$(wc -l <'$EP')\" -eq 1 && head -c3 '$EP' | od -An -tx1 | grep -q 'ef bb bf'"
 jqt empty '.resources == [] and .meta.counts.regions_with_databases == 0'
 chk "empty fleet: no region listed in page" bash -c "! grep -qE 'us-east-1|ap-south-1|eu-west-1' '$(find "$OUT/empty" -name '*.html' 2>/dev/null | head -1)'"
 
+echo "== pending maintenance model"
+jqt fleet '[.pending[] | .res_name] == ["hr-sqlserver", "orders-2", "crm-pg", "orders-aurora", "qa-mysql"]'
+jqt fleet '[.pending[] | .urgency] == ["past_due", "lt7", "lt30", "later", "no_date"]'
+jqt fleet '[.pending[] | .earliest.days] == [-3, 6, 20, 90, null]'
+jqt fleet '(.pending[] | select(.res_name == "orders-2")) | .res_kind == "instance" and .cluster_id != null and .res_type == "member"'
+jqt fleet '(.pending[] | select(.res_name == "orders-aurora")).next_window | .utc == "2026-10-17 21:00 UTC" and .local == "2026-10-18 02:30 IST"'
+jqt fleet '(.resources[] | select(.name == "orders-aurora")) | .pending_count == 1 and .pending_total == 2'
+jqt fleet '[.resources[] | select(.pending_count > 0)] | length == 5'
+jqt fleet '([.pending[] | .csv | length] | unique) == [19] and (.meta.csv_columns.pending | length) == 19'
+jqt fleet '[.resources[] | .csv | length] | unique == [21]'
+
+echo "== --csv"
+t csv 0 fleet "${FLEET[@]}" --csv
+CI="$OUT/csv/rds_inventory_explorer_inventory_20261017_063000.csv" CP="$OUT/csv/rds_inventory_explorer_pending_20261017_063000.csv"
+chk "--csv wrote inventory + pending files" test -s "$CI" -a -s "$CP"
+chk "no CSV without --csv" test -z "$(find "$OUT/fleet" -name '*.csv')"
+chk "CSV files are mode 640" test "$(stat -c %a "$CI") $(stat -c %a "$CP")" == "640 640"
+has csv err "Wrote .*_pending_20261017_063000\.csv"; has csv err "5 pending maintenance action\(s\) \(1 past due\)"
+for f in "$CI" "$CP"; do
+    chk "$(basename "$f"): UTF-8 BOM" bash -c "head -c3 '$f' | od -An -tx1 | grep -q 'ef bb bf'"
+    chk "$(basename "$f"): every line ends CRLF" bash -c "test \"\$(grep -c \$'\\r\$' '$f')\" -eq \"\$(wc -l <'$f')\""
+done
+chk "pending CSV: header + 5 rows" test "$(wc -l <"$CP")" -eq 6
+chk "inventory CSV: header + 19 resources" test "$(wc -l <"$CI")" -eq 20
+chk "pending CSV: embedded quotes doubled" grep -qF ',"Rotate CA to ""rds-ca-rsa2048-g1"", restart required",' "$CP"
+chk "inventory CSV: formula guard + quoting" grep -qF ',"'"'"'=HYPERLINK(""http://x"")"' "$CI"
+chk "pending CSV: negative number not guarded" grep -qF ',-3,past due,' "$CP"
+csvcheck() {   # header == meta.csv_columns, rectangular, values == model .csv (python csv module as oracle)
+    python3 - "$1" "$2" "$OUT/csv.json" <<'PY'
+import csv, json, sys
+kind, path, model = sys.argv[1], sys.argv[2], json.load(open(sys.argv[3]))
+rows = list(csv.reader(open(path, encoding='utf-8-sig', newline='')))
+cols = model['meta']['csv_columns'][kind]
+if kind == 'inventory':
+    tags = sorted({t['k'] for r in model['resources'] for t in r['tags']})
+    cols = cols + ['tag:' + t for t in tags]
+    want = [r['csv'] + [next((t['v'] for t in r['tags'] if t['k'] == k), '') for k in tags] for r in model['resources']]
+else:
+    want = [r['csv'] for r in model['pending']]
+g = lambda v: "'" + v if v[:1] in ('=', '+', '-', '@', '\t', '\r') and not v.lstrip('-+').replace('.', '', 1).isdigit() else v
+assert rows[0] == cols, (rows[0], cols)
+assert all(len(r) == len(cols) for r in rows)
+assert len(rows) == len(want) + 1 and rows[1:] == [[g(x) for x in w] for w in want]
+PY
+}
+chk "inventory CSV: header, shape and values match the model" csvcheck inventory "$CI"
+chk "pending CSV: header, shape and values match the model" csvcheck pending "$CP"
+
 echo "== browser (headless Chrome)"
 if command -v node >/dev/null 2>&1 && node -e "require('puppeteer-core')" 2>/dev/null && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]]; then
-    res="$(node "$HERE/browser_check.js" "$F" ${SHOTS:+"$SHOTS"} 2>&1)"; rc=$?
-    if (( rc == 0 )); then ok "browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks - search, filters, card, links, hash, copy JSON, dark mode, no JS errors, no network"
+    res="$(CSV_DIR="$OUT/csv" EMPTY_HTML="$(find "$OUT/empty" -name '*.html' | head -1)" node "$HERE/browser_check.js" "$F" ${SHOTS:+"$SHOTS"} 2>&1)"; rc=$?
+    if (( rc == 0 )); then ok "browser: $(jq -r '"\(.passed)/\(.total)"' <<<"$res") checks - search, filters, card, links, hash, copy JSON, dark mode, pending tab, CSV export, mobile, no JS errors, no network"
     else bad "browser check: ${res:0:800}"; fi
 else echo "  skip browser check (needs node + puppeteer-core on NODE_PATH + Chrome)"; fi
 

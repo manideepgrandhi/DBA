@@ -13,12 +13,13 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB_DIR="${RDS_EXPLORER_LIB:-$SCRIPT_DIR/lib}"
 LIB="$LIB_DIR/explorer.jq"
 TEMPLATE="$LIB_DIR/explorer_template.html"
+CSV_LIB="$LIB_DIR/csv.jq"
 
 if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
     echo "$SCRIPT_NAME: bash 4.4+ required (found $BASH_VERSION)" >&2; exit 2
@@ -37,6 +38,7 @@ AWS_TIMEOUT=30
 MAX_ATTEMPTS=5
 KEEP_WORKDIR=0
 DRY_RUN=0
+WRITE_CSV=0
 VERBOSE=0
 
 WORK=""
@@ -73,6 +75,8 @@ Output:
   -o, --output-dir DIR      Directory for <prefix>_YYYYmmdd_HHMMSS.html (default: current directory)
       --prefix NAME         File name prefix (default: rds_inventory_explorer)
       --tz ZONE             Second time zone shown next to UTC (default: Asia/Kolkata)
+      --csv                 Also write <prefix>_inventory_<ts>.csv (one row per resource, tags as columns) and
+                            <prefix>_pending_<ts>.csv (one row per pending maintenance action) next to the HTML
 
 Behaviour:
       --aws-timeout SEC     AWS CLI connect/read timeout (default: 30)
@@ -122,6 +126,7 @@ parse_args() {
             --tz)               need_arg "$opt" $#; DISPLAY_TZ="$2"; shift 2 ;;
             --aws-timeout)      need_arg "$opt" $#; AWS_TIMEOUT="$2"; shift 2 ;;
             --max-attempts)     need_arg "$opt" $#; MAX_ATTEMPTS="$2"; shift 2 ;;
+            --csv)              WRITE_CSV=1; shift ;;
             --keep-workdir)     KEEP_WORKDIR=1; shift ;;
             --dry-run)          DRY_RUN=1; shift ;;
             -v|--verbose)       VERBOSE=1; shift ;;
@@ -166,6 +171,7 @@ precheck() {
     [[ "$v" =~ ^jq-1\.([6-9]|[1-9][0-9]) ]] || die 2 "jq 1.6 or newer required (found ${v:-unknown})"
     [[ -r "$LIB" ]] || die 2 "Library missing: $LIB"
     [[ -r "$TEMPLATE" ]] || die 2 "Page template missing: $TEMPLATE"
+    [[ -r "$CSV_LIB" ]] || die 2 "CSV library missing: $CSV_LIB"
 }
 
 # ----------------------------------------------------------------------------
@@ -363,7 +369,8 @@ build_model() {
         --arg tz "$DISPLAY_TZ" --arg tzabbr "$(TZ="$DISPLAY_TZ" date -d "@$NOW" '+%Z')" --argjson tzoff "$(tz_offset_sec)" \
         --slurpfile accounts "$WORK/accounts.jsonl" --argjson profiles "${#PROFILES[@]}" --arg rmode "$mode" \
         --argjson docdb "$INCLUDE_DOCDB" --argjson calls "$AWS_CALLS" --argjson fails "$AWS_FAILS" \
-        '{script: $script, version: $version, now: $now, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tzabbr, tz_offset: $tzoff,
+        --arg stamp "$(file_stamp)" \
+        '{script: $script, version: $version, now: $now, file_stamp: $stamp, generated_utc: $gu, generated_local: $gl, tz: $tz, tz_abbr: $tzabbr, tz_offset: $tzoff,
           accounts: $accounts, profiles_requested: $profiles, region_mode: $rmode, include_docdb: ($docdb == 1),
           aws_calls: $calls, aws_failures: $fails, cloudwatch_calls: 0}' >"$WORK/meta.json" || die 4 "Building report metadata failed"
     jq -n --slurpfile meta "$WORK/meta.json" --slurpfile regions "$WORK/regions.json" --slurpfile errors "$WORK/all_errors.json" \
@@ -371,8 +378,16 @@ build_model() {
     jq -c -f "$LIB" "$WORK/raw.json" >"$WORK/model.json" || die 4 "Building the data model failed"
 }
 
+file_stamp() { date -d "@$NOW" '+%Y%m%d_%H%M%S'; }
+write_csv() {   # write_csv <kind>: <prefix>_<kind>_<ts>.csv next to the HTML, same columns / escaping as the page export
+    local f; f="${OUTPUT_DIR%/}/${PREFIX}_$1_$(file_stamp).csv"
+    jq -j --arg kind "$1" -f "$CSV_LIB" "$WORK/model.json" >"$WORK/out_$1.csv" || die 4 "Building the $1 CSV failed"
+    if ! { cp -- "$WORK/out_$1.csv" "$f.tmp.$$" && mv -f -- "$f.tmp.$$" "$f"; }; then die 4 "Cannot write $f"; fi
+    chmod 0640 -- "$f" 2>/dev/null || true
+    log_info "Wrote $(cd -- "$(dirname -- "$f")" && pwd -P)/${f##*/}"
+}
 write_html() {
-    local stamp; stamp="$(date -d "@$NOW" '+%Y%m%d_%H%M%S')"
+    local stamp; stamp="$(file_stamp)"
     OUTFILE="${OUTPUT_DIR%/}/${PREFIX}_${stamp}.html"
     # embed the model as JSON inside <script type="application/json">: every "<" becomes \u003c, so no "</script"
     # (or "<!--") in any AWS value can end the block; JSON.parse turns it back into "<".
@@ -453,7 +468,8 @@ main() {
     fi
     build_model
     write_html
-    log_info "$(jq -r '.meta.counts | "Result: \(.global_clusters) global cluster(s), \(.clusters) cluster(s), \(.instances) instance(s) (\(.standalone_instances) standalone) in \(.accounts) account(s) / \(.regions_with_databases) region(s) with databases; \(.errors) error(s)"' "$WORK/model.json"); $AWS_CALLS AWS call(s), 0 CloudWatch"
+    if (( WRITE_CSV )); then write_csv inventory; write_csv pending; fi
+    log_info "$(jq -r '.meta.counts | "Result: \(.global_clusters) global cluster(s), \(.clusters) cluster(s), \(.instances) instance(s) (\(.standalone_instances) standalone) in \(.accounts) account(s) / \(.regions_with_databases) region(s) with databases; \(.pending_actions) pending maintenance action(s) (\(.pending_past_due) past due); \(.errors) error(s)"' "$WORK/model.json"); $AWS_CALLS AWS call(s), 0 CloudWatch"
     exit 0
 }
 

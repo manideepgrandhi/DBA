@@ -184,13 +184,74 @@ def keepeng($docdb): (.Engine // "") as $e | $docdb or ($e | test("^(docdb|neptu
      | . + {search: search_text([.endpoint, .class, .d.cluster.name])}] as $INSTANCES
 
   | ($GLOBALS + $CLUSTERS + $INSTANCES) as $ALL
+
+  # ---- pending maintenance: one row per action (from the describe-pending-maintenance-actions data above) ----
+  | def ewhen: {utc: (strftime("%Y-%m-%d %H:%M UTC")), local: (((. + $off) | strftime("%Y-%m-%d %H:%M")) + " " + $abbr),
+                days: (((. - $now) / 86400) | floor)};
+    # next start of a weekly "ddd:hh:mm-ddd:hh:mm" window at or after the report time
+    def next_window: if type != "string" or . == "" then null else
+        (split("-")[0] | split(":")) as $p | (DAYS | index($p[0] | ascii_downcase)) as $di
+        | if $di == null then null else
+            ($di * 1440 + ($p[1] | tonumber) * 60 + ($p[2] | tonumber)) as $w | (($now / 60) | floor) as $nm
+            | ((($w - (($nm + 4 * 1440) % 10080)) % 10080 + 10080) % 10080) as $delta   # 1970-01-01 was a Thursday
+            | (($nm + $delta) * 60) | ewhen end end;
+    def s: if . == null then "" else tostring end;
+    def URG: {past_due: "past due", lt7: "< 7 days", lt30: "< 30 days", later: "later", no_date: "no date"};
+    ([$ALL[] | . as $r | ($PMA[$r.id] // [])[]
+     | ([.AutoAppliedAfterDate, .ForcedApplyDate, .CurrentApplyDate] | map(epoch | select(. != null)) | min) as $ee
+     | ($r.raw.PreferredMaintenanceWindow) as $mw
+     | (if $ee == null then "no_date" elif $ee < $now then "past_due" elif $ee - $now < 7 * 86400 then "lt7"
+        elif $ee - $now < 30 * 86400 then "lt30" else "later" end) as $u
+     | {res_id: $r.id, res_name: $r.name, res_type: $r.type,
+        res_kind: (if $r.type == "member" then "instance" else $r.type end),
+        cluster_id: (if $r.type == "member" then $r.d.cluster.id else null end),
+        account: $r.account, profile: $r.profile, region: $r.region, engine: $r.engine,
+        action: (.Action // ""), description: (.Description // ""), opt_in: (.OptInStatus),
+        auto_applied_after: (.AutoAppliedAfterDate | when), forced_apply: (.ForcedApplyDate | when),
+        current_apply: (.CurrentApplyDate | when),
+        window: ($mw | window), next_window: ($mw | next_window),
+        earliest: (if $ee == null then null else $ee | ewhen end), earliest_epoch: $ee, urgency: $u}
+     | . + {csv: [.account, .profile, .region, .res_name, .res_kind, .action, .description,
+                  .auto_applied_after.utc, .forced_apply.utc, .opt_in, .current_apply.utc,
+                  .window.utc, .window.local, .next_window.utc, .next_window.local,
+                  .earliest.utc, .earliest.days, URG[$u], .res_id] | map(s)}]
+     | sort_by({past_due: 0, lt7: 1, lt30: 2, later: 3, no_date: 4}[.urgency], (.earliest_epoch // 0), .res_name, .account, .region, .action)) as $PM
+  | ($PM | group_by(.res_id) | map({key: .[0].res_id, value: length}) | from_entries) as $POWN
+  | ([$PM[] | select(.cluster_id)] | group_by(.cluster_id) | map({key: .[0].cluster_id, value: length}) | from_entries) as $PMEM
+  | [$ALL[] | ($POWN[.id] // 0) as $own | (if .type == "cluster" then $PMEM[.id] // 0 else 0 end) as $mem
+     | . + {pending_count: $own, pending_total: ($own + $mem)}
+     | . as $r | .d as $d
+     | (if .type == "instance" or .type == "member" then $d.auto_minor
+        elif .type == "cluster" then
+          (if $d.auto_minor_cluster != null then $d.auto_minor_cluster
+           elif ($d.auto_minor_members.on + $d.auto_minor_members.off) == 0 then null
+           elif $d.auto_minor_members.off == 0 then true elif $d.auto_minor_members.on == 0 then false
+           else "mixed (on \($d.auto_minor_members.on) / off \($d.auto_minor_members.off))" end)
+        else null end) as $am
+     | . + {csv: [.account, .profile, (if .type == "global" then (.regions | join(" ")) else .region end), .type_label, .name,
+                  .engine, .version, .class, .status, .endpoint, $d.port, $d.multi_az, $d.storage_encrypted, $d.kms_key,
+                  $d.backup.retention_days, $am, $d.maintenance_window.utc, $d.maintenance_window.local,
+                  $own, .pending_total, .id] | map(s)}] as $ALLP
   | {meta: ($meta + {counts: {
         accounts: ($meta.accounts | map(.account) | unique | length),
         regions_with_databases: ([$ALL[] | select(.type != "global") | "\(.account)|\(.region)"] | unique | length),
         global_clusters: ($GLOBALS | length), clusters: ($CLUSTERS | length), instances: ($INSTANCES | length),
         standalone_instances: ([$INSTANCES[] | select(.type == "instance")] | length),
         cluster_members: ([$INSTANCES[] | select(.type == "member")] | length),
-        pending_maintenance: ([$ALL[] | select((.d.pending // []) | length > 0)] | length),
-        errors: (.errors | length)}}),
-     resources: ($ALL | sort_by(({global: 0, cluster: 1, instance: 2, member: 3}[.type]), .name, .account, .region)),
+        pending_maintenance: ([$ALLP[] | select(.pending_count > 0)] | length),
+        pending_actions: ($PM | length),
+        pending_past_due: ([$PM[] | select(.urgency == "past_due")] | length),
+        pending_due_7d: ([$PM[] | select(.urgency == "lt7")] | length),
+        pending_due_30d: ([$PM[] | select(.urgency == "lt7" or .urgency == "lt30")] | length),
+        errors: (.errors | length)},
+      csv_columns: {
+        inventory: ["Account", "Profile", "Region", "Type", "Identifier", "Engine", "Version", "Class", "Status", "Endpoint", "Port",
+                    "Multi-AZ", "Storage encrypted", "KMS key", "Backup retention (days)", "Auto minor upgrade",
+                    "Maintenance window (UTC)", "Maintenance window (\($abbr))", "Pending actions", "Pending incl. members", "ARN"],
+        pending: ["Account", "Profile", "Region", "Resource", "Resource type", "Action", "Description",
+                  "Auto-applied after (UTC)", "Forced apply (UTC)", "Opt-in status", "Current apply (UTC)",
+                  "Maintenance window (UTC)", "Maintenance window (\($abbr))", "Next window start (UTC)", "Next window start (\($abbr))",
+                  "Earliest apply (UTC)", "Days until earliest", "Urgency", "Resource ARN"]}}),
+     resources: ($ALLP | sort_by(({global: 0, cluster: 1, instance: 2, member: 3}[.type]), .name, .account, .region)),
+     pending: $PM,
      errors: .errors}

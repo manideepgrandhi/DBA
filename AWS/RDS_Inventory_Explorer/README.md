@@ -4,6 +4,7 @@
 
 - One file, no server, no internet needed. The data is embedded in the page and nothing is loaded from the network (CSP `default-src 'none'`).
 - **No CloudWatch, no secret values.** Only `sts get-caller-identity`, `ec2 describe-regions` and `rds describe-*` calls are made. The script refuses anything else (`read_only_guard`). It shows the ARN of a managed master secret, never its value.
+- A **Pending maintenance** tab lists every pending action across the fleet, sorted by urgency, and both tabs export to **CSV**.
 - Errors in one account or region (AccessDenied, SCP, throttling, expired SSO) are recorded and shown in the page. They never stop the run.
 
 ![Cluster card](docs/screenshot.png)
@@ -52,6 +53,17 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
   - Names inside the card (writer, members, global cluster, replica source, replicas) are links to their own cards.
   - The selection is kept in the URL hash, so it survives a reload and can be bookmarked. ← All resources goes back to the list.
   - **Copy JSON** copies the raw AWS describe output for that resource. **Copy ARN** copies its ARN.
+- **Tabs:** **Inventory** and **Pending maintenance**. The active tab is kept in the URL hash (`#tab=pending`). Old `#id=…` links still open the Inventory card.
+- **Pending maintenance tab:** one row per pending action, from the same `describe-pending-maintenance-actions` data (no extra AWS calls).
+  - Count strip: total, past due, due within 7 days, due within 30 days (cumulative). Clicking a count filters by it.
+  - Columns: account, region, resource (links to its card), type (cluster / instance / member), action, description, auto-applied after, forced apply, opt-in status, current apply, next maintenance window start (UTC + IST), and urgency.
+  - Urgency comes from the earliest of the auto-applied, forced and current apply dates against the report time: **past due**, **< 7 days**, **< 30 days**, **later**, or **no date** (opt-in only). Rows are ordered most urgent first.
+  - Filters for account, region, action and urgency, plus a text search. Every column header sorts (click again to reverse; empty values stay last).
+  - Cards with pending actions show an **"N pending"** badge (a cluster counts its own and its members' actions). The list has a Pending column. Both jump to that resource's rows (`#tab=pending&res=…`); **Show all** drops the resource filter.
+- **Export CSV:** a button on each tab downloads what is shown, after filters and sorting.
+  - Pending: `rds_pending_maintenance_<YYYYmmdd_HHMMSS>.csv`, 19 columns (dates in UTC and the second zone, days until earliest, urgency, resource ARN).
+  - Inventory: `rds_inventory_<YYYYmmdd_HHMMSS>.csv`, one flat row per resource (account, profile, region, type, identifier, engine, version, class, status, endpoint, port, Multi-AZ, encryption, KMS key, backup retention, auto minor upgrade, maintenance window in both zones, pending counts, ARN), then one `tag:<key>` column per tag key.
+  - The time stamp is the report's generation time. Files are UTF-8 with a BOM (Excel opens them correctly), RFC 4180 quoting and CRLF line ends. Cells starting with `=`, `+`, `-`, `@` or a tab get a leading `'` so spreadsheets do not run them as formulas (plain numbers such as `-3` are left alone).
 - **Header:** counts only. These are accounts, regions with databases, global clusters, clusters, instances (standalone and members), resources with pending maintenance, and errors. Regions without databases are never listed.
 - **Theme:** auto, light and dark. The choice is stored in `localStorage` under `mg-theme`, the same key the other reports in this repo use.
 - **Errors panel** at the bottom: account, profile, region, the call that failed and the message.
@@ -76,11 +88,12 @@ The output is `<prefix>_YYYYmmdd_HHMMSS.html` (default prefix `rds_inventory_exp
 | `--include-docdb` | Also list DocumentDB and Neptune clusters. |
 | `-o, --output-dir DIR` | Output directory (default: the current directory). It is created if missing. |
 | `--prefix NAME` | File name prefix. |
+| `--csv` | Also write `<prefix>_inventory_<ts>.csv` and `<prefix>_pending_<ts>.csv` next to the HTML. They have the same columns and bytes as the page's Export CSV buttons with no filters applied. |
 | `--tz ZONE` | Second time zone shown next to UTC (default `Asia/Kolkata`). |
 | `--aws-timeout SEC` / `--max-attempts N` | CLI connect/read timeout (default 30) and retry attempts (default 5). |
 | `--keep-workdir` | Keep the raw AWS responses for debugging. |
 | `--dry-run` | Print the calls that would run, and call nothing. |
-| `-v`, `-h`, `-V` | Verbose, help, version (1.0.0). |
+| `-v`, `-h`, `-V` | Verbose, help, version (1.1.0). |
 
 **Exit codes:**
 
@@ -129,7 +142,8 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
   - It checks the HTML: the `</script>` escape, no network references, the CSP, and empty regions never shown.
   - It checks the call log: only allowed operations, and probes are the only `--no-paginate` calls.
   - It runs the failure scenarios (throttled global clusters, empty fleet, no valid profile), the dry run (no calls), and a 1,950-resource scale run.
-  - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, and no JS errors or network requests.
+  - When `node` with `puppeteer-core` on `NODE_PATH` and Chrome are available, it also runs `tests/browser_check.js`. That drives the page in headless Chrome: search suggestions, filters, the card, links, the hash, Copy JSON, the theme, the Pending tab (hash, filters, search, sort, count strip, badge navigation, empty state), CSV export (the downloaded bytes are compared with the `--csv` files, plus one real Chrome download), layout at 680 / 900 / 1280 px and mobile dark, and no JS errors or network requests.
+  - It checks the `--csv` files: names, mode 640, BOM, CRLF, quoting, the formula guard, and that header and values match the model (Python's `csv` module as the parser).
 - **`validate_cli.sh`** replays every command line the script issues through the real CLI, so syntax, `--query` and parameter validation are checked. It also runs negative controls, checks the mock output shapes against `--generate-cli-skeleton output`, and runs a full `-A` end to end through `tests/fake_aws_endpoint.py`. That run checks paging, that the probe skips the empty region, and that no CloudWatch, Secrets Manager or KMS request is made.
 
 ## Files
@@ -137,6 +151,7 @@ tests/validate_cli.sh       # the REAL AWS CLI v2 against a dead local port and 
 ```
 rds_inventory_explorer.sh        the script
 lib/explorer.jq                  raw AWS JSON -> page model
+lib/csv.jq                       page model -> CSV (used by --csv)
 lib/explorer_template.html       page (CSS + JS), data placeholder /*__EXPLORER_DATA__*/
 samples/sample.html              page built from the test mock (fake accounts)
 docs/screenshot.png              cluster card from the sample

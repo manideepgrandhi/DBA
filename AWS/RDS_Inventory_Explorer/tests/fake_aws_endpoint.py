@@ -71,7 +71,8 @@ CERTS = ["<Certificate>" + x("CertificateIdentifier", "rds-ca-rsa2048-g1") + x("
 
 n_inst = N + REPL + len(MEM)
 json.dump({"accounts": 1, "regions_with_databases": 1, "global_clusters": 1, "clusters": 1, "instances": n_inst,
-           "standalone_instances": N + REPL, "cluster_members": len(MEM), "pending_maintenance": len(PMA), "errors": 0}, open(expfile, "w"))
+           "standalone_instances": N + REPL, "cluster_members": len(MEM), "pending_maintenance": len(PMA), "pending_actions": len(PMA),
+           "pending_past_due": 0, "pending_due_7d": 0, "pending_due_30d": 0, "errors": 0}, open(expfile, "w"))
 
 PAGES = {"DescribeDBInstances": ("DBInstances", INST, 20), "DescribeDBClusters": ("DBClusters", CLUS, 20),
          "DescribeGlobalClusters": ("GlobalClusters", GLOB, 20), "DescribeDBClusterEndpoints": ("DBClusterEndpoints", EPS, 20),

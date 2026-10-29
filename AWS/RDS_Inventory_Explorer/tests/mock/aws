@@ -234,7 +234,10 @@ elif SCEN != "empty":
                     {"Action": "system-update", "CurrentApplyDate": t(6), "AutoAppliedAfterDate": t(6), "OptInStatus": "next-maintenance",
                      "Description": "Upgrade to Aurora MySQL 3.08.2 patch"}]},
                 {"ResourceIdentifier": arn("cluster", "orders-aurora"), "PendingMaintenanceActionDetails": [
-                    {"Action": "db-upgrade", "Description": "Upgrade to 8.0.mysql_aurora.3.10.0", "ForcedApplyDate": t(90)}]}]
+                    {"Action": "db-upgrade", "Description": "Upgrade to 8.0.mysql_aurora.3.10.0", "ForcedApplyDate": t(90)}]},
+                {"ResourceIdentifier": arn("db", "hr-sqlserver"), "PendingMaintenanceActionDetails": [   # past due (auto-apply date passed)
+                    {"Action": "ca-certificate-rotation", "AutoAppliedAfterDate": t(-3), "ForcedApplyDate": t(12),
+                     "Description": 'Rotate CA to "rds-ca-rsa2048-g1", restart required'}]}]
     if ACCT == "111111111111" and REGION == "ap-south-1":
         CL.append(cluster("pay-aurora-aps1", "aurora-postgresql", "16.6", [("pay-aps1-1", False)], tg=PAY, master=False, glob="pay-global", wf=True))
         INS.append(inst("pay-aps1-1", "aurora-postgresql", "16.6", "db.r6g.2xlarge", cluster="pay-aurora-aps1", tg=PAY))
@@ -249,6 +252,9 @@ elif SCEN != "empty":
     if ACCT == "222222222222" and REGION == "ap-south-1":
         INS.append(inst("qa-mysql", "mysql", "8.0.40", "db.t4g.medium", tg=tags("qa", "qa-team", "orders</script><b>x"), public=True, gb=50, st="gp3",
                         lic="general-public-license", dp=False, ret=1, port=3306))
+        INS[-1]["TagList"].append({"Key": "cost-center", "Value": "=HYPERLINK(\"http://x\")"})   # CSV formula-injection probe
+        PMA += [{"ResourceIdentifier": arn("db", "qa-mysql"), "PendingMaintenanceActionDetails": [   # no date at all
+                    {"Action": "db-upgrade", "Description": "Upgrade to MySQL 8.0.42"}]}]
 
 if OP == "describe-db-instances":
     out({"DBInstances": INS})
