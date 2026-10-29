@@ -118,7 +118,7 @@ vce oracle-ee "${O}2026-10.mrp-2026-10.r1" 1 "${O}2026-07.mrp-2026-07.r10"
 
 echo "== usage / validation"
 t help 0 fleet --help;               has help out 'Exit codes'; has help out 'read-only'; has help out '--max-behind'; has help out 'NEVER run'
-t version 0 fleet --version;         has version out '1\.3\.0'
+t version 0 fleet --version;         has version out '1\.3\.1'
 t badopt 1 fleet --bogus
 t badfmt 1 fleet -r us-east-1 -F xml
 t multinoout 1 fleet -r us-east-1 -F csv,html
@@ -127,7 +127,7 @@ t badregion 1 fleet -r useast1
 t badprofile 1 fleet -P 'a;b' -r us-east-1
 t badmax 1 fleet -r us-east-1 --max-behind two
 t badwarn 1 fleet -r us-east-1 --warn-days -5
-t badtop 1 fleet -r us-east-1 --top 0
+t badtop 0 fleet -r us-east-1 --top 0;  has badtop err 'deprecated and ignored'
 t badtz 1 fleet -r us-east-1 --tz Mars/Base
 t badprefix 1 fleet -r us-east-1 -o "$OUT/o" --prefix '../x'
 t badhook 1 fleet -r us-east-1 --alert-webhook ftp://x
@@ -225,11 +225,11 @@ jqt noprofile '[.rows[].upgrade_command | select(. != "" and test("--profile"))]
 jqt noprofile '[.rows[].profile] | unique == ["default"]'
 echo "-- sorting / summary"
 jqt fleet '[.rows[] | select(.engine == "aurora-postgresql") | .identifier] == ["dev-aurora-pg15","legacy-aurora-pg12","reports-aurora-pg14","old-aurora-pg11","crm-aurora-pg15","orders-aurora-pg15","pay-aurora-pg16"]'
-jqt fleet '.summary.top_behind[0].identifier == "dev-aurora-pg15" and (.summary.top_behind | length) == 10'
+jqt fleet '.summary | has("top_behind") | not'
 jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors | map(.major)) == ["16","15","14","12","11"]'
 jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors[] | select(.major == "15")) | .total == 3 and .compliant == 2 and .non_compliant == 1 and .latest_minor == "15.13"'
 jqt fleet '(.summary.engines[] | select(.engine == "aurora-postgresql") | .majors[] | select(.major == "14")) | .latest_minor == "14.17"'
-t top3 0 fleet "${P2[@]}" -F json --top 3;   jqt top3 '(.summary.top_behind | length) == 3'
+t top3 0 fleet "${P2[@]}" -F json --top 3;   has top3 err '--top / top = is deprecated and ignored'; jqt top3 '.summary | has("top_behind") | not'
 echo "-- options"
 t max3 0 fleet -P prod -r us-east-1 -F json --max-behind 3
 rowt max3 reports-aurora-pg14 '.compliance_status == "COMPLIANT"';  rowt max3 shop-aurora-mysql '.compliance_status == "NON-COMPLIANT"'
@@ -274,14 +274,18 @@ CSV="$(find "$OUT/rep" -name '*.csv' ! -name '*_regions.csv')"; HTML="$(find "$O
 chk "csv header" test "$(head -1 "$CSV")" = '"account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version","versions_behind","newer_versions","default_auto_upgrade_target","compliance_status","auto_minor_upgrade","standard_support_end","extended_support_end","support_flag","pending_actions_count","pending_actions","deprecated_version","maint_window_utc","maint_window_ist","tag:Environment","tag:Owner","arn","upgrade_command","note","next_maintenance","days_until_maintenance"'
 chk "csv rows = 22" test "$(python3 -c 'import csv,sys; print(sum(1 for _ in csv.reader(open(sys.argv[1])))-1)' "$CSV")" -eq 22
 chk "csv parses with 30 columns everywhere" test "$(python3 -c 'import csv,sys; print(set(len(r) for r in csv.reader(open(sys.argv[1]))))' "$CSV")" = "{30}"
-for p in 'id="q"' 'class="cp"' 'class="badge">2<' 'details class="pend"' '01:30 IST' "haven't been applied yet" 'Valid minor targets' 'Auto-upgrade default' 'table class="main"' 'st bad' 'st ok' 'Extended Support' 'Top 10 most behind' 'Per engine and major version' 'localeCompare' 'href="#eng-aurora-postgresql"'; do
+for p in 'id="q"' 'class="cp"' 'class="badge">2<' 'details class="pend"' '01:30 IST' "haven't been applied yet" 'Valid minor targets' 'Auto-upgrade default' 'table class="main"' 'st bad' 'st ok' 'Extended Support' 'id="about"' 'About this report' 'Per engine and major version' 'localeCompare' 'href="#eng-aurora-postgresql"'; do
     if grep -qF -- "$p" "$HTML"; then ok "html has $p"; else bad "html lacks $p"; fi
 done
 chk "html is well-formed enough (python html.parser)" python3 -c 'import html.parser,sys; html.parser.HTMLParser().feed(open(sys.argv[1]).read())' "$HTML"
-for p in '^SUMMARY' '^PER ENGINE / MAJOR VERSION' '^TOP 10 MOST BEHIND' '^=== aurora-postgresql: 7' '59.1% compliant' 'past standard support' 'Pending maint\.   : on 3 server\(s\): os-upgrade 2, system-update 2, db-upgrade 1' '^      pending: os-upgrade on member orders-pg15-2'; do
+for p in '^SUMMARY' '^PER ENGINE / MAJOR VERSION' '^ABOUT THIS REPORT' '^=== aurora-postgresql: 7' '59.1% compliant' 'past standard support' 'Pending maint\.   : on 3 server\(s\): os-upgrade 2, system-update 2, db-upgrade 1' '^      pending: os-upgrade on member orders-pg15-2'; do
     if grep -qE -- "$p" "$TXT"; then ok "txt has /$p/"; else bad "txt lacks /$p/"; fi
 done
 chk "summary is at the top of the txt" test "$(grep -n '^SUMMARY' "$TXT" | cut -d: -f1)" -lt 10
+chk "v1.3.1: txt header is 4 lines + blank (title, accounts, regions, rule)" test "$(grep -n '^SUMMARY' "$TXT" | cut -d: -f1)" -le 6
+chk "v1.3.1: no most-behind list in txt / html" bash -c "! grep -qi 'most behind' '$TXT' '$HTML'"
+chk "v1.3.1: long explanations only below (txt)" test "$(grep -n 'ValidUpgradeTarget' "$TXT" | head -1 | cut -d: -f1)" -gt "$(grep -n '^ABOUT THIS REPORT' "$TXT" | cut -d: -f1)"
+chk "v1.3.1: long explanations only in About (html)" python3 -c 'import sys; t=open(sys.argv[1]).read(); a=t.index("<table"); assert all(k not in t[:a] for k in ("describe-db-engine-versions", "haven&#39;t", "IsMajorVersionUpgrade", "maintenance window"))' "$HTML"
 t notags 0 fleet -P prod -r us-east-1 -F csv -T ''
 chk "-T '' -> no tag columns" bash -c "! head -1 '$OUT/notags.out' | grep -q tag:"
 t logf 0 fleet -P prod -r us-east-1 -l "$OUT/run.log"
@@ -314,7 +318,7 @@ jqt disc '.summary as $s | $s.regions_total | .region == "All regions" and .tota
 jqt disc '.summary.regions[] | select(.region == "us-east-1") | .total == 19 and .compliant == 11 and .non_compliant == 7 and .unknown == 1 and .pct_compliant == 57.9 and .with_pending == 3'
 jqt disc '.summary as $s | [.rows[] | select(.region == "us-east-1")] | length == ($s.regions[] | select(.region == "us-east-1") | .total)'
 t disc_txt 0 discover -P prod -A
-has disc_txt out '^Regions  : 14 checked, 2 with databases, 11 empty, 1 error \(discovery probe, 8 in parallel'
+has disc_txt out '^Regions  : 14 checked, 2 with databases, 11 empty, 1 error$'; has disc_txt out '^  Regions : discovery probe, 8 in parallel'
 hasnt disc_txt out '^Empty'
 has disc_txt out '^Accounts : 111111111111 \(prod\)   Regions: all enabled$'
 chk "disc_txt: no region names above SUMMARY" test "$(sed '/^SUMMARY/q' "$OUT/disc_txt.out" | grep -cE '[a-z]{2}-[a-z]+-[0-9]')" -eq 0
@@ -364,7 +368,7 @@ chk "-r: no probe" test "$(probes)" -eq 0
 chk "-r: only the named regions" test "$(full_regions)" == "eu-west-1,us-east-1,us-west-2"
 jqt disc_r '.summary.region_overview | .mode == "explicit" and .checked == 3 and .with_databases == 2 and .empty == 1 and .error == 0'
 t disc_r_txt 0 discover -P prod -r us-east-1,us-west-2
-has disc_r_txt out '^Regions  : 2 checked, 2 with databases, 0 empty, 0 errors \(queried directly, no probe\)'
+has disc_r_txt out '^Regions  : 2 checked, 2 with databases, 0 empty, 0 errors$'; has disc_r_txt out '^  Regions : queried directly, no probe'
 t badpp 1 discover -P prod -A --probe-parallel 0;   has badpp err 'probe-parallel'
 t badpp2 1 discover -P prod -A --probe-parallel 33
 echo "-- parallel probes"
@@ -511,6 +515,36 @@ if command -v node >/dev/null 2>&1 && [[ -x "${CHROME:-/usr/bin/google-chrome}" 
     res="$(node "$HERE/browser_check.js" "$(find "$MG" -name 'rds_patch_compliance_111111111111_*.html' | head -1)" 2>&1)"; rc=$?
     chk "browser: single-account report ${res:0:300}" test "$rc" -eq 0
 else echo "  skip browser check (node + puppeteer-core on NODE_PATH + Chrome not found)"; fi
+
+echo "== v1.3.1: merge compatibility (v1.3.0 + v1.3.1 files, report + summary script, duplicate older account)"
+CP="$OUT/compat in"; mkdir -p "$CP"; cp "$HERE"/fixtures/v130/*.json "$CP/"
+SUMS="$HERE/../rds_patch_compliance_summary.sh"
+RDS_PCR_NOW=1790000000 MOCK_SCENARIO=fleet "$SCRIPT" -P prod -r us-east-1 --save-data "$CP/prod_v131_report.json" -o "$OUT/cpx" -F json >/dev/null 2>&1
+RDS_PCR_NOW=1790200000 MOCK_SCENARIO=fleet "$SUMS" -P dev -r eu-west-1 --save-data "$CP/dev_v131_summary.json" >/dev/null 2>&1
+chk "compat inputs: 2 x v1.3.0 + 2 x v1.3.1" test "$(jq -r .script_version "$CP"/*.json | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 2 1.3.0; 2 1.3.1;"
+mg cmp 0 --merge "$CP" -o "$OUT/compat out/combined.html" -F html,json,csv,txt
+CJ="$OUT/compat out/combined.json"
+chk "compat: 3 accounts, 24 servers, 9 non-compliant" test "$(jq -c '[(.summary.accounts | length), .summary.total, .summary.non_compliant]' "$CJ")" = '[3,24,9]'
+chk "compat: newer v1.3.1 prod file wins over the older v1.3.0 one" jq -e '(.meta.merge.sources[] | select(.file | test("v130_old")) | .used | length) == 0 and (.meta.merge.sources[] | select(.file | test("prod_v131")) | .used == ["111111111111"])' "$CJ"
+chk "compat: v1.3.0 summary-script file used (nonprod)" jq -e '.meta.merge.sources[] | select(.file | test("summary_v130")) | .used == ["222222222222"]' "$CJ"
+chk "compat: no top_behind in merged JSON" jq -e '.summary | has("top_behind") | not' "$CJ"
+CT="$OUT/compat out/combined.txt"; CH="$OUT/compat out/combined.html"
+chk "compat txt: no MOST BEHIND, has PER ACCOUNT + ABOUT" bash -c "! grep -qi 'most behind' '$CT' && grep -q '^PER ACCOUNT' '$CT' && grep -q '^ABOUT THIS REPORT' '$CT'"
+chk "compat html: no Top most behind, has About details" bash -c "! grep -qi 'most behind' '$CH' && grep -q 'id=\"about\"' '$CH'"
+chk "compat csv: 24 rows x 31 cols (merge adds a column)" test "$(python3 -c 'import csv,sys; r=list(csv.reader(open(sys.argv[1]))); print(len(r)-1, set(map(len,r)))' "$OUT/compat out/combined.csv")" = "24 {31}"
+chk "compat: same numbers as merging only v1.3.1-format data" test "$(jq -c '.summary | [.compliant,.non_compliant,.unknown]' "$CJ")" = '[14,9,1]'
+mkdir -p "$OUT/drv/c/Users/DBA Team/compat data"; cp "$CP"/*.json "$OUT/drv/c/Users/DBA Team/compat data/"
+PATH="$CR:$NOAWS:$PATH" RDS_PCR_DRIVE_ROOT="$OUT/drv" RDS_PCR_NOW=1791000000 t cmp_win 0 fleet --merge 'C:\Users\DBA Team\compat data' -o "$OUT/compat win/combined.html" -F html,json,csv,txt
+chk "compat git bash: same numbers, no CR in any output" bash -c "test \"\$(jq -c '[(.summary.accounts | length), .summary.total, .summary.non_compliant]' '$OUT/compat win/combined.json')\" = '[3,24,9]' && ! grep -lq \$'\r' '$OUT/compat win/combined.html' '$OUT/compat win/combined.txt' '$OUT/compat win/combined.json'"
+PATH="$NOAWS:$PATH" RDS_PCR_NOW=1791000000 "$SUMS" --merge "$CP" -o "$OUT/compat sum" -F txt,csv >/dev/null 2>"$OUT/cmp_sum.err"
+chk "compat: summary script merges the same mixed set (24 / 9)" grep -q 'OVERALL  : 24 servers/clusters | COMPLIANT 14 | NON-COMPLIANT 9' "$OUT"/compat\ sum/*.txt
+chk "compat: no aws executed" test ! -e "$OUT/aws_called"
+if command -v node >/dev/null 2>&1 && [[ -x "${CHROME:-/usr/bin/google-chrome}" ]] && NODE_PATH="${NODE_PATH:-}" node -e 'require("puppeteer-core")' 2>/dev/null; then
+    res="$(node "$HERE/browser_check.js" "$CH" 2>&1)"; rc=$?
+    chk "browser: compat merged HTML filters + Export CSV ($(jq -r '.checks' <<<"$res" 2>/dev/null) checks) ${res:0:300}" test "$rc" -eq 0
+    res="$(node "$HERE/browser_check.js" "$OUT/compat win/combined.html" 2>&1)"; rc=$?
+    chk "browser: compat git-bash merged HTML ${res:0:300}" test "$rc" -eq 0
+fi
 
 echo "== hygiene"
 chk "shellcheck script" shellcheck "$SCRIPT"

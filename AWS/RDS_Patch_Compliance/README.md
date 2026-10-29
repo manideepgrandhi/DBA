@@ -196,7 +196,8 @@ In the summary table the Oracle "latest minor" is shown per patch line. Sample: 
 
 ## Report
 
-* **SUMMARY first** (text and HTML): totals with % compliant; per engine and major version: total / compliant / non-compliant / unknown, latest minor, support state; top N most behind (`--top`, default 10); counts of Extended Support, support ending soon, auto minor upgrade off, pending maintenance, deprecated.
+* **Header** (v1.3.1, text and HTML; merged reports too): title, run time UTC + IST, accounts with numbers, the region count line and a one-line rule. Longer explanations (counting source, region mode, pending maintenance, read-only note) are in `ABOUT THIS REPORT` at the end of the text and a collapsed **About this report** section at the bottom of the HTML.
+* **SUMMARY first** (text and HTML): totals with % compliant; per engine and major version: total / compliant / non-compliant / unknown, latest minor, support state; counts of Extended Support, support ending soon, auto minor upgrade off, pending maintenance, deprecated.
 * **Details:** one section per engine, sorted NON-COMPLIANT first, then UNKNOWN, COMPLIANT; within that most behind first, then name.
 * **HTML:** single file, summary cards, filter box (any text), click a column header to sort, colour-coded status, **Copy** button on each upgrade command.
 * `--non-compliant-only` shows only NON-COMPLIANT rows (the summary still counts everything).
@@ -247,7 +248,7 @@ More in [EXAMPLES.md](EXAMPLES.md). `--help` lists every option.
 | `--fail-on-noncompliant` | exit 5 when any NON-COMPLIANT |
 | `-T, --tag-columns` | tag keys as columns |
 | `-F, --format` / `-o, --output-dir` / `--prefix` | `text,csv,json,html` (`txt` = text) / folder / file prefix |
-| `--top N` | size of the most-behind list, default 10 |
+| `--top N` | deprecated in v1.3.1: accepted and ignored with a warning (the most-behind list was removed) |
 | `-l, --log-file` | append timestamped log lines |
 | `--alert-email`, `--alert-webhook`, `--alert-webhook-format slack|json`, `--alert-on noncompliant|always`, `--alert-test` | optional alerts (Slack text truncated at 35 000 chars) |
 | `--save-data [FILE.json]` | also write the raw data for a later `--merge` (v1.3.0) |
@@ -295,6 +296,7 @@ No AWS account is used and nothing can reach AWS.
 
 ## Changelog
 
+* **1.3.1** - Removed the "Top N most behind" section from HTML and text (and `summary.top_behind` from JSON); `--top` / `top =` still accepted, ignored with a warning. Shorter header in HTML and text (title, run time UTC + IST, accounts, region count line, one-line rule); the long explanations moved to a collapsed **About this report** (HTML bottom) / `ABOUT THIS REPORT` (text end). `--merge` reads v1.3.0 and v1.3.1 `--save-data` files from either script (tested with committed v1.3.0 fixtures in `tests/fixtures/v130/`).
 * **summary 1.3.0** - `--save-data [FILE]` and offline `--merge FILE|DIR...` (delegated to the full report, so the data format, exit 3 and Git Bash handling are identical); PER ACCOUNT table and MERGED INPUTS list in txt / html; `*_accounts.csv`; account number in single-account file names; all jq output made LF-only for Git Bash. Full report: `--merge --oracle-any-patch-line` now recounts Oracle rows from the saved targets (previously the flag was ignored in merge mode).
 * **1.3.0** - `--save-data [FILE.json]` (raw data, `rds_patch_<ACCOUNTID>_<YYYYMMDD>.json`) and `--merge FILE|DIR... -o combined.html`: offline (jq only, 0 AWS calls), Git Bash safe (CRLF, Windows paths, spaces), newest `collected_at` wins per account, days recomputed at merge time, exit 3 on a bad input. Account number in single-account file names and in the header, tables and every row; new Per account table; Merged inputs note. HTML filters (account, region, engine, status, DB-name search) that recompute the cards and tables, and Export CSV of the filtered rows. CSV adds `next_maintenance` and `days_until_maintenance` (30 columns).
 * **1.2.1 / summary 1.1.1** - No region names at the top of the HTML report or summary: the report header `<details>` list (with databases / errors / empty) and the summary header list of every enabled region are gone; the header keeps one count line (`Regions: N checked, M with databases, K empty, E errors`). Empty regions are no longer listed anywhere in txt / HTML / CSV: no `Empty :` line, no collapsible empty list, no 0-rows in the per-region table or `*_regions.csv` (counts only). Text header shows region names only for `-r`. JSON unchanged (keeps empty regions and `empty_regions`).

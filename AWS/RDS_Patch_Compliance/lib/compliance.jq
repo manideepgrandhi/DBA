@@ -214,9 +214,7 @@ def finalize:
                             majors: ($g | group_by(.major_version) | map(. as $m | {major: $m[0].major_version} + ($m | counts)
                                        + {latest_minor: ([$m[].latest_minor_version] | latest_of($m[0].engine)),   # Oracle: per patch line
                                           standard_support_end: ([$m[].standard_support_end | select(. != null)] | .[0] // null),
-                                          support_flag: ($m[0].support_flag)}) | sort_by(.major | vkey) | reverse)})),
-             top_behind: ([$r.rows[] | select(.versions_behind != null and .versions_behind > 0)] | sort_by([-.versions_behind, .identifier]) | .[:$top_n]
-                          | map({identifier, engine, region, account_id, current_version, latest_minor_version, versions_behind, compliance_status}))
+                                          support_flag: ($m[0].support_flag)}) | sort_by(.major | vkey) | reverse)}))
           })};
 
 # ------------------------------------------------------------------ text
@@ -238,9 +236,8 @@ def text:
   | ([20, ($s.engines[].engine | length)] | max + 2) as $ew
   | "RDS PATCH COMPLIANCE REPORT - \($r.meta.generated_utc) (\($r.meta.generated_local))",
     "Accounts : \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", "))" + (if $ro.mode == "explicit" then "   Regions: \($r.meta.regions | length) given" elif $ro.mode == "merge" then "   Merged: \($r.meta.merge.files) file(s)" else "   Regions: all enabled" end),
-    "Rule     : COMPLIANT when RDS lists at most \($s.max_behind) valid minor upgrade target(s) for the current version (NON-COMPLIANT = \($s.max_behind + 1)+; UNKNOWN = lookup failed or current version not returned)",
-    "Source   : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server. Latest minor per major = highest valid target seen (current version when up to date)",
-    "Regions  : \($ro | region_line) (\($ro | region_mode_txt))" + (if $multi then " - per account x region" else "" end),
+    "Regions  : \($ro | region_line)",
+    "Rule     : NON-COMPLIANT when more than \($s.max_behind) valid minor versions behind (same major)",
     (if ($r.meta.filters_text // "") != "" then "Filters  : \($r.meta.filters_text)" else empty end),
     "",
     "SUMMARY",
@@ -256,7 +253,7 @@ def text:
        + ((.latest_minor // "") | if contains("; ") then "\n" + (split("; ") | map("        latest minor, " + .) | join("\n")) else "" end)),
     ($s.engines[] | "  " + (.engine | pad($ew)) + ("all" | pad(10)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6)) + "  \(.pct_compliant)% compliant"),
     "",
-    "PER REGION (account x region with databases or an AWS error; empty regions only counted above; pending = servers with pending maintenance)",
+    "PER REGION",
     "  " + ("ACCOUNT" | pad(14)) + ("REGION" | pad(16)) + ("STATUS" | pad(11)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("%COMPL" | rpad(8)) + ("PEND" | rpad(6)) + ("PAST-STD" | rpad(10)),
     (($r | shown_regions) + [$s.regions_total] | .[] | "  " + (.account_id | pad(14)) + (.region | pad(16)) + (.status | pad(11)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6))
        + ((if .pct_compliant == null then "-" else "\(.pct_compliant)%" end) | rpad(8)) + (.with_pending | rpad(6)) + (.past_standard_support | rpad(10))
@@ -266,10 +263,6 @@ def text:
     "  " + ("ACCOUNT" | pad(14)) + ("PROFILE" | pad(16)) + ("COLLECTED" | pad(22)) + ("REG" | rpad(4)) + ("TOTAL" | rpad(6)) + ("COMPL" | rpad(7)) + ("NON-C" | rpad(7)) + ("UNKN" | rpad(6)) + ("%COMPL" | rpad(8)) + ("PEND" | rpad(6)),
     ($s.accounts[] | "  " + (.account_id | pad(14)) + (.profile | pad(16)) + (.collected_utc | pad(22)) + (.regions_with_databases | rpad(4)) + (.total | rpad(6)) + (.compliant | rpad(7)) + (.non_compliant | rpad(7)) + (.unknown | rpad(6))
        + ((if .pct_compliant == null then "-" else "\(.pct_compliant)%" end) | rpad(8)) + (.with_pending | rpad(6))),
-    "",
-    "TOP \($top_n) MOST BEHIND",
-    (if ($s.top_behind | length) == 0 then "  none" else
-      ($s.top_behind[] | "  " + (.versions_behind | tostring | rpad(3)) + " behind  " + (.identifier | pad(32)) + (.engine | pad($ew)) + (.current_version | pad($vw)) + "-> " + (.latest_minor_version | dash | pad($vw)) + .compliance_status + "  (" + .account_id + " " + .region + ")") end),
     "",
     ($s.engines[] | . as $e
       | "=== \($e.engine): \($e.total) (compliant \($e.compliant), non-compliant \($e.non_compliant), unknown \($e.unknown)) ===",
@@ -282,7 +275,12 @@ def text:
         ""),
     (if ($r.rows | length) == 0 then "No servers matched.", "" else empty end),
     (if ($r.errors | length) > 0 then "ERRORS", ($r.errors[] | "  \(.account) \(.profile)/\(.region): \(.call): \(.message)"), "" else empty end),
-    "Upgrade commands (printed only, never run) are in the CSV / HTML / JSON output.";
+    "ABOUT THIS REPORT",
+    "  Rule    : COMPLIANT = at most \($s.max_behind) valid minor upgrade target(s) for the current version; NON-COMPLIANT = \($s.max_behind + 1)+; UNKNOWN = lookup failed or current version not returned (deprecated).",
+    "  Source  : ValidUpgradeTarget (IsMajorVersionUpgrade=false) of describe-db-engine-versions --engine-version <current>, per server; latest minor per major = highest valid target seen.",
+    "  Regions : \($ro | region_mode_txt); empty regions are only counted; PER REGION lists regions with databases or an AWS error.",
+    "  Pending : maintenance actions AWS scheduled or offered and not yet applied (clusters include member actions).",
+    "  Read-only: nothing was changed; upgrade commands (printed only, never run) are in the CSV / HTML / JSON output.";
 
 # ------------------------------------------------------------------ csv / json
 def cols: ["account_id","profile","region","resource_type","identifier","members","engine","major_version","current_version","latest_minor_version",
@@ -386,13 +384,13 @@ def html:
   + ".toolbar{position:sticky;top:0;z-index:5;background:#f5f6f8;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;margin-bottom:6px;border-bottom:1px solid #dde3ea}"
   + ".toolbar select,.toolbar input,.toolbar button{padding:6px 8px;border:1px solid #9aa5b1;border-radius:6px;font-size:13px;background:#fff}.toolbar input#q{width:240px;margin:0}.toolbar button{cursor:pointer}.toolbar button.pri{background:#232f3e;color:#fff;border-color:#232f3e}"
   + ".toolbar .cnt{color:#52606d;font-size:12.5px}.filtered .card{border-style:dashed}.flt-note{display:none;color:#b26a00;font-size:12px;margin:0 0 8px}.filtered .flt-note{display:block}"
-  + "footer{padding:10px 26px 24px;color:#7b8794;font-size:12px}</style></head><body>"
+  + ".about{margin:18px 0;background:#fff;border-radius:8px;padding:8px 14px;box-shadow:0 1px 3px rgba(0,0,0,.12);font-size:12.5px}.about summary{cursor:pointer;font-weight:600}footer{padding:10px 26px 24px;color:#7b8794;font-size:12px}</style></head><body>"
   + "<header id=\"top\"><h1>RDS patch compliance report</h1><p>\($r.meta.generated_utc | h) &middot; \($r.meta.generated_local | h) &middot; accounts \($r.meta.accounts | map("\(.account) (\(.profile))") | join(", ") | h) &middot; Regions: \($ro | region_line)\(if $r.meta.merge then " &middot; merged from \($r.meta.merge.files) file(s)" else "" end)</p></header><main>"
   + "<div class=\"toolbar\" id=\"filters\"><select id=\"f-acct\" aria-label=\"Account\"><option value=\"\">All accounts</option></select><select id=\"f-region\" aria-label=\"Region\"><option value=\"\">All regions</option></select>"
   + "<select id=\"f-engine\" aria-label=\"Engine\"><option value=\"\">All engines</option></select><select id=\"f-status\" aria-label=\"Compliance status\"><option value=\"\">All statuses</option></select>"
   + "<input id=\"q\" type=\"search\" placeholder=\"Search DB name (cluster / instance / member)\"><button id=\"f-reset\" type=\"button\">Reset</button><button id=\"f-csv\" class=\"pri\" type=\"button\">Export CSV</button><span class=\"cnt\" id=\"f-count\"></span></div>"
-  + "<p class=\"flt-note\">Filtered view: cards, Per account and Per region show only the servers matching the filters. Per engine / major and Top most behind always show all servers.</p>"
-  + "<p class=\"muted\">Rule: <b>COMPLIANT</b> = at most \($s.max_behind) valid minor upgrade target(s) for the current version; <b>NON-COMPLIANT</b> = \($s.max_behind + 1) or more; <b>UNKNOWN</b> = lookup failed or current version not returned (deprecated). Counted are only the <b>valid minor upgrade targets</b> RDS returns for the server's current version (describe-db-engine-versions --engine-version &lt;current&gt;, ValidUpgradeTarget with IsMajorVersionUpgrade=false). Latest minor per major = highest valid target seen (or the current version when up to date).<br><b>Pending maint.</b> = maintenance actions AWS has scheduled or offered for this server that haven't been applied yet (cluster rows include their member instances' actions); click the badge to expand, hover for IST dates.</p>"
+  + "<p class=\"flt-note\">Filtered view: cards, Per account and Per region show only the servers matching the filters. Per engine / major always shows all servers.</p>"
+  + "<p class=\"muted rule\"><b>Rule:</b> NON-COMPLIANT when more than \($s.max_behind) valid minor versions behind (same major). <a href=\"#about\">About this report</a></p>"
   + "<div class=\"cards\">" + card("Servers / clusters"; $s.total; ""; "\($r.meta.accounts | length) account(s), \($r.meta.regions | length) region(s)")
   + card("Compliant"; $s.compliant; "ok"; "\($s.pct_compliant)% of all") + card("Non-compliant"; $s.non_compliant; (if $s.non_compliant > 0 then "bad" else "ok" end); "> \($s.max_behind) behind")
   + card("Unknown"; $s.unknown; "unk"; "lookup failed / version not returned")
@@ -403,11 +401,9 @@ def html:
   + card("Version not returned"; $s.deprecated; (if $s.deprecated > 0 then "bad" else "ok" end); "deprecated / not offered")
   + card("Regions"; "\($ro.with_databases) / \($ro.checked)"; (if $ro.error > 0 then "bad" else "" end); "with databases; \($ro.empty) empty, \($ro.error) error(s)") + "</div>"
   + html_accounts($s) + html_regions($r; $s; $ro; $multi)
-  + "<div class=\"grid\"><div><h3>Per engine and major version</h3><table><tr><th>Engine</th><th>Major</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>Latest minor</th><th>Support</th></tr>"
+  + "<h3>Per engine and major version</h3><table><tr><th>Engine</th><th>Major</th><th>Total</th><th>Compliant</th><th>Non-compliant</th><th>Unknown</th><th>Latest minor</th><th>Support</th></tr>"
   + ([$s.engines[] | . as $e | .majors[] | "<tr><td><a href=\"#\($e.anchor)\">\($e.engine | h)</a></td><td>\(.major | h)</td><td>\(.total)</td><td class=\"ok\">\(.compliant)</td><td class=\"\(if .non_compliant > 0 then "bad" else "" end)\">\(.non_compliant)</td><td>\(.unknown)</td><td class=\"mono\">\(.latest_minor | dash | h)</td><td class=\"\(.support_flag | sfc)\">\(.support_flag | dash | h)\(if .standard_support_end != null then "<div class=\"sub\">standard end \(.standard_support_end)</div>" else "" end)</td></tr>"] | join(""))
-  + "</table></div><div><h3>Top \($top_n) most behind</h3><table><tr><th>Behind</th><th>Server / cluster</th><th>Engine</th><th>Current &rarr; latest minor</th><th>Status</th></tr>"
-  + (if ($s.top_behind | length) == 0 then "<tr><td colspan=\"5\">none</td></tr>" else ($s.top_behind | map("<tr><td><b>\(.versions_behind)</b></td><td>\(.identifier | h)<div class=\"sub\">\(.account_id | h) &middot; \(.region | h)</div></td><td>\(.engine | h)</td><td class=\"mono\">\(.current_version | h) &rarr; \(.latest_minor_version | dash | h)</td><td><span class=\"st \(.compliance_status | stc)\">\(.compliance_status)</span></td></tr>") | join("")) end)
-  + "</table></div></div>"
+  + "</table>"
   + ([$s.engines[] | . as $e
       | "<section id=\"\($e.anchor)\"><h2>\($e.engine | h) <span class=\"muted\">\($e.total) &middot; compliant \($e.compliant) &middot; non-compliant \($e.non_compliant) &middot; unknown \($e.unknown) &middot; \($e.pct_compliant)% &middot; <a href=\"#top\">top</a></span></h2>"
         + "<table class=\"main\"><thead><tr><th>Status</th><th>Behind</th><th>Identifier / members</th><th>Type</th><th>Major</th><th>Current</th><th>Latest minor</th><th>Valid minor targets</th><th>Auto-upgrade default</th><th>Auto minor</th><th>Standard end</th><th>Extended end</th><th>Support</th><th>Pending maint.</th><th>Maint. window</th><th>Account</th>"
@@ -416,8 +412,14 @@ def html:
   + (if ($r.rows | length) == 0 then "<p>No servers matched.</p>" else "" end)
   + (if ($r.errors | length) > 0 then "<h2>Errors</h2><ul>" + ($r.errors | map("<li>\(.profile | h)/\(.region | h): \(.call | h): \(.message | h)</li>") | join("")) + "</ul>" else "" end)
   + html_sources($r)
+  + "<details id=\"about\" class=\"about\"><summary>About this report</summary><ul>"
+  + "<li><b>COMPLIANT</b> = at most \($s.max_behind) valid minor upgrade target(s) for the current version; <b>NON-COMPLIANT</b> = \($s.max_behind + 1) or more; <b>UNKNOWN</b> = lookup failed or current version not returned (deprecated).</li>"
+  + "<li>Counted are only the valid minor upgrade targets RDS returns for the server's current version (describe-db-engine-versions --engine-version &lt;current&gt;, ValidUpgradeTarget with IsMajorVersionUpgrade=false). Latest minor per major = highest valid target seen (or the current version when up to date).</li>"
+  + "<li><b>Regions:</b> \($ro | region_mode_txt | h). Empty regions are only counted; tables list regions with databases or an AWS error.</li>"
+  + "<li><b>Pending maint.</b> = maintenance actions AWS has scheduled or offered for this server that haven't been applied yet (cluster rows include their member instances' actions); click the badge to expand, hover for IST dates.</li>"
+  + "<li>Read-only: nothing was changed. Upgrade commands are printed only (no --apply-immediately: they apply in the next maintenance window).</li></ul></details>"
   + "<script type=\"application/json\" id=\"pc-data\">" + page_data($r) + "</script>"
-  + "</main><footer>\($r.meta.script | h) v\($r.meta.version | h) &middot; read-only report: nothing was changed; upgrade commands are printed only (no --apply-immediately: they apply in the next maintenance window)</footer>"
+  + "</main><footer>\($r.meta.script | h) v\($r.meta.version | h) &middot; read-only</footer>"
   + "<script>(function(){Array.prototype.forEach.call(document.querySelectorAll('table.main,table.sortable'),function(t){var b=t.tBodies[0],dir={};"
   + "t.tHead.addEventListener('click',function(e){var th=e.target.closest('th');if(!th)return;var i=th.cellIndex;dir[i]=!dir[i];"
   + "var rows=Array.prototype.slice.call(b.rows);rows.sort(function(x,y){var a=x.cells[i],c=y.cells[i];if(!a||!c)return 0;var va=a.getAttribute('data-s'),vb=c.getAttribute('data-s');"

@@ -1,7 +1,7 @@
 {
   "meta": {
     "script": "rds_patch_compliance_report.sh",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "generated_utc": "2026-09-21 14:13 UTC",
     "generated_local": "2026-09-21 19:43 IST",
     "tz": "Asia/Kolkata",
@@ -17,20 +17,9 @@
       }
     ],
     "regions": [
-      "ap-northeast-1",
       "ap-south-1",
-      "ap-southeast-1",
-      "ap-southeast-2",
-      "ca-central-1",
-      "eu-central-1",
-      "eu-north-1",
       "eu-west-1",
-      "eu-west-2",
-      "sa-east-1",
-      "us-east-1",
-      "us-east-2",
-      "us-west-1",
-      "us-west-2"
+      "us-east-1"
     ],
     "tag_columns": [
       "Environment",
@@ -52,14 +41,6 @@
       {
         "account": "111111111111",
         "profile": "prod",
-        "region": "ap-northeast-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
         "region": "ap-south-1",
         "status": "empty",
         "probe_instances": 0,
@@ -68,63 +49,7 @@
       {
         "account": "111111111111",
         "profile": "prod",
-        "region": "ap-southeast-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "ap-southeast-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "ca-central-1",
-        "status": "probe-error",
-        "probe_instances": null,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "eu-central-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "eu-north-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
         "region": "eu-west-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "eu-west-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "sa-east-1",
         "status": "empty",
         "probe_instances": 0,
         "probe_clusters": 0
@@ -138,84 +63,12 @@
         "probe_clusters": 11
       },
       {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "us-east-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "us-west-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "111111111111",
-        "profile": "prod",
-        "region": "us-west-2",
-        "status": "databases",
-        "probe_instances": 0,
-        "probe_clusters": 1
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-northeast-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
         "account": "222222222222",
         "profile": "nonprod",
         "region": "ap-south-1",
         "status": "databases",
         "probe_instances": 3,
         "probe_clusters": 1
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-southeast-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-southeast-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "ca-central-1",
-        "status": "probe-error",
-        "probe_instances": null,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "eu-central-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "eu-north-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
       },
       {
         "account": "222222222222",
@@ -228,54 +81,14 @@
       {
         "account": "222222222222",
         "profile": "nonprod",
-        "region": "eu-west-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "sa-east-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
         "region": "us-east-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "us-east-2",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "us-west-1",
-        "status": "empty",
-        "probe_instances": 0,
-        "probe_clusters": 0
-      },
-      {
-        "account": "222222222222",
-        "profile": "nonprod",
-        "region": "us-west-2",
         "status": "empty",
         "probe_instances": 0,
         "probe_clusters": 0
       }
     ],
-    "aws_calls": 105,
-    "aws_failures": 4,
+    "aws_calls": 52,
+    "aws_failures": 0,
     "lifecycle_api": true,
     "oracle_any_patch_line": false
   },
@@ -607,52 +420,6 @@
       },
       "arn": "arn:aws:rds:us-east-1:111111111111:cluster:crm-aurora-pg15",
       "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier crm-aurora-pg15 --engine-version 15.13 --region us-east-1 --profile prod",
-      "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
-      "next_maintenance": null,
-      "days_until_maintenance": null
-    },
-    {
-      "account_id": "111111111111",
-      "profile": "prod",
-      "region": "us-west-2",
-      "resource_type": "aurora-cluster",
-      "identifier": "dr-aurora-pg15",
-      "members": "",
-      "member_count": 0,
-      "engine": "aurora-postgresql",
-      "major_version": "15",
-      "current_version": "15.10",
-      "latest_minor_version": "15.13",
-      "versions_behind": 2,
-      "newer_versions": [
-        "15.12",
-        "15.13"
-      ],
-      "default_auto_upgrade_target": null,
-      "major_upgrade_targets": 0,
-      "excluded_targets": [],
-      "version_warnings": [],
-      "compliance_status": "COMPLIANT",
-      "auto_minor_upgrade": "unknown",
-      "standard_support_end": "2030-02-10",
-      "extended_support_end": "2033-02-14",
-      "support_days_left": 1237,
-      "support_flag": "ok",
-      "past_standard_support": false,
-      "nearing_end_of_support": false,
-      "deprecated_version": false,
-      "pending_actions_count": 0,
-      "pending_actions": "",
-      "pending_actions_detail": [],
-      "maint_window_utc": "sat:21:00-sat:21:30",
-      "maint_window_ist": "sun:02:30-sun:03:00",
-      "tags": {
-        "Environment": "dr",
-        "Owner": "orders",
-        "Application": "orders-dr"
-      },
-      "arn": "arn:aws:rds:us-west-2:111111111111:cluster:dr-aurora-pg15",
-      "upgrade_command": "aws rds modify-db-cluster --db-cluster-identifier dr-aurora-pg15 --engine-version 15.13 --region us-west-2 --profile prod",
       "note": "upgrade applies in the next maintenance window (no --apply-immediately); Aurora restarts all instances together",
       "next_maintenance": null,
       "days_until_maintenance": null
@@ -1428,43 +1195,14 @@
       "days_until_maintenance": null
     }
   ],
-  "errors": [
-    {
-      "account": "111111111111",
-      "profile": "prod",
-      "region": "ca-central-1",
-      "call": "rds describe-db-instances (discovery probe)",
-      "message": "An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::111111111111:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy (region scanned in full anyway)"
-    },
-    {
-      "account": "111111111111",
-      "profile": "prod",
-      "region": "ca-central-1",
-      "call": "rds describe-db-instances",
-      "message": "An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::111111111111:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy"
-    },
-    {
-      "account": "222222222222",
-      "profile": "nonprod",
-      "region": "ca-central-1",
-      "call": "rds describe-db-instances (discovery probe)",
-      "message": "An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::222222222222:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy (region scanned in full anyway)"
-    },
-    {
-      "account": "222222222222",
-      "profile": "nonprod",
-      "region": "ca-central-1",
-      "call": "rds describe-db-instances",
-      "message": "An error occurred (AccessDenied) when calling the DescribeDBInstances operation: User: arn:aws:iam::222222222222:user/dba is not authorized to perform: rds:DescribeDBInstances with an explicit deny in a service control policy"
-    }
-  ],
+  "errors": [],
   "summary": {
-    "total": 23,
-    "compliant": 14,
+    "total": 22,
+    "compliant": 13,
     "non_compliant": 8,
     "unknown": 1,
-    "pct_compliant": 60.9,
-    "shown": 23,
+    "pct_compliant": 59.1,
+    "shown": 22,
     "max_behind": 2,
     "warn_days": 180,
     "past_standard_support": 2,
@@ -1478,7 +1216,7 @@
       "db-upgrade": 1
     },
     "deprecated": 1,
-    "errors": 4,
+    "errors": 0,
     "regions": [
       {
         "account_id": "111111111111",
@@ -1497,24 +1235,6 @@
         "with_pending": 3,
         "pending_total": 5,
         "past_standard_support": 2
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "us-west-2",
-        "status": "databases",
-        "skipped": false,
-        "probe_instances": 0,
-        "probe_clusters": 1,
-        "errors": 0,
-        "total": 1,
-        "compliant": 1,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": 100,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
       },
       {
         "account_id": "222222222222",
@@ -1537,60 +1257,6 @@
       {
         "account_id": "111111111111",
         "profile": "prod",
-        "region": "ca-central-1",
-        "status": "error",
-        "skipped": false,
-        "probe_instances": null,
-        "probe_clusters": 0,
-        "errors": 2,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "ca-central-1",
-        "status": "error",
-        "skipped": false,
-        "probe_instances": null,
-        "probe_clusters": 0,
-        "errors": 2,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "ap-northeast-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
         "region": "ap-south-1",
         "status": "empty",
         "skipped": true,
@@ -1609,258 +1275,6 @@
       {
         "account_id": "111111111111",
         "profile": "prod",
-        "region": "ap-southeast-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "ap-southeast-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "eu-central-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "eu-north-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "eu-west-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "eu-west-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "sa-east-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "us-east-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "111111111111",
-        "profile": "prod",
-        "region": "us-west-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-northeast-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-southeast-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "ap-southeast-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "eu-central-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "eu-north-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
         "region": "eu-west-1",
         "status": "empty",
         "skipped": true,
@@ -1879,25 +1293,7 @@
       {
         "account_id": "222222222222",
         "profile": "nonprod",
-        "region": "eu-west-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "sa-east-1",
+        "region": "eu-west-1",
         "status": "empty",
         "skipped": true,
         "probe_instances": 0,
@@ -1929,60 +1325,6 @@
         "with_pending": 0,
         "pending_total": 0,
         "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "us-east-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "us-west-1",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
-      },
-      {
-        "account_id": "222222222222",
-        "profile": "nonprod",
-        "region": "us-west-2",
-        "status": "empty",
-        "skipped": true,
-        "probe_instances": 0,
-        "probe_clusters": 0,
-        "errors": 0,
-        "total": 0,
-        "compliant": 0,
-        "non_compliant": 0,
-        "unknown": 0,
-        "pct_compliant": null,
-        "with_pending": 0,
-        "pending_total": 0,
-        "past_standard_support": 0
       }
     ],
     "accounts": [
@@ -1991,13 +1333,13 @@
         "profile": "prod",
         "collected_utc": "2026-09-21 14:13 UTC",
         "source": null,
-        "regions_with_databases": 2,
-        "errors": 2,
-        "total": 20,
-        "compliant": 12,
+        "regions_with_databases": 1,
+        "errors": 0,
+        "total": 19,
+        "compliant": 11,
         "non_compliant": 7,
         "unknown": 1,
-        "pct_compliant": 60,
+        "pct_compliant": 57.9,
         "with_pending": 3,
         "pending_total": 5,
         "past_standard_support": 2
@@ -2008,7 +1350,7 @@
         "collected_utc": "2026-09-21 14:13 UTC",
         "source": null,
         "regions_with_databases": 1,
-        "errors": 2,
+        "errors": 0,
         "total": 3,
         "compliant": 2,
         "non_compliant": 1,
@@ -2024,12 +1366,12 @@
       "profile": "",
       "region": "All regions",
       "status": "",
-      "errors": 4,
-      "total": 23,
-      "compliant": 14,
+      "errors": 0,
+      "total": 22,
+      "compliant": 13,
       "non_compliant": 8,
       "unknown": 1,
-      "pct_compliant": 60.9,
+      "pct_compliant": 59.1,
       "with_pending": 3,
       "pending_total": 5,
       "past_standard_support": 2
@@ -2037,42 +1379,23 @@
     "region_overview": {
       "mode": "discover",
       "probe_parallel": 8,
-      "checked": 28,
-      "with_databases": 3,
-      "empty": 23,
-      "error": 2,
+      "checked": 6,
+      "with_databases": 2,
+      "empty": 4,
+      "error": 0,
       "empty_regions": [
         {
           "account_id": "111111111111",
           "regions": [
-            "ap-northeast-1",
             "ap-south-1",
-            "ap-southeast-1",
-            "ap-southeast-2",
-            "eu-central-1",
-            "eu-north-1",
-            "eu-west-1",
-            "eu-west-2",
-            "sa-east-1",
-            "us-east-2",
-            "us-west-1"
+            "eu-west-1"
           ]
         },
         {
           "account_id": "222222222222",
           "regions": [
-            "ap-northeast-1",
-            "ap-southeast-1",
-            "ap-southeast-2",
-            "eu-central-1",
-            "eu-north-1",
             "eu-west-1",
-            "eu-west-2",
-            "sa-east-1",
-            "us-east-1",
-            "us-east-2",
-            "us-west-1",
-            "us-west-2"
+            "us-east-1"
           ]
         }
       ]
@@ -2102,11 +1425,11 @@
       {
         "engine": "aurora-postgresql",
         "anchor": "eng-aurora-postgresql",
-        "total": 8,
-        "compliant": 4,
+        "total": 7,
+        "compliant": 3,
         "non_compliant": 3,
         "unknown": 1,
-        "pct_compliant": 50,
+        "pct_compliant": 42.9,
         "majors": [
           {
             "major": "16",
@@ -2120,8 +1443,8 @@
           },
           {
             "major": "15",
-            "total": 4,
-            "compliant": 3,
+            "total": 3,
+            "compliant": 2,
             "non_compliant": 1,
             "unknown": 0,
             "latest_minor": "15.13",
@@ -2346,108 +1669,6 @@
             "support_flag": "unknown (AWS lists no lifecycle dates for sqlserver-se 15.00)"
           }
         ]
-      }
-    ],
-    "top_behind": [
-      {
-        "identifier": "dev-aurora-pg15",
-        "engine": "aurora-postgresql",
-        "region": "ap-south-1",
-        "account_id": "222222222222",
-        "current_version": "15.4",
-        "latest_minor_version": "15.13",
-        "versions_behind": 7,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "inv-mysql",
-        "engine": "mysql",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "8.0.36",
-        "latest_minor_version": "8.0.43",
-        "versions_behind": 6,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "legacy-aurora-pg12",
-        "engine": "aurora-postgresql",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "12.15",
-        "latest_minor_version": "12.22",
-        "versions_behind": 6,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "shop-aurora-mysql",
-        "engine": "aurora-mysql",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "8.0.mysql_aurora.3.05.2",
-        "latest_minor_version": "8.0.mysql_aurora.3.10.0",
-        "versions_behind": 5,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "analytics-pg",
-        "engine": "postgres",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "13.18",
-        "latest_minor_version": "13.22",
-        "versions_behind": 3,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "hr-sql",
-        "engine": "sqlserver-se",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "15.00.4410.1.v1",
-        "latest_minor_version": "15.00.4430.1.v1",
-        "versions_behind": 3,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "ledger-maz",
-        "engine": "postgres",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "16.6",
-        "latest_minor_version": "16.10",
-        "versions_behind": 3,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "reports-aurora-pg14",
-        "engine": "aurora-postgresql",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "14.12",
-        "latest_minor_version": "14.17",
-        "versions_behind": 3,
-        "compliance_status": "NON-COMPLIANT"
-      },
-      {
-        "identifier": "billing-pg",
-        "engine": "postgres",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "16.8",
-        "latest_minor_version": "16.10",
-        "versions_behind": 2,
-        "compliance_status": "COMPLIANT"
-      },
-      {
-        "identifier": "billing-pg-replica",
-        "engine": "postgres",
-        "region": "us-east-1",
-        "account_id": "111111111111",
-        "current_version": "16.8",
-        "latest_minor_version": "16.10",
-        "versions_behind": 2,
-        "compliance_status": "COMPLIANT"
       }
     ]
   }

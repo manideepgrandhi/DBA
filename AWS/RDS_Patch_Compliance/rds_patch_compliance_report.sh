@@ -17,7 +17,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.3.0"
+readonly SCRIPT_VERSION="1.3.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 LIB="${RDS_PCR_LIB:-$SCRIPT_DIR/lib}/compliance.jq"
@@ -44,7 +44,7 @@ PREFIX="rds_patch_compliance"
 DISPLAY_TZ="Asia/Kolkata"
 MAX_BEHIND=2
 WARN_DAYS=180
-TOP_N=10
+TOP_N=10; TOP_SET=0   # --top is a deprecated no-op (v1.3.1)
 NC_ONLY=0
 ORACLE_ANY_LINE=0
 FAIL_ON_NC=0
@@ -133,7 +133,7 @@ Report:
                             per database engine / current + latest version / status / pending maintenance) for
                             --merge. Default: rds_patch_<ACCOUNTID>_<YYYYMMDD>.json per account, in -o DIR or .
       --prefix NAME         File name prefix (default: rds_patch_compliance)
-      --top N               Size of the "most behind" list (default: 10)
+      --top N               Deprecated in v1.3.1 (the "most behind" list was removed); accepted and ignored
       --tz ZONE             Second time zone for the generated time (default: Asia/Kolkata)
   -l, --log-file FILE       Append log lines to FILE
 
@@ -217,7 +217,7 @@ load_config() {
             tz)                     DISPLAY_TZ="$val" ;;
             max_behind)             MAX_BEHIND="$val" ;;
             warn_days)              WARN_DAYS="$val" ;;
-            top)                    TOP_N="$val" ;;
+            top)                    TOP_SET=1 ;;
             non_compliant_only)     if is_true "$val"; then NC_ONLY=1; else NC_ONLY=0; fi ;;
             oracle_any_patch_line)  if is_true "$val"; then ORACLE_ANY_LINE=1; else ORACLE_ANY_LINE=0; fi ;;
             fail_on_noncompliant)   if is_true "$val"; then FAIL_ON_NC=1; else FAIL_ON_NC=0; fi ;;
@@ -273,7 +273,7 @@ parse_args() {
             --merge)            MERGE=1; shift
                                 while (( $# )) && [[ "$1" != -* ]]; do MERGE_ARGS+=("$1"); shift; done ;;
             --warn-days)        need_arg "$opt" $#; WARN_DAYS="$2"; shift 2 ;;
-            --top)              need_arg "$opt" $#; TOP_N="$2"; shift 2 ;;
+            --top)              need_arg "$opt" $#; TOP_SET=1; shift 2 ;;
             --non-compliant-only) NC_ONLY=1; shift ;;
             --oracle-any-patch-line) ORACLE_ANY_LINE=1; shift ;;
             --fail-on-noncompliant) FAIL_ON_NC=1; shift ;;
@@ -329,8 +329,8 @@ validate() {
     for x in "${PROFILES[@]}"; do [[ "$x" =~ ^[A-Za-z0-9_.+@-]+$ ]] || die 1 "Invalid profile name: $x"; done
     [[ "$MAX_BEHIND" =~ ^[0-9]+$ ]] || die 1 "--max-behind must be a whole number (0 or more)"
     [[ "$WARN_DAYS" =~ ^[0-9]+$ ]] || die 1 "--warn-days must be a whole number"
-    if [[ ! "$TOP_N" =~ ^[0-9]+$ ]] || (( TOP_N == 0 )); then die 1 "--top must be a positive integer"; fi
-    MAX_BEHIND=$(( 10#$MAX_BEHIND )); WARN_DAYS=$(( 10#$WARN_DAYS )); TOP_N=$(( 10#$TOP_N ))
+    (( TOP_SET )) && log_warn "--top / top = is deprecated and ignored (v1.3.1 removed the 'most behind' list)"
+    MAX_BEHIND=$(( 10#$MAX_BEHIND )); WARN_DAYS=$(( 10#$WARN_DAYS ))
     if (( ! MERGE || TZ_SET )); then   # merge: Git Bash often has no zoneinfo; the saved files carry the offset
         [[ -e "/usr/share/zoneinfo/$DISPLAY_TZ" || "$DISPLAY_TZ" == UTC ]] || die 1 "Unknown time zone: $DISPLAY_TZ"
     fi
