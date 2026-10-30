@@ -22,7 +22,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly SCRIPT_NAME="${0##*/}"
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 
 DB_HOST="${PGHOST:-}"
 DB_PORT="${PGPORT:-5432}"
@@ -36,6 +36,7 @@ INCLUDE_IDLE=1
 MIN_DURATION=""
 EXCLUDE_TYPES=()
 MAX_QUERY_LEN=""
+STORE_QUERY=1
 INTERVAL=0            # 0 = one-shot
 COUNT=0               # loop: number of snapshots (0 = until stopped)
 ALIGN=1
@@ -97,6 +98,8 @@ What to store (passed to monitoring.collect_sessions):
       --exclude-backend-type T  Skip this backend_type (repeatable / comma list),
                               e.g. 'walwriter,checkpointer,background writer'
       --max-query-length N    Truncate stored query text to N characters
+                              (secrets are always redacted first, see README section 8)
+      --no-query-text         Do not store query text at all (query column is NULL)
 
 Scheduling:
       --interval SECONDS      Loop mode: take a snapshot every SECONDS (0 = one-shot, default)
@@ -160,6 +163,7 @@ load_config() {
             min_duration) MIN_DURATION="$val" ;;
             exclude_backend_types) EXCLUDE_TYPES=(); add_list EXCLUDE_TYPES "$val" ;;
             max_query_length) MAX_QUERY_LEN="$val" ;;
+            store_query) is_true "$val" && STORE_QUERY=1 || STORE_QUERY=0 ;;
             interval) INTERVAL="$val" ;; count) COUNT="$val" ;;
             align) is_true "$val" && ALIGN=1 || ALIGN=0 ;;
             max_failures) MAX_FAILURES="$val" ;; retention) RETENTION="$val" ;;
@@ -200,6 +204,7 @@ parse_args() {
             --min-duration)     need_arg "$opt" $#; MIN_DURATION="$2"; shift 2 ;;
             --exclude-backend-type) need_arg "$opt" $#; ((c_ex++)) || EXCLUDE_TYPES=(); add_list EXCLUDE_TYPES "$2"; shift 2 ;;
             --max-query-length) need_arg "$opt" $#; MAX_QUERY_LEN="$2"; shift 2 ;;
+            --no-query-text)    STORE_QUERY=0; shift ;;
             --interval)         need_arg "$opt" $#; INTERVAL="$2"; shift 2 ;;
             --count)            need_arg "$opt" $#; COUNT="$2"; shift 2 ;;
             --no-align)         ALIGN=0; shift ;;
@@ -271,15 +276,19 @@ pg_array() {
 
 precheck() {
     local out
-    out="$(run_sql "SELECT to_regprocedure('monitoring.collect_sessions(text,boolean,interval,text[],integer)') IS NOT NULL,
+    out="$(run_sql "SELECT to_regprocedure('monitoring.collect_sessions(text,boolean,interval,text[],integer,boolean)') IS NOT NULL
+                             OR to_regprocedure('monitoring.collect_sessions(text,boolean,interval,text[],integer)') IS NOT NULL,
+                           to_regprocedure('monitoring.redact_query(text)') IS NOT NULL,
                            to_regclass('monitoring.session_history') IS NOT NULL,
                            (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
                              OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER'),
                            current_setting('server_version_num')::int")" \
         || die 2 "Cannot connect to ${DB_HOST:-local socket}:$DB_PORT db=$DB_NAME as $DB_USER: ${out//$'\n'/ }"
-    local has_fn has_tbl can_read ver
-    IFS='|' read -r has_fn has_tbl can_read ver <<<"$out"
+    local has_fn has_redact has_tbl can_read ver
+    IFS='|' read -r has_fn has_redact has_tbl can_read ver <<<"$out"
     [[ "$has_fn" == t && "$has_tbl" == t ]] || die 2 "monitoring objects not found in database '$DB_NAME' (run schema.sql and functions.sql)"
+    # fail closed: an install without redaction would store passwords and keys in plain text
+    [[ "$has_redact" == t ]] || die 2 "monitoring.collect_sessions in database '$DB_NAME' predates query redaction; run upgrade_query_redaction.sql (see README section 1)"
     (( ver >= 140000 )) || die 2 "PostgreSQL 14 or newer required (server_version_num=$ver)"
     [[ "$can_read" == t ]] || log_warn "Role '$DB_USER' is not a member of pg_read_all_stats (or pg_monitor): state, backend_type, wait events and query text of other roles' sessions will be NULL / '<insufficient privilege>'"
     local ivl
@@ -302,12 +311,13 @@ maintain_partitions() {
 collect_once() {
     local sql out line rows total client maxc at ms
     sql="SELECT monitoring.collect_sessions(NULLIF(:'server_id',''), :'idle'::boolean,
-                NULLIF(:'min_dur','')::interval, :'excl'::text[], NULLIF(:'maxlen','')::int);
+                NULLIF(:'min_dur','')::interval, :'excl'::text[], NULLIF(:'maxlen','')::int, :'storeq'::boolean);
 SELECT rows_stored, total_backends, client_backends, max_connections, collected_at, collect_ms
   FROM monitoring.session_snapshots WHERE snapshot_id = currval('monitoring.session_snapshot_id_seq');"
     out="$(run_sql "$(wrap_txn "$sql")" \
             -v server_id="$SERVER_ID" -v idle="$( (( INCLUDE_IDLE )) && echo true || echo false)" \
-            -v min_dur="$MIN_DURATION" -v excl="$(pg_array "${EXCLUDE_TYPES[@]}")" -v maxlen="$MAX_QUERY_LEN")" \
+            -v min_dur="$MIN_DURATION" -v excl="$(pg_array "${EXCLUDE_TYPES[@]}")" -v maxlen="$MAX_QUERY_LEN" \
+            -v storeq="$( (( STORE_QUERY )) && echo true || echo false)")" \
         || { log_error "Snapshot failed: ${out//$'\n'/ }"; return 3; }
     while IFS= read -r line; do
         [[ "$line" == *WARNING:* ]] && log_warn "${line#*WARNING:  }"

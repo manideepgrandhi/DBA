@@ -1,6 +1,7 @@
 -- =============================================================================
 -- pg_session_history : functions.sql   (run after schema.sql, same owner role)
 --   monitoring.create_partitions(days_ahead, from_day)  -> partitions created
+--   monitoring.redact_query(text)                       -> query text with secrets masked
 --   monitoring.collect_sessions(...)                    -> rows inserted
 --   monitoring.purge_sessions(retention, dry_run)       -> what was removed
 -- =============================================================================
@@ -44,14 +45,92 @@ COMMENT ON FUNCTION monitoring.create_partitions(integer, date) IS
     'Create the daily (UTC) partitions of monitoring.session_history from p_from_day to p_from_day + p_days_ahead if missing; returns how many were created';
 
 -- -----------------------------------------------------------------------------
+-- Redact secrets from query text before it is stored (security review M3).
+-- pg_stat_activity.query is the raw statement text, so a running
+--   ALTER ROLE x PASSWORD '...', pgp_sym_encrypt(data, 'key'),
+--   dblink_connect('... password=...'), postgres://user:pw@host ...
+-- would otherwise be kept for the whole retention period.
+--   1. the literal after the PASSWORD keyword (CREATE/ALTER USER/ROLE ...
+--      [ENCRYPTED] PASSWORD '...', SET password = '...') is masked
+--   2. password=... / pwd=... key-value pairs and user:pw@ in URIs are masked
+--   3. if the statement mentions a crypto or dblink function or a password,
+--      EVERY string literal (including E'..' and $tag$..$tag$) is masked
+-- Masked values become '***'. Over-redaction is preferred to leaks. Truncated
+-- text (track_activity_query_size) with an unterminated literal is masked too.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION monitoring.redact_query(p_query text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    q   text := p_query;
+    -- one quoted literal, optionally E/U& prefixed; stops at end of text when unterminated
+    lit constant text := $re$(?:[EeUu]&?)?'(?:[^'\\]|''|\\.)*(?:'|$)$re$;
+    rest text;
+    delim text;
+    i   integer;
+    j   integer;
+    pfx text;
+BEGIN
+    -- 1. PASSWORD '<secret>' / PASSWORD = '<secret>' / PASSWORD $$<secret>$$
+    q := regexp_replace(q, $re$(\m(?:password|passwd)\M\s*=?\s*)$re$ || '(?:' || lit || ')',
+                        $re$\1'***'$re$, 'gi');
+    -- 2. connection strings: password=xyz, pwd=xyz, and scheme://user:secret@host
+    q := regexp_replace(q, $re$(\m(?:password|passwd|pwd|sslpassword)\M\s*=\s*)[^\s'"&;]+$re$,
+                        $re$\1***$re$, 'gi');
+    q := regexp_replace(q, $re$(://[^\s:/@'"]*:)[^\s@'"/]+@$re$, $re$\1***@$re$, 'g');
+    -- 3. sensitive statement: mask every literal
+    IF q ~* $re$\m(password|passwd|pwd|secret|pgp_\w+|(en|de)crypt(_iv)?|crypt|gen_salt|hmac|dblink\w*|aws_commons\w*|set_config)\M$re$ THEN
+        -- $tag$ ... $tag$ bodies (scanned, not regex: ARE back-references are unreliable)
+        rest := q;
+        q := '';
+        LOOP
+            i := strpos(rest, '$');
+            EXIT WHEN i = 0;
+            delim := substring(substr(rest, i) FROM $re$^(\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$)$re$);
+            IF delim IS NULL THEN
+                q := q || left(rest, i);
+                rest := substr(rest, i + 1);
+                CONTINUE;
+            END IF;
+            pfx := left(rest, i - 1);
+            rest := substr(rest, i + length(delim));
+            j := strpos(rest, delim);
+            q := q || pfx || '$$***$$';
+            IF j = 0 THEN            -- unterminated (truncated text): drop the rest
+                rest := '';
+                EXIT;
+            END IF;
+            rest := substr(rest, j + length(delim));
+        END LOOP;
+        q := q || rest;
+        q := regexp_replace(q, lit, $re$'***'$re$, 'g');
+    END IF;
+    RETURN q;
+END;
+$fn$;
+
+COMMENT ON FUNCTION monitoring.redact_query(text) IS
+    'Mask passwords, keys and connection-string secrets in a query text; used by collect_sessions before storing pg_stat_activity.query';
+
+-- -----------------------------------------------------------------------------
 -- Take one snapshot of pg_stat_activity
 -- -----------------------------------------------------------------------------
+-- Before redaction support collect_sessions had 5 parameters. With the new
+-- defaulted 6th parameter both versions would match a 0-5 argument call
+-- ("function is not unique"), so the old signature is dropped first.
+-- Idempotent: re-running this file upgrades an older install in place.
+DROP FUNCTION IF EXISTS monitoring.collect_sessions(text, boolean, interval, text[], integer);
+
 CREATE OR REPLACE FUNCTION monitoring.collect_sessions(
     p_server_id             text      DEFAULT NULL,   -- NULL: cluster_name, else server addr:port
     p_include_idle          boolean   DEFAULT true,   -- false: skip state = 'idle'
     p_min_duration          interval  DEFAULT NULL,   -- keep active / idle-in-xact rows only if running at least this long
     p_exclude_backend_types text[]    DEFAULT '{}',   -- e.g. '{walwriter,checkpointer,background writer}'
-    p_max_query_length      integer   DEFAULT NULL    -- truncate stored query text (NULL: keep as is)
+    p_max_query_length      integer   DEFAULT NULL,   -- truncate stored query text (NULL: keep as is)
+    p_store_query           boolean   DEFAULT true    -- false: store NULL instead of the query text
 ) RETURNS integer
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
@@ -101,7 +180,10 @@ BEGIN
                a.application_name, a.client_addr, a.client_hostname, a.client_port, a.backend_type,
                a.backend_start, a.xact_start, a.query_start, a.state_change, a.state,
                a.wait_event_type, a.wait_event, a.backend_xid, a.backend_xmin, a.query_id,
-               CASE WHEN p_max_query_length IS NULL THEN a.query ELSE left(a.query, p_max_query_length) END,
+               -- secrets are redacted BEFORE truncation, so a cut cannot expose half a password
+               CASE WHEN NOT coalesce(p_store_query, true) THEN NULL
+                    WHEN p_max_query_length IS NULL THEN monitoring.redact_query(a.query)
+                    ELSE left(monitoring.redact_query(a.query), p_max_query_length) END,
                v_ts - a.query_start, v_ts - a.xact_start, v_ts - a.state_change, v_ts - a.backend_start,
                a.bpids
           FROM a
@@ -127,15 +209,17 @@ BEGIN
          jsonb_build_object('include_idle', p_include_idle,
                             'min_duration', p_min_duration::text,
                             'exclude_backend_types', to_jsonb(v_excl),
-                            'max_query_length', p_max_query_length),
+                            'max_query_length', p_max_query_length,
+                            'store_query', coalesce(p_store_query, true),
+                            'query_redaction', true),
          round((extract(epoch FROM clock_timestamp() - v_ts) * 1000)::numeric, 3));
 
     RETURN v_rows;
 END;
 $fn$;
 
-COMMENT ON FUNCTION monitoring.collect_sessions(text, boolean, interval, text[], integer) IS
-    'Insert one pg_stat_activity snapshot (excluding the calling backend) into monitoring.session_history; returns rows inserted';
+COMMENT ON FUNCTION monitoring.collect_sessions(text, boolean, interval, text[], integer, boolean) IS
+    'Insert one pg_stat_activity snapshot (excluding the calling backend) into monitoring.session_history, with secrets redacted from the query text (or no query text when p_store_query is false); returns rows inserted';
 
 -- -----------------------------------------------------------------------------
 -- Retention: drop whole daily partitions older than the cutoff, delete the rest

@@ -7,7 +7,8 @@ long after the sessions are gone.
 | File | What it is |
 |------|------------|
 | `schema.sql` | `monitoring` schema, `session_history` (partitioned by day) and `session_snapshots` tables, indexes, comments on every column |
-| `functions.sql` | `monitoring.collect_sessions()`, `monitoring.purge_sessions()`, `monitoring.create_partitions()` |
+| `functions.sql` | `monitoring.collect_sessions()`, `monitoring.redact_query()`, `monitoring.purge_sessions()`, `monitoring.create_partitions()` |
+| `upgrade_query_redaction.sql` | Idempotent upgrade of older installs to query redaction (section 1) |
 | `collect_sessions.sh` | Bash collector: one-shot (cron) or loop mode, retention, logging, dry run |
 | `analysis_queries.sql` | 13 commented analysis queries (psql variables for the time window) |
 
@@ -34,6 +35,28 @@ psql -d monitoring -U session_collector -v ON_ERROR_STOP=1 -f schema.sql -f func
 # 4. first snapshot
 ./collect_sessions.sh -d monitoring -U session_collector
 ```
+
+### Upgrading an existing install (query redaction)
+
+Installs made before query redaction stored `pg_stat_activity.query` verbatim, so
+statements such as `ALTER ROLE ... PASSWORD '...'`, `pgp_sym_encrypt(data, 'key')`
+or `dblink_connect('... password=...')` kept their secrets for the whole retention
+period. To upgrade, run this as the owning role. It is idempotent and safe to re-run:
+
+```bash
+psql -d monitoring -U session_collector -v ON_ERROR_STOP=1 -f upgrade_query_redaction.sql
+# optionally also redact rows that are already stored (rewrites history):
+psql -d monitoring -U session_collector -v ON_ERROR_STOP=1 -v redact_existing=1 -f upgrade_query_redaction.sql
+# ... or drop all stored query text instead:
+psql -d monitoring -U session_collector -v ON_ERROR_STOP=1 -v drop_existing_query_text=1 -f upgrade_query_redaction.sql
+```
+
+Upgrading works the same as re-running `functions.sql`. Existing callers keep working
+and now store redacted text, including pg_cron jobs and older copies of
+`collect_sessions.sh` that pass 0-5 arguments. The new `collect_sessions.sh` (1.1.0)
+refuses to run (exit 2) against an install that has not been upgraded, so it never
+stores unredacted text without you noticing. After upgrading, `session_snapshots.filters`
+contains `"query_redaction": true` and `"store_query"`.
 
 Optional readers (dashboards, analysts):
 
@@ -174,7 +197,8 @@ Indexes: `collected_at`; `(datname, collected_at)`; `(state, collected_at)`;
 | `--no-idle` | Don't store `idle` sessions (snapshot totals still count them) |
 | `--min-duration IVL` | Store active / idle-in-transaction sessions only if running at least `IVL`. Lock waiters and their blockers are always kept |
 | `--exclude-backend-type T` | Skip backend types (repeatable / comma list) |
-| `--max-query-length N` | Truncate stored query text |
+| `--max-query-length N` | Truncate stored query text (secrets are redacted before truncating) |
+| `--no-query-text` | Don't store query text at all (`query` is NULL); config key `store_query = false` |
 | `--interval S`, `--count N`, `--no-align` | Loop mode |
 | `--max-failures N` | Loop mode: give up after N consecutive failures |
 | `--statement-timeout T` | Default `30s` |
@@ -278,6 +302,8 @@ SELECT monitoring.collect_sessions(p_include_idle => false,
                                    p_min_duration => '5 seconds',
                                    p_exclude_backend_types => '{checkpointer,walwriter}',
                                    p_max_query_length => 2000);         -- returns rows stored
+SELECT monitoring.collect_sessions(p_store_query => false);             -- no query text at all
+SELECT monitoring.redact_query($$ALTER ROLE app PASSWORD 'x'$$);        -- ALTER ROLE app PASSWORD '***'
 SELECT monitoring.create_partitions(14);                                -- next 14 days
 SELECT * FROM monitoring.purge_sessions('30 days', p_dry_run => true);  -- what would go
 SELECT * FROM monitoring.purge_sessions('30 days');
@@ -361,3 +387,16 @@ Guidance:
 - `client_hostname` is filled only with `log_hostname = on`.
 - If the server has `track_activities = off`, there's nothing to collect.
 - Dry runs consume a sequence value, so `snapshot_id` can have gaps.
+- **Query text is redacted, but redaction is best effort.** `monitoring.redact_query()`
+  runs before the text is stored, and before `--max-query-length` truncation. It masks:
+  - the literal after `PASSWORD`, which covers `CREATE/ALTER USER/ROLE ... [ENCRYPTED] PASSWORD '...'`;
+  - `password=`/`pwd=` values in connection strings;
+  - `user:secret@` in URIs;
+  - every string literal (`'...'`, `E'...'`, `$tag$...$tag$`) in a statement that
+    mentions a password, `pgp_*`, `crypt`/`encrypt`/`decrypt`, `gen_salt`, `hmac`
+    or `dblink*`.
+
+  Secrets passed some other way still end up in the history, for example inside
+  your own functions or as plain column values. If query text is not needed, use
+  `--no-query-text` (`p_store_query => false`), and grant `SELECT` on the history
+  only to roles that may see it.
